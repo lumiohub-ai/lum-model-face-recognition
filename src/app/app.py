@@ -1,4 +1,4 @@
-from flask import Flask, Response, render_template, request, redirect, jsonify
+from flask import Flask, Response, render_template, request, redirect
 import cv2
 import torch
 import numpy as np
@@ -6,7 +6,6 @@ import pickle
 import os
 from ultralytics import YOLO
 from facenet_pytorch import InceptionResnetV1
-from datetime import datetime, timedelta
 
 # Flask app initialization
 app = Flask(__name__)
