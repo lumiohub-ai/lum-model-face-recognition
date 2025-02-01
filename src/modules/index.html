@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+        }
+        .form-container {
+            margin: 20px auto;
+            width: 50%;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        input, button {
+            padding: 10px;
+            font-size: 16px;
+            margin: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #videoContainer {
+            width: 640px;
+            height: 360px;
+            margin: 20px auto;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+        }
+
+        #popUpForm {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.3);
+            z-index: 10;
+        }
+
+        .fullscreen-video {
+            width: 100%;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <h1>Face Recognition System</h1>
+
+    <!-- Real-Time Camera Form -->
+    <div class="form-container">
+        <h2>Real-Time Camera</h2>
+        <form method="POST" action="/start">
+            <input type="hidden" name="process_type" value="real_time">
+            <label for="rtsp_link">RTSP Link (Leave blank for webcam):</label><br>
+            <input type="text" id="rtsp_link" name="rtsp_link"><br>
+            <button type="submit">Start Real-Time</button>
+        </form>
+    </div>
+
+    <!-- Video Processing Form -->
+    <div class="form-container">
+        <h2>Upload Video</h2>
+        <form method="POST" action="/start" enctype="multipart/form-data">
+            <input type="hidden" name="process_type" value="video">
+            <label for="video_file">Select a video to process:</label><br>
+            <input type="file" id="video_file" name="video_file" required><br>
+            <button type="submit">Start Video Processing</button>
+        </form>
+    </div>
+
+    <!-- Video Feed Section -->
+    <div id="videoContainer">
+        <video id="videoPlayer" autoplay playsinline></video>
+
+        <!-- Pop-up form for unknown person -->
+        <div id="popUpForm">
+            <h3>Who is this?</h3>
+            <form id="nameForm">
+                <input type="text" id="personName" placeholder="Enter name">
+                <button type="submit">Submit</button>
+            </form>
+        </div>
+    </div>
+    <button id="toggleFullScreen">Toggle Full Screen</button>
+
+    <!-- Stop Button -->
+    <form method="POST" action="/stop">
+        <button type="submit">Stop Processing</button>
+    </form>
+
+    <script>
+        // Initialize video player
+        document.getElementById('videoPlayer').src = "/video_feed";
+
+        // Full-Screen Toggle
+        document.getElementById('toggleFullScreen').addEventListener('click', () => {
+            const videoPlayer = document.getElementById('videoPlayer');
+            const videoContainer = document.getElementById('videoContainer');
+
+            if (videoPlayer.classList.contains('fullscreen-video')) {
+                videoPlayer.classList.remove('fullscreen-video');
+                videoContainer.style.width = "640px";
+                videoContainer.style.height = "360px";
+            } else {
+                videoPlayer.classList.add('fullscreen-video');
+                videoContainer.style.width = "100%";
+                videoContainer.style.height = "100vh";
+            }
+        });
+
+        // Simulate pop-up for unknown person (real functionality should come from backend logic)
+        function showPopUp() {
+            document.getElementById('popUpForm').style.display = 'block';
+        }
+
+        function hidePopUp() {
+            document.getElementById('popUpForm').style.display = 'none';
+        }
+
+        // Handle pop-up form submission
+        document.getElementById('nameForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const name = document.getElementById('personName').value;
+            if (name.trim() !== "") {
+                alert(`You entered: ${name}`);
+                hidePopUp();
+            }
+        });
+
+        // Simulate unknown person detected (for demonstration purposes)
+        setTimeout(showPopUp, 5000);  // Simulate detection after 5 seconds
+    </script>
+</body>
+</html>
