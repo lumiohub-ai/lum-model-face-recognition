@@ -1,22 +1,25 @@
-from flask import Flask, Response, render_template, request, redirect
-import cv2
-import torch
-import numpy as np
-import pickle
 import os
-from ultralytics import YOLO
+import pickle
+import numpy as np
+from collections import defaultdict
+
+# Flask imports
+from flask import Flask, Response, render_template, request, redirect
+
+# Vision imports
+import torch
+import cv2
 from facenet_pytorch import InceptionResnetV1
+from ultralytics import YOLO
+
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Flask app initialization
 app = Flask(__name__)
 
-# Load stored face encodings and names
-if os.path.exists("face_data.pkl"):
-    with open("face_data.pkl", "rb") as f:
-        known_face_encodings, known_face_names = pickle.load(f)
-else:
-    known_face_encodings = []
-    known_face_names = []
+
+face_embeddings_path = 'data/embeddings'
+face_crops_path = 'data/images'
 
 # Initialize YOLO and FaceNet
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,9 +29,10 @@ resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
 video_capture = None
 stop_stream = False
 
+# Load the Web UI
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('src/web/index.html')
 
 @app.route('/start', methods=['POST'])
 def start_processing():
@@ -59,6 +63,15 @@ def stop_streaming():
 
 def process_frames():
     global video_capture, stop_stream
+
+    # Load existing face embeddings
+    embeddings = defaultdict(np.array)
+
+    # Load stored face embeddings with names
+    for file in os.listdir(face_embeddings_path):
+        with open(os.path.join(face_embeddings_path, file), 'rb') as f:
+            embeddings[file.split('.')[0]] = pickle.load(f)
+
     while True:
         if stop_stream:
             break
@@ -68,36 +81,39 @@ def process_frames():
             continue
 
         results = yolo_model.predict(source=frame, conf=0.5)
-        face_tensors = []
-        face_locations = []
 
         for box in results[0].boxes.xyxy:
             x1, y1, x2, y2 = map(int, box[:4])
             face = frame[y1:y2, x1:x2]
+
             if face.shape[0] < 10 or face.shape[1] < 10:
                 continue
+
             face_tensor = torch.tensor(cv2.resize(face, (160, 160))).permute(2, 0, 1).float().to(device)
             face_tensor = (face_tensor / 255.0).unsqueeze(0)
-            face_tensors.append(face_tensor)
-            face_locations.append((x1, y1, x2, y2))
+            emb =  resnet(face_tensor).cpu().numpy().flatten()
 
-        if face_tensors:
-            with torch.no_grad():
-                face_encodings = [resnet(face_tensor).cpu().numpy().flatten() for face_tensor in face_tensors]
+            # Normalize the embedding
+            emb = emb / np.linalg.norm(emb)
 
-            for face_encoding, (x1, y1, x2, y2) in zip(face_encodings, face_locations):
-                distances = [np.linalg.norm(face_encoding - enc) for enc in known_face_encodings]
-                min_distance = min(distances) if distances else float('inf')
-                name = "Unknown"
-                bbox_color = (0, 0, 255)
+            sims = cosine_similarity((emb, vector) for vector in embeddings.values())
+            max_sim = max(sims) if sims else float('inf')
 
-                if min_distance < 0.5:
-                    match_index = distances.index(min_distance)
-                    name = known_face_names[match_index]
-                    bbox_color = (0, 255, 0)
+            name = None
+            if max_sim > 0.5:
+                match_index = sims.index(max_sim)
+                name = list(embeddings.keys())[match_index]
+            else:
+                name = input("Enter the name of the person: ")
+                embeddings[name] = emb
+                # save embedding
+                with open(os.path.join(face_embeddings_path, f"{name}.pkl"), 'wb') as f:
+                    pickle.dump(emb, f)
+                # save crop
+                cv2.imwrite(os.path.join(face_crops_path, f"{name}.jpg"), face)
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), bbox_color, 2)
-                cv2.putText(frame, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
         _, jpeg = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
