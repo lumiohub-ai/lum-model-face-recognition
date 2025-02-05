@@ -5,13 +5,10 @@ import torch
 import cv2
 from facenet_pytorch import InceptionResnetV1
 from ultralytics import YOLO
-from ultralytics import solutions
 from sklearn.metrics.pairwise import cosine_similarity
 import random
 import logging
-from pathlib import Path
 from datetime import datetime
-import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
