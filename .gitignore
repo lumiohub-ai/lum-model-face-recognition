@@ -525,3 +525,5 @@ test.py
 #ignore models
 *.pt
 myenv/
+*.jpg
+*.png
