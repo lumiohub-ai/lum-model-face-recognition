@@ -4,7 +4,7 @@ import logging
 import torch
 from ultralytics import YOLO
 # from facenet_pytorch import InceptionResnetV1
-from facenet_pytorch.models.inception_resnet_v1 import InceptionResnetV1
+from reid.models.inception_resnet_v1 import InceptionResnetV1
 import cv2
 import numpy as np
 
