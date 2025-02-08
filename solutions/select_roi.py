@@ -23,6 +23,9 @@ def draw_rectangle(event, x, y, flags, param):
 
 # Load image
 img = cv2.imread('image.jpg')  # Change to your image path
+roi_coordinates = (528, 41, 714, 659)
+img = img[roi_coordinates[1]:roi_coordinates[1] + roi_coordinates[3], roi_coordinates[0]:roi_coordinates[0] + roi_coordinates[2]]
+
 cv2.imshow('Image', img)
 drawing = False
 ix = iy = 0
@@ -30,3 +33,5 @@ ix = iy = 0
 cv2.setMouseCallback('Image', draw_rectangle)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
+
+

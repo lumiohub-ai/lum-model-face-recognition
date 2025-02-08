@@ -1,0 +1,24 @@
+device: "cuda"
+
+face_crops_path: "data/images"
+output_video_path: "data/output.mp4"
+
+
+video_path: "rtsp://admin:hbai2024@172.30.1.86:554/Streaming/Channels/1"
+
+camera_roi_coordinates:
+  - 528
+  - 41
+  - 714
+  - 659
+
+recent_entries_max_len: 5
+
+match_threshold: 0.7
+detection_threshold: 0.8
+
+check_interval: 60
+
+imgsz: 960
+
+logging_path: 'data/entry_log.csv'
