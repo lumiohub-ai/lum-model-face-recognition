@@ -1,6 +1,6 @@
 from cfg import Config
 import cv2
-from engine import FaceRecognitionModel, Track
+from engine import FaceRecognitionModel, TrackManager
 from utils import EntryLogger, generate_random_color, display
 import os
 
@@ -69,42 +69,16 @@ def main(cfg):
             color = track.name_to_color[name]
             box_width = x2 - x1
             font_scale = max(0.5, box_width / 300)
-            font = cv2.FONT_HERSHEY_DUPLEX
-            text_size = cv2.getTextSize(name, font, font_scale, 1)[0]
+            text_size = cv2.getTextSize(name, cv2.FONT_HERSHEY_DUPLEX, font_scale, 1)[0]
             text_x = min(x2 - text_size[0] - 5, x1 + 5)
             text_y = max(0, y1 - 10)
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
             cv2.putText(
-                frame, name, (text_x, text_y), font, font_scale, (255, 255, 255), 2
+                frame, name, (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX, font_scale, (255, 255, 255), 2
             )
 
-        base_y = 30
-        padding = 10
-        max_text_width = 0
-
-        for entry in entry_logger.recent_entries:
-            text_size = cv2.getTextSize(entry, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-            max_text_width = max(max_text_width, text_size[0])
-
-        for i, entry in enumerate(entry_logger.recent_entries):
-            top_right_x = frame.shape[1] - max_text_width - padding * 2
-            cv2.rectangle(
-                frame,
-                (top_right_x, base_y - 25 + i * 35),
-                (frame.shape[1] - 10, base_y + i * 35 + 5),
-                (0, 0, 0),
-                -1,
-            )
-            cv2.putText(
-                frame,
-                entry,
-                (top_right_x + 5, base_y + i * 35),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2,
-            )
+        entry_logger.visualize_entries(frame)
 
         stop = display(frame, out)
 
@@ -121,6 +95,6 @@ if __name__ == "__main__":
 
     model = FaceRecognitionModel(cfg.device, cfg.face_crops_path, cfg.match_threshold)
     entry_logger = EntryLogger(cfg.logging_path)
-    track = Track()
+    track = TrackManager()
 
     main(cfg)

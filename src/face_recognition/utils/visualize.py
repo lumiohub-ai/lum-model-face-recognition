@@ -10,3 +10,5 @@ def display(frame, out):
     cv2.imshow("Face Recognition", frame)
     out.write(frame)
     return cv2.waitKey(1) & 0xFF == ord("q")
+
+

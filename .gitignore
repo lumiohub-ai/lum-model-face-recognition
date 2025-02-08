@@ -492,7 +492,6 @@ data/
 dataset/
 datasets/
 model/
-models/
 result/
 results/
 output/
@@ -509,7 +508,6 @@ data
 dataset
 datasets
 model
-models
 result
 results
 output
