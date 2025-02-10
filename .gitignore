@@ -525,3 +525,10 @@ test.py
 myenv/
 *.jpg
 *.png
+*.mov
+*.mp4
+*.avi
+*.gif
+*.tif
+videos/
+

@@ -20,11 +20,10 @@ def draw_rectangle(event, x, y, flags, param):
         cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
         print(f"Rectangle Coordinates: x={x}, y={y}, w={w}, h={h}")
         cv2.imshow('Image', img)
+        
 
 # Load image
-img = cv2.imread('image.jpg')  # Change to your image path
-roi_coordinates = (528, 41, 714, 659)
-img = img[roi_coordinates[1]:roi_coordinates[1] + roi_coordinates[3], roi_coordinates[0]:roi_coordinates[0] + roi_coordinates[2]]
+img = cv2.imread('frame.jpg')  # Change to your image path
 
 cv2.imshow('Image', img)
 drawing = False
