@@ -3,8 +3,7 @@ import logging
 
 import torch
 from ultralytics import YOLO
-# from facenet_pytorch import InceptionResnetV1
-from reid.models.inception_resnet_v1 import InceptionResnetV1
+from facenet_pytorch import InceptionResnetV1
 import cv2
 import numpy as np
 
@@ -76,7 +75,7 @@ class FaceRecognitionModel:
 
         sims = [cosine_similarity([face_emb], [emb]) for emb in self.database.values()]
         max_sim = max(sims)
-        if max_sim > 0.7:
+        if max_sim > self.match_threshold:
             name = list(self.database.keys())[sims.index(max_sim)]
 
             return name

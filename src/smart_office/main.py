@@ -6,8 +6,8 @@ from shapely.geometry import Point, Polygon
 from ultralytics import YOLO
 
 def main():
-    video_path = "/home/hbvision/mirsaid/smart-office/IMG_7121.mov"
-    output_video_path = "/home/hbvision/mirsaid/smart-office/IMG_7121_output.mp4"
+    video_path = "/home/hbvision/mirsaid/smart-office/videos/IMG_7121.mov"
+    output_video_path = "/home/hbvision/mirsaid/smart-office/videos/IMG_7121_output.mp4"
     cap = cv2.VideoCapture(video_path)
 
     annotations = polygon_manager.set_polygons(cap, add_polygon=True) # if add_polygon is True, you can add new polygons to the existing ones, 
@@ -30,7 +30,7 @@ def main():
 
         # Get detections and tracking info from person model
         results = detector.track(source=frame, persist=True, classes=[0])
-        frame = polygon_manager.draw_polygons(frame)
+        # frame = polygon_manager.draw_polygons(frame)
 
         # Store polygons and their classification status
         polygons = []
@@ -87,11 +87,11 @@ def main():
                 label_color = (0, 0, 255)  # Red
 
             # Draw the classification label at the determined position with the specified color
-            # cv2.putText(frame, poly["label"], label_position, 
-            #             cv2.FONT_HERSHEY_SIMPLEX, 1, label_color, 1)
-            cv2.polylines(frame, [np.array(poly["points"])], True, label_color, 2)
-            cv2.putText(frame, str(poly["class_id"]), label_position,   cv2.FONT_HERSHEY_SIMPLEX, 1, label_color
-                        , 1)
+            cv2.putText(frame, poly["label"], label_position, 
+                         cv2.FONT_HERSHEY_SIMPLEX, 1, label_color, 1)
+            # cv2.polylines(frame, [np.array(poly["points"])], True, label_color, 2)
+            # cv2.putText(frame, str(poly["class_id"]), label_position,   cv2.FONT_HERSHEY_SIMPLEX, 1, label_color
+            #             , 1)
         
             
         cv2.imshow("Frame", frame)
