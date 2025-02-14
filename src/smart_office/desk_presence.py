@@ -1,16 +1,19 @@
 import cv2
 from extract_annotations.draw_polygons import PolygonManager
+from extract_annotations.draw_rectangle import RectangleManager
 import cv2
 import numpy as np
 from shapely.geometry import Point, Polygon
 from ultralytics import YOLO
 
 def main():
-    video_path = "/home/hbvision/mirsaid/smart-office/videos/IMG_7121.mov"
+    video_path = "rtsp://admin:hbai2024@172.30.1.87:554/Streaming/Channels/1"
     output_video_path = "/home/hbvision/mirsaid/smart-office/videos/IMG_7121_output.mp4"
     cap = cv2.VideoCapture(video_path)
 
-    annotations = polygon_manager.set_polygons(cap, add_polygon=True) # if add_polygon is True, you can add new polygons to the existing ones, 
+    annotations = polygon_manager.set_polygons(cap, add_polygon=True) # if add_polygon is True, you can add 
+    # annotations = rectangle_manager.set_rectangles(cap, add_rectangle=True)
+    # new polygons to the existing ones, 
     # otherwise, you can only view the existing polygons
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -21,7 +24,7 @@ def main():
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
 
-    detector = YOLO("yolov8m.pt")
+    detector = YOLO("/home/hbvision/mirsaid/smart-office/ablation_17x.pt")
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -104,4 +107,6 @@ def main():
 if __name__ == "__main__":
 
     polygon_manager = PolygonManager()
+    rectangle_manager = RectangleManager()
+
     main()
