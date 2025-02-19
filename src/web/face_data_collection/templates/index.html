@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Face Recognition System - Upload</title>
+    <title>Yuzni aniqlash sistemasi - Yuklash</title>
 
     <!-- Tailwind CSS -->
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
@@ -45,8 +45,21 @@
 <body class="bg-gradient-to-br from-gray-800 to-gray-900 min-h-screen py-12">
     <div class="max-w-xl mx-auto px-4">
         <div class="text-center mb-8">
-            <h1 class="text-3xl font-bold text-white mb-2">Face Recognition System</h1>
-            <p class="text-gray-300">Upload Face Image</p>
+            <h1 class="text-3xl font-bold text-white mb-2">Yuzni aniqlash sistemasi</h1>
+            <p class="text-gray-300">Suratni kiritish</p>
+        </div>
+
+        <!-- Instructions -->
+        <div class="text-gray-300 mb-6">
+            <h2 class="text-xl font-semibold mb-2">Talablar:</h2>
+            <ol class="list-decimal pl-6">
+                <li>Yuzingiz rasmda aniq ko'rinishi kerak.</li>
+                <li>Yuz masofasi 40-80 sm orasida bo'lishi kerak.</li>
+                <li>Bir rasmda faqat bitta yuz bo'lishi kerak.</li>
+                <li>Har bir shaxs uchun bir rasm.</li>
+                <li>Ismingizni rasmga kirgizayotganda yozing (ism uchun input joyi mavjud).</li>
+                <li>Rasm faqat yuzning old tomondan olinishi kerak (chapdan, o'ngdan, yuqoridan yoki pastdan emas).</li>
+            </ol>
         </div>
 
         <div class="bg-white rounded-2xl shadow-2xl p-6">
@@ -54,7 +67,7 @@
                 <!-- Name Input -->
                 <div>
                     <label for="personName" class="block text-sm font-medium text-gray-700 mb-1">
-                        <i class="fas fa-user mr-2"></i>Person's Name
+                        <i class="fas fa-user mr-2"></i>Ism va familiya
                     </label>
                     <input type="text" id="personName" name="name" required
                            class="block w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
@@ -65,9 +78,9 @@
                     <div class="space-y-4">
                         <i class="fas fa-cloud-upload-alt text-4xl text-blue-500"></i>
                         <div class="text-gray-600">
-                            <span class="font-medium">Click to upload</span> or drag and drop
+                            <span class="font-medium">Yuklash</span>
                         </div>
-                        <p class="text-sm text-gray-500">Supported formats: JPG, JPEG, PNG</p>
+                        <p class="text-sm text-gray-500">JPG, JPEG, PNG</p>
                         <input type="file" id="fileInput" class="hidden" accept=".jpg,.jpeg,.png">
                     </div>
                 </div>
@@ -76,7 +89,7 @@
                 <div id="previewArea" class="hidden text-center space-y-4">
                     <img id="imagePreview" src="#" alt="Preview" class="preview-image mx-auto rounded-lg">
                     <button type="button" id="changeImage" class="text-sm text-blue-600 hover:text-blue-800">
-                        <i class="fas fa-redo mr-1"></i>Change Image
+                        <i class="fas fa-redo mr-1"></i>Suratni o'zgartirish
                     </button>
                 </div>
 
@@ -84,7 +97,7 @@
                 <button type="submit" id="uploadBtn" disabled
                         class="w-full flex items-center justify-center px-6 py-3 border border-transparent rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300">
                     <i class="fas fa-upload mr-2"></i>
-                    Save Image
+                    Saqlash
                 </button>
             </form>
 
@@ -214,3 +227,4 @@
     </script>
 </body>
 </html>
+/home/bahodir/Bahodir/face-recognition/src/web/face_data_collection
