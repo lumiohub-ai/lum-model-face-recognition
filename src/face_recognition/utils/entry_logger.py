@@ -10,10 +10,16 @@ class EntryLogger:
         self.base_y = 30
         self.padding = 10
 
-    def log_person_entry(self, name):
+    def log_person_entry(self, name, status):
         if name != "Detecting..." and name not in self.entry_time:
             now = datetime.now().strftime("%H:%M:%S on %d.%m.%Y")
-            log_entry = f"{name} entered at {now}"
+            if status == "IN":
+                log_entry = f"{name} IN at {now}"
+            elif status == "OUT":
+                log_entry = f"{name} OUT at {now}"
+            else:
+                return
+            
             self.entry_time[name] = now
             self.recent_entries.append(log_entry)  # Add to the recent entries deque
             #save the information to the csv file

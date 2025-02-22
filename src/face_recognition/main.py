@@ -5,13 +5,17 @@ from engine import FaceRecognitionModel, TrackManager
 from utils import EntryLogger, generate_random_color, display
 import os
 
+import sys
+import os
+sys.path.append(os.curdir)
+
+from ultralytics import solutions
+import numpy as np
+
+
+
 def main(cfg):
     cap = cv2.VideoCapture(cfg.video_path)
-    # Try increasing buffer size
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
-
-    # Try setting a read timeout manually
-    cap.set(cv2.CAP_PROP_POS_MSEC, 5000)  # 5 seconds timeout
 
     w, h, fps = (
         int(cap.get(x))
@@ -22,6 +26,22 @@ def main(cfg):
     )
 
     stop = False
+
+    line_points = [(103, 171), (397, 158)]
+    # [(159, 137), (162, 56), (254, 62), (285, 155), (277, 215), (215, 237), (160, 135)]
+
+    counter = solutions.ObjectCounter(
+        show=False,
+        region=line_points,
+        model="yolov8m-face.pt",
+        classes=[0],
+        show_in=True, 
+        show_out=True,
+        line_width=2,
+        persist=True,
+        verbose=False
+    )
+
     while True:
         model.check_new_faces()
 
@@ -29,26 +49,34 @@ def main(cfg):
         if not ret or stop:
             break
 
-        x, y, w, h = cfg.camera_roi_coordinates
-        frame = frame[y : y + h, x : x + w]
+        # x, y, w, h = cfg.camera_roi_coordinates
+        # frame = frame[y : y + h, x : x + w]
 
-        detections = model.detector.track(
-            frame,
-            conf=cfg.detection_threshold,
-            verbose=False,
-            imgsz=cfg.imgsz,
-            persist=True,
-        )
+        # detections = model.detector.track(
+        #     frame,
+        #     conf=cfg.detection_threshold,
+        #     verbose=False,
+        #     imgsz=cfg.imgsz,
+        #     persist=True,
+        # )
 
-        if detections[0].boxes.id is None:
+        counter.count(np.ascontiguousarray(frame))
+        detections = counter.track_data
+
+        if detections.id is None:
             stop = display(frame, out)
             continue
 
-        boxes = detections[0].boxes.data.cpu().tolist()
-        track_ids = detections[0].boxes.id.cpu().tolist()
+        boxes = detections.data.cpu().tolist()
+        track_ids = detections.id.cpu().tolist()
 
         for det, track_id in zip(boxes, track_ids):
             x1, y1, x2, y2, _, _, _ = map(int, det)
+
+            status = counter.track_status.get(int(track_id), None)
+            if status is not None:
+                print(f"Person {track_id} is {status}")
+
             h, w, _ = frame.shape
             x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
 
@@ -67,7 +95,7 @@ def main(cfg):
                 if name != "Detecting...":
                     track.name_to_track_id[track_id] = name
 
-            entry_logger.log_person_entry(name)
+            entry_logger.log_person_entry(name, status)
 
             if name not in track.name_to_color:
                 track.name_to_color[name] = (

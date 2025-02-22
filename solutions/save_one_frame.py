@@ -1,6 +1,6 @@
 import cv2
 
-cap = cv2.VideoCapture('/home/hbvision/mirsaid/smart-office/IMG_7121.mov')
+cap = cv2.VideoCapture('rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.200:554/Streaming/Channels/2')
 
 ret, frame = cap.read()
 

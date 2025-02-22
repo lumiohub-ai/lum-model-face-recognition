@@ -66,6 +66,7 @@ while True:
 cv2.destroyAllWindows()
 
 # Normalize and format the collected polygons
+print("Collected Polygons:\n", polygons)
 annotations = normalize_and_format_polygons(polygons, image_width, image_height)
 
 # Print and save the output

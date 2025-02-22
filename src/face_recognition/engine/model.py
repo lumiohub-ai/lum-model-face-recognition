@@ -1,6 +1,10 @@
 import os
 import logging
 
+import sys
+import os
+sys.path.append(os.curdir)
+
 import torch
 from ultralytics import YOLO
 from facenet_pytorch import InceptionResnetV1
