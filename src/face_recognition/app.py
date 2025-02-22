@@ -110,7 +110,6 @@ def main():
             st.session_state.video_path = temp_file.name
             
             process_video(st.session_state.video_path, cfg)
-            os.remove(temp_file.name)
     
     elif input_type == "RTSP Stream":
         rtsp_url = st.sidebar.text_input("Enter RTSP URL")
