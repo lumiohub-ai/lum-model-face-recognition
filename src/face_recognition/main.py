@@ -171,7 +171,7 @@ class VideoProcessor:
             cv2.destroyAllWindows()
 
 
-def main() -> None:
+if __name__ == "__main__":
     cfg = Config()
     model = FaceRecognitionModel(cfg.device, cfg.face_crops_path, cfg.match_threshold)
     entry_logger = EntryLogger(cfg.logging_path)
@@ -180,7 +180,3 @@ def main() -> None:
 
     video_processor = VideoProcessor(cfg, model, entry_logger, track_in, track_out)
     video_processor.run()
-
-
-if __name__ == "__main__":
-    main()
