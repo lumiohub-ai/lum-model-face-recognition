@@ -14,7 +14,7 @@ class EntryLogger:
         self.base_y = 30
         self.padding = 10
         self.person_status = {}
-        self.auth_client = self.authorize_user()
+        # self.auth_client = self.authorize_user()
 
     def authorize_user(self):
         url = 'http://localhost:4000/graphql'
@@ -74,16 +74,20 @@ class EntryLogger:
             self.entry_time[name] = now
             self.recent_entries.append(f'Person: {name} has {status} at {today_time}')
 
-            # API Call to send the data to the server
-            input_variable = {
-                'clientName': f'{name}',
-                'clientIn': f'{today_time}',
-                'clientOut': f'{status}',
-                'clientWorkingHours': '0',
-                'clientWorkingDate': f'{today_date}',
-            }
+            # if status == 'IN':
+            #     call = 'clientIn'
+            # else:
+            #     call = 'clientOut'
 
-            self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
+            # # API Call to send the data to the server
+            # input_variable = {
+            #     "clientName": name,
+            #     f"{call}": str(today_time),
+            #     "clientStatus": status,
+            #     "clientWorkingDate": str(today_date),
+            # }
+
+            # self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:

@@ -18,14 +18,15 @@ LOGIN = gql('''
 
 RECORD_DATA = gql('''
     mutation CreateClientDate($input: DateInput!) {
-        createClientDate(input: $input) {
-            _id
-            clientName
-            clientIn
-            clientOut
-            clientWorkingHours
-            clientWorkingDate
-            clientId
-        }
+    createClientDate(input: $input) {
+        _id
+        clientName
+        clientIn
+        clientOut
+        clientWorkingHours
+        clientWorkingDate
+        clientId
+        clientStatus
     }
+}
 ''')
