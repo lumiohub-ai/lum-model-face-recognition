@@ -2,8 +2,8 @@ import os
 import logging
 
 import sys
-import os
-sys.path.append(os.curdir)
+# import os
+# sys.path.append(os.curdir)
 
 import torch
 from ultralytics import YOLO
@@ -21,12 +21,16 @@ logger = logging.getLogger(__name__)
 class FaceRecognitionModel:
     def __init__(self, device, face_crops_path, match_threshold=0.7):
         self.device = device
-        self.detector = YOLO("yolov8m-face.pt")
+
+        self.in_detector = YOLO("yolov8m-face.pt")
+        self.out_detector = YOLO("yolov8m-face.pt")
+
         self.resnet = (
             InceptionResnetV1(pretrained="vggface2", classify=False)
             .eval()
             .to(self.device)
         )
+        
         self.face_crops_path = face_crops_path
         self.match_threshold = match_threshold
         self.database = self.load_embeddings()

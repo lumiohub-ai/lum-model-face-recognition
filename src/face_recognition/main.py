@@ -1,106 +1,104 @@
+import os
+import cv2
+import threading
+import numpy as np
+from typing import Any, Tuple
 
 from cfg import Config
-import cv2
 from engine import FaceRecognitionModel, TrackManager
-from utils import EntryLogger, generate_random_color, display
-import os
+from utils import EntryLogger, generate_random_color, display, concat_frames
 
-import sys
-import os
-sys.path.append(os.curdir)
-
-from ultralytics import solutions
-import numpy as np
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 
+class VideoStream:
+    def __init__(self, src: Any) -> None:
+        self.cap = cv2.VideoCapture(src)
+        self.stopped = False
+        self.lock = threading.Lock()
+        ret, frame = self.cap.read()
+        if not ret:
+            raise ValueError(f"Unable to read from camera source: {src}")
+        self.ret = ret
+        self.frame = frame
 
-def main(cfg):
-    cap = cv2.VideoCapture(cfg.video_path)
+    def start(self) -> "VideoStream":
+        threading.Thread(target=self.update, daemon=True).start()
+        return self
 
-    w, h, fps = (
-        int(cap.get(x))
-        for x in (cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT, cv2.CAP_PROP_FPS)
-    )
-    out = cv2.VideoWriter(
-        cfg.output_video_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (714, 659)
-    )
+    def update(self) -> None:
+        while not self.stopped:
+            ret, frame = self.cap.read()
+            if not ret:
+                self.stop()
+                break
+            with self.lock:
+                self.ret, self.frame = ret, frame
 
-    stop = False
+    def read(self) -> Tuple[bool, Any]:
+        with self.lock:
+            return self.ret, self.frame
 
-    line_points = [(103, 171), (397, 158)]
-    # [(159, 137), (162, 56), (254, 62), (285, 155), (277, 215), (215, 237), (160, 135)]
+    def stop(self) -> None:
+        self.stopped = True
+        self.cap.release()
 
-    counter = solutions.ObjectCounter(
-        show=False,
-        region=line_points,
-        model="yolov8m-face.pt",
-        classes=[0],
-        show_in=True, 
-        show_out=True,
-        line_width=2,
-        persist=True,
-        verbose=False
-    )
+    def __enter__(self) -> "VideoStream":
+        return self.start()
 
-    while True:
-        model.check_new_faces()
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.stop()
 
-        ret, frame = cap.read()
-        if not ret or stop:
-            break
 
-        # x, y, w, h = cfg.camera_roi_coordinates
-        # frame = frame[y : y + h, x : x + w]
+class VideoProcessor:
+    def __init__(
+        self,
+        cfg: Config,
+        model: FaceRecognitionModel,
+        entry_logger: EntryLogger,
+        track_in: TrackManager,
+        track_out: TrackManager,
+    ) -> None:
+        self.cfg = cfg
+        self.model = model
+        self.entry_logger = entry_logger
+        self.track_in = track_in
+        self.track_out = track_out
 
-        # detections = model.detector.track(
-        #     frame,
-        #     conf=cfg.detection_threshold,
-        #     verbose=False,
-        #     imgsz=cfg.imgsz,
-        #     persist=True,
-        # )
+        self.in_stream = VideoStream(cfg.in_camera)
+        self.out_stream = VideoStream(cfg.out_camera)
 
-        counter.count(np.ascontiguousarray(frame))
-        detections = counter.track_data
+    def process_detections(
+        self, detections: Any, frame: Any, cam_type: str, track: TrackManager
+    ) -> Any:
+        if not detections or detections[0].boxes.id is None:
+            return frame
 
-        if detections.id is None:
-            stop = display(frame, out)
-            continue
-
-        boxes = detections.data.cpu().tolist()
-        track_ids = detections.id.cpu().tolist()
+        boxes = detections[0].boxes.data.cpu().tolist()
+        track_ids = detections[0].boxes.id.cpu().tolist()
 
         for det, track_id in zip(boxes, track_ids):
-            x1, y1, x2, y2, _, _, _ = map(int, det)
+            if track_id not in track.track_frame_count:
+                track.track_frame_count[track_id] = 0
 
-            status = counter.track_status.get(int(track_id), None)
-            if status is not None:
-                print(f"Person {track_id} is {status}")
-
+            x1, y1, x2, y2, *rest = map(int, det)
             h, w, _ = frame.shape
             x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
 
             face = frame[y1:y2, x1:x2]
             track.track_frame_count[track_id] += 1
 
-            if track.track_frame_count[track_id] >= cfg.check_interval:
-                track.name_to_track_id.pop(track_id, None)
-                track.track_frame_count[track_id] = 0
-
             name = track.name_to_track_id.get(track_id, "Detecting...")
 
             if name == "Detecting...":
-                face_emb = model.compute_embeddings(face)
-                name = model.recognize_face(face_emb)
+                face_emb = self.model.compute_embeddings(face)
+                name = self.model.recognize_face(face_emb)
                 if name != "Detecting...":
                     track.name_to_track_id[track_id] = name
-
-            entry_logger.log_person_entry(name, status)
+                    self.entry_logger.log_person_entry(name, cam_type)
 
             if name not in track.name_to_color:
-                track.name_to_color[name] = (
-                    (0, 0, 0) if name == "Detecting..." else generate_random_color()
-                )
+                track.name_to_color[name] = (0, 0, 0) if name == "Detecting..." else generate_random_color()
 
             color = track.name_to_color[name]
             box_width = x2 - x1
@@ -110,27 +108,79 @@ def main(cfg):
             text_y = max(0, y1 - 10)
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-            cv2.putText(
-                frame, name, (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX, font_scale, (255, 255, 255), 2
-            )
+            cv2.putText(frame, name, (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX, font_scale, (255, 255, 255), 2)
 
-        entry_logger.visualize_entries(frame)
+        return frame
 
-        stop = display(frame, out)
+    def run(self) -> None:
+        self.in_stream.start()
+        self.out_stream.start()
+        frame_number = 0
 
-    cap.release()
-    cv2.destroyAllWindows()
+        try:
+            while True:
+                frame_number += 1
+                if frame_number % self.cfg.skip_frames != 0:
+                    continue
+
+                self.model.check_new_faces()
+
+                in_ret, in_frame = self.in_stream.read()
+                out_ret, out_frame = self.out_stream.read()
+
+                if not in_ret or not out_ret:
+                    break
+
+                in_detections = self.model.in_detector.track(
+                    in_frame,
+                    conf=self.cfg.detection_threshold,
+                    verbose=False,
+                    imgsz=self.cfg.imgsz,
+                    persist=True,
+                    tracker="bytetrack.yaml",
+                )
+
+                out_detections = self.model.out_detector.track(
+                    out_frame,
+                    conf=self.cfg.detection_threshold,
+                    verbose=False,
+                    imgsz=self.cfg.imgsz,
+                    persist=True,
+                    tracker="bytetrack.yaml",
+                )
+
+                in_frame_dets = self.process_detections(in_detections, in_frame, "IN", self.track_in)
+                out_frame_dets = self.process_detections(out_detections, out_frame, "OUT", self.track_out)
+
+                
+
+                # Concatenate the two frames for a combined view.
+                combined_frame = concat_frames(in_frame_dets, out_frame_dets, mode="horizontal")
+                # Resize combined frame to display
+                combined_frame = cv2.resize(combined_frame, (1900, 720))
+
+                self.entry_logger.visualize_entries(combined_frame)
+
+                if display(combined_frame, "Combined"):
+                    break
+
+
+        finally:
+            self.in_stream.stop()
+            self.out_stream.stop()
+            cv2.destroyAllWindows()
+
+
+def main() -> None:
+    cfg = Config()
+    model = FaceRecognitionModel(cfg.device, cfg.face_crops_path, cfg.match_threshold)
+    entry_logger = EntryLogger(cfg.logging_path)
+    track_in = TrackManager()
+    track_out = TrackManager()
+
+    video_processor = VideoProcessor(cfg, model, entry_logger, track_in, track_out)
+    video_processor.run()
 
 
 if __name__ == "__main__":
-
-    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|buffer_size;10485760"
-    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
-    cfg = Config()
-
-    model = FaceRecognitionModel(cfg.device, cfg.face_crops_path, cfg.match_threshold)
-    entry_logger = EntryLogger(cfg.logging_path)
-    track = TrackManager()
-
-    main(cfg)
+    main()

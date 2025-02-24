@@ -1,6 +1,6 @@
 import cv2
 
-cap = cv2.VideoCapture('rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.200:554/Streaming/Channels/2')
+cap = cv2.VideoCapture('rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.201:554/Streaming/Channels/1')
 
 ret, frame = cap.read()
 

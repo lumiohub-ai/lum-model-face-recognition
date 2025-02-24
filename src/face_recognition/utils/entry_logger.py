@@ -1,6 +1,10 @@
 from datetime import datetime
 from collections import deque
 import cv2
+import requests
+from gql import gql, Client
+from gql.transport.requests import RequestsHTTPTransport
+from .mutation import LOGIN, RECORD_DATA
 
 class EntryLogger:
     def __init__(self, logging_path):
@@ -9,22 +13,77 @@ class EntryLogger:
         self.recent_entries = deque(maxlen=3)
         self.base_y = 30
         self.padding = 10
+        self.person_status = {}
+        self.auth_client = self.authorize_user()
+
+    def authorize_user(self):
+        url = 'http://localhost:4000/graphql'
+
+        client = Client(
+            transport=RequestsHTTPTransport(
+                url=url,
+                use_json=True,
+            ),
+            fetch_schema_from_transport=True,
+        )
+
+        login_variables = {
+            "input": {
+                "memberNick": "Admin", 
+                "memberPassword": "123456"
+            }
+        }
+
+        loginResponse = client.execute(LOGIN, variable_values=login_variables)
+
+        access_token = loginResponse['login']['accessToken']
+
+        auth_transport = RequestsHTTPTransport(
+            url=url,
+            headers={'Authorization': f'Bearer {access_token}'},
+            use_json=True,
+        )
+
+        auth_client = Client(
+            transport=auth_transport,
+            fetch_schema_from_transport=True,
+        )
+
+        return auth_client
 
     def log_person_entry(self, name, status):
-        if name != "Detecting..." and name not in self.entry_time:
-            now = datetime.now().strftime("%H:%M:%S on %d.%m.%Y")
-            if status == "IN":
-                log_entry = f"{name} IN at {now}"
-            elif status == "OUT":
-                log_entry = f"{name} OUT at {now}"
-            else:
-                return
-            
+        update = False
+
+        now =  datetime.now()
+        today_date = now.strftime("%Y-%m-%d")
+        today_time = now.strftime("%H:%M:%S")
+
+        if name not in self.person_status.keys():
+            # IF new name appears add key to the dictionary and add the status
+            self.person_status[name] = status
+            update = True
+
+
+        else:
+            # Check whether status has updated or not
+            if self.person_status[name] != status:
+                self.person_status[name] = status
+                update = True
+
+        if update:
             self.entry_time[name] = now
-            self.recent_entries.append(log_entry)  # Add to the recent entries deque
-            #save the information to the csv file
-            with open(self.logging_path, 'a') as f:
-                f.write(log_entry + '\n')
+            self.recent_entries.append(f'Person: {name} has {status} at {today_time}')
+
+            # API Call to send the data to the server
+            input_variable = {
+                'clientName': f'{name}',
+                'clientIn': f'{today_time}',
+                'clientOut': f'{status}',
+                'clientWorkingHours': '0',
+                'clientWorkingDate': f'{today_date}',
+            }
+
+            self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:
