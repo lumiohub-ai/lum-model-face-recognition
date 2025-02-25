@@ -1,12 +1,15 @@
 import os
 import cv2
 import threading
-import numpy as np
 from typing import Any, Tuple
 
 from cfg import Config
 from engine import FaceRecognitionModel, TrackManager
 from utils import EntryLogger, generate_random_color, display, concat_frames
+
+import warnings
+warnings.filterwarnings("ignore")
+
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
@@ -21,16 +24,25 @@ class VideoStream:
             raise ValueError(f"Unable to read from camera source: {src}")
         self.ret = ret
         self.frame = frame
+        self.thread = None  # store reference to thread
 
     def start(self) -> "VideoStream":
-        threading.Thread(target=self.update, daemon=True).start()
+        # Create a non-daemon thread so we can join it on stop.
+        self.thread = threading.Thread(target=self.update)
+        self.thread.start()
         return self
 
     def update(self) -> None:
-        while not self.stopped:
+        while True:
+            # Check if we need to stop, protected by the lock.
+            with self.lock:
+                if self.stopped:
+                    break
             ret, frame = self.cap.read()
             if not ret:
-                self.stop()
+                # Signal to stop and break out of the loop.
+                with self.lock:
+                    self.stopped = True
                 break
             with self.lock:
                 self.ret, self.frame = ret, frame
@@ -40,7 +52,15 @@ class VideoStream:
             return self.ret, self.frame
 
     def stop(self) -> None:
-        self.stopped = True
+        # Signal stop under lock.
+        with self.lock:
+            if self.stopped:
+                return
+            self.stopped = True
+        # Wait for the update thread to finish.
+        if self.thread is not None:
+            self.thread.join()
+        # Now it is safe to release the VideoCapture.
         self.cap.release()
 
     def __enter__(self) -> "VideoStream":
@@ -48,6 +68,7 @@ class VideoStream:
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.stop()
+
 
 
 class VideoProcessor:
@@ -69,13 +90,13 @@ class VideoProcessor:
         self.out_stream = VideoStream(cfg.out_camera)
 
     def process_detections(
-        self, detections: Any, frame: Any, cam_type: str, track: TrackManager
+        self, detections: Any, frame: Any, cam_type: str, track: TrackManager, track_status: dict
     ) -> Any:
-        if not detections or detections[0].boxes.id is None:
+        if detections.id is None:
             return frame
 
-        boxes = detections[0].boxes.data.cpu().tolist()
-        track_ids = detections[0].boxes.id.cpu().tolist()
+        boxes = detections.data.cpu().tolist()
+        track_ids = detections.id.cpu().tolist()
 
         for det, track_id in zip(boxes, track_ids):
             if track_id not in track.track_frame_count:
@@ -95,7 +116,14 @@ class VideoProcessor:
                 name = self.model.recognize_face(face_emb)
                 if name != "Detecting...":
                     track.name_to_track_id[track_id] = name
-                    self.entry_logger.log_person_entry(name, cam_type)
+                    # Check track status
+                    status = track_status.get(int(track_id), None)
+                    
+                    if cam_type == "IN":
+                        self.entry_logger.log_person_entry(name, cam_type)
+                    elif cam_type == "OUT" and status == cam_type:
+                        self.entry_logger.log_person_entry(name, cam_type)
+                            
 
             if name not in track.name_to_color:
                 track.name_to_color[name] = (0, 0, 0) if name == "Detecting..." else generate_random_color()
@@ -130,30 +158,29 @@ class VideoProcessor:
 
                 if not in_ret or not out_ret:
                     break
-
-                in_detections = self.model.in_detector.track(
-                    in_frame,
-                    conf=self.cfg.detection_threshold,
-                    verbose=False,
-                    imgsz=self.cfg.imgsz,
-                    persist=True,
-                    tracker="bytetrack.yaml",
-                )
-
-                out_detections = self.model.out_detector.track(
-                    out_frame,
-                    conf=self.cfg.detection_threshold,
-                    verbose=False,
-                    imgsz=self.cfg.imgsz,
-                    persist=True,
-                    tracker="bytetrack.yaml",
-                )
-
-                in_frame_dets = self.process_detections(in_detections, in_frame, "IN", self.track_in)
-                out_frame_dets = self.process_detections(out_detections, out_frame, "OUT", self.track_out)
-
                 
+                ### IN 
+                self.model.in_counter.count(
+                    in_frame
+                )
 
+                in_detections = self.model.in_counter.track_data
+                in_status = self.model.in_counter.track_status
+
+                ### OUT
+                self.model.out_counter.count(
+                    out_frame
+                )
+                out_detections = self.model.out_counter.track_data
+                out_status = self.model.out_counter.track_status
+
+
+                in_frame_dets = self.process_detections(in_detections, in_frame, "IN", 
+                                                        self.track_in, in_status)
+                out_frame_dets = self.process_detections(out_detections, out_frame, "OUT", 
+                                                         self.track_out, out_status)
+
+            
                 # Concatenate the two frames for a combined view.
                 combined_frame = concat_frames(in_frame_dets, out_frame_dets, mode="horizontal")
                 # Resize combined frame to display
@@ -173,7 +200,11 @@ class VideoProcessor:
 
 if __name__ == "__main__":
     cfg = Config()
-    model = FaceRecognitionModel(cfg.device, cfg.face_crops_path, cfg.match_threshold)
+    print(cfg.in_region_points)
+    model = FaceRecognitionModel(cfg.device, cfg.face_crops_path,
+                                in_region_points=cfg.in_region_points, out_region_points=cfg.out_region_points,
+                                match_threshold=cfg.match_threshold 
+                                )
     entry_logger = EntryLogger(cfg.logging_path)
     track_in = TrackManager()
     track_out = TrackManager()

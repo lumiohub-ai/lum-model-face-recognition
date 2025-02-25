@@ -2,11 +2,11 @@ import os
 import logging
 
 import sys
-# import os
-# sys.path.append(os.curdir)
+import os
+sys.path.append(os.curdir)
 
 import torch
-from ultralytics import YOLO
+from ultralytics import solutions
 from facenet_pytorch import InceptionResnetV1
 import cv2
 import numpy as np
@@ -19,11 +19,40 @@ logger = logging.getLogger(__name__)
 
 
 class FaceRecognitionModel:
-    def __init__(self, device, face_crops_path, match_threshold=0.7):
+    def __init__(self, device, face_crops_path, in_region_points, out_region_points, 
+                match_threshold=0.7, 
+                model_path='yolov8m-face.pt'):
         self.device = device
+        self.model_path=model_path
 
-        self.in_detector = YOLO("yolov8m-face.pt")
-        self.out_detector = YOLO("yolov8m-face.pt")
+        self.in_region_points = in_region_points
+        self.out_region_points = out_region_points
+
+        self.in_counter = solutions.ObjectCounter(
+            show=False,
+            region=in_region_points,
+            model="yolov8m-face.pt",
+            classes=[0],
+            show_in=True, 
+            show_out=True,
+            line_width=2,
+            persist=True,
+            verbose=False,
+            tracker="bytetrack.yaml",
+        )
+        
+        self.out_counter = solutions.ObjectCounter(
+            show=False,
+            region=out_region_points,
+            model="yolov8m-face.pt",
+            classes=[0],
+            show_in=True, 
+            show_out=True,
+            line_width=2,
+            persist=True,
+            verbose=False,
+            tracker="bytetrack.yaml",
+        )  
 
         self.resnet = (
             InceptionResnetV1(pretrained="vggface2", classify=False)

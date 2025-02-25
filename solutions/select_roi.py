@@ -23,7 +23,7 @@ def draw_rectangle(event, x, y, flags, param):
         
 
 # Load image
-img = cv2.imread('frame.jpg')  # Change to your image path
+img = cv2.imread('frame_in.jpg')  # Change to your image path
 
 cv2.imshow('Image', img)
 drawing = False

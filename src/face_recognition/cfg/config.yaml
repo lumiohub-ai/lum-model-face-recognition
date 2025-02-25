@@ -7,16 +7,19 @@ output_video_path: "data/output.mp4"
 out_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.201:554/Streaming/Channels/1"
 in_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.200:554/Streaming/Channels/1"
 
-camera_roi_coordinates:
-  - 528
-  - 41
-  - 714
-  - 659
+in_region_points:
+  - [80, 391]
+  - [570, 685]
+
+out_region_points:
+  - [614, 713]
+  - [1218, 699]
+
 
 recent_entries_max_len: 5
 
-match_threshold: 0.75
-detection_threshold: 0.7
+match_threshold: 0.7
+detection_threshold: 0.5
 
 check_interval: 60
 
