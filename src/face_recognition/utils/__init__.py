@@ -1,5 +1,5 @@
 # This file makes the directory a package.
-from .visualize import generate_random_color, display, concat_frames
+from .visualize import Visualization
 from .entry_logger import EntryLogger
 
-"__all__" == ["generate_random_color", "display", "concat_frames", "EntryLogger"]
+"__all__" == ["Visualization", "EntryLogger"]

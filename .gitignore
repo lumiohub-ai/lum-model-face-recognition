@@ -533,3 +533,6 @@ myenv/
 videos/
 runs/
 
+jetson_packages/
+models/
+.vscode/

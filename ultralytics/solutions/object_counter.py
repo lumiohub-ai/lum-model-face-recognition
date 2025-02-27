@@ -74,6 +74,8 @@ class ObjectCounter(BaseSolution):
         if len(self.region) == 2:  # Linear region (defined as a line segment)
             line = self.LineString(self.region)  # Check if the line intersects the trajectory of the object
             if line.intersects(self.LineString([prev_position, current_centroid])):
+                track_status = 'INTERSECTED'
+
                 # Determine orientation of the region (vertical or horizontal)
                 if abs(self.region[0][0] - self.region[1][0]) < abs(self.region[0][1] - self.region[1][1]):
                     # Vertical region: Compare x-coordinates to determine direction
@@ -119,6 +121,7 @@ class ObjectCounter(BaseSolution):
                     track_status = "OUT"
                     self.out_count += 1
                     self.classwise_counts[self.names[cls]]["OUT"] += 1
+                    
                 self.counted_ids.append(track_id)
 
         self.track_status[track_id] = track_status
@@ -185,13 +188,7 @@ class ObjectCounter(BaseSolution):
         if not self.region_initialized:
             self.initialize_region()
             self.region_initialized = True
-
-        self.annotator = Annotator(im0, line_width=self.line_width)  # Initialize annotator
         self.extract_tracks(im0)  # Extract tracks
-
-        self.annotator.draw_region(
-            reg_pts=self.region, color=(104, 0, 123), thickness=self.line_width * 2
-        )  # Draw region
 
         # Iterate over bounding boxes, track ids and classes index
         for box, track_id, cls in zip(self.boxes, self.track_ids, self.clss):
@@ -200,10 +197,6 @@ class ObjectCounter(BaseSolution):
             self.store_tracking_history(track_id, box)  # Store track history
             self.store_classwise_counts(cls)  # store classwise counts in dict
 
-            # Draw tracks of objects
-            self.annotator.draw_centroid_and_tracks(
-                self.track_line, color=colors(int(cls), True), track_thickness=self.line_width
-            )
             current_centroid = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             # store previous position of track for object counting
             prev_position = None
@@ -211,8 +204,5 @@ class ObjectCounter(BaseSolution):
                 prev_position = self.track_history[track_id][-2]
 
             self.count_objects(current_centroid, track_id, prev_position, cls)  # Perform object counting
-
-        # self.display_counts(im0)  # Display the counts on the frame
-        # self.display_output(im0)  # display output with base class function
 
         return im0  # return output image for more usage

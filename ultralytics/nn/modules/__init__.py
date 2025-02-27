@@ -30,7 +30,6 @@ from .block import (
     SPP,
     SPPELAN,
     SPPF,
-    A2C2f,
     AConv,
     ADown,
     Attention,
@@ -161,5 +160,4 @@ __all__ = (
     "PSA",
     "TorchVision",
     "Index",
-    "A2C2f",
 )

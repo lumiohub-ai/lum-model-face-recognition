@@ -110,7 +110,8 @@ class BaseSolution:
             >>> frame = cv2.imread("path/to/image.jpg")
             >>> solution.extract_tracks(frame)
         """
-        self.tracks = self.model.track(source=im0, persist=True, classes=self.CFG["classes"], **self.track_add_args)
+        self.tracks = self.model.track(source=im0, persist=True, classes=self.CFG["classes"],
+                                       **self.track_add_args)
 
         # Extract tracks for OBB or object detection
         self.track_data = self.tracks[0].obb or self.tracks[0].boxes
@@ -120,7 +121,7 @@ class BaseSolution:
             self.clss = self.track_data.cls.cpu().tolist()
             self.track_ids = self.track_data.id.int().cpu().tolist()
         else:
-            LOGGER.warning("WARNING ⚠️ no tracks found!")
+            # LOGGER.warning("WARNING ⚠️ no tracks found!")
             self.boxes, self.clss, self.track_ids = [], [], []
 
     def store_tracking_history(self, track_id, box):

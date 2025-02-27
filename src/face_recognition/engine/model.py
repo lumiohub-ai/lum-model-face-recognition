@@ -21,9 +21,8 @@ logger = logging.getLogger(__name__)
 class FaceRecognitionModel:
     def __init__(self, device, face_crops_path, in_region_points, out_region_points, 
                 match_threshold=0.7, 
-                model_path='yolov8m-face.pt'):
+                model_path='/home/hb-nano/mirsaid/face-recognition/models/yolov8n-face.engine'):
         self.device = device
-        self.model_path=model_path
 
         self.in_region_points = in_region_points
         self.out_region_points = out_region_points
@@ -31,7 +30,7 @@ class FaceRecognitionModel:
         self.in_counter = solutions.ObjectCounter(
             show=False,
             region=in_region_points,
-            model="yolov8m-face.pt",
+            model=model_path,
             classes=[0],
             show_in=True, 
             show_out=True,
@@ -44,7 +43,7 @@ class FaceRecognitionModel:
         self.out_counter = solutions.ObjectCounter(
             show=False,
             region=out_region_points,
-            model="yolov8m-face.pt",
+            model=model_path,
             classes=[0],
             show_in=True, 
             show_out=True,

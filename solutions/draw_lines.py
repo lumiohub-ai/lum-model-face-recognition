@@ -44,7 +44,7 @@ def normalize_and_format_polygons(polygons, image_width, image_height):
     return annotations.strip()
 
 # Load image
-image_path = "frame_out.jpg"  # Change this to your image path
+image_path = "frame_in.jpg"  # Change this to your image path
 image = cv2.imread(image_path)
 image_height, image_width = image.shape[:2]
 

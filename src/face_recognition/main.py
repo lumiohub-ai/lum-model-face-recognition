@@ -1,11 +1,13 @@
 import os
 import cv2
 import threading
-from typing import Any, Tuple
+from typing import Any, Tuple, List
 
 from cfg import Config
 from engine import FaceRecognitionModel, TrackManager
-from utils import EntryLogger, generate_random_color, display, concat_frames
+from utils import EntryLogger, Visualization
+
+from shapely.geometry import box, LineString
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -79,19 +81,42 @@ class VideoProcessor:
         entry_logger: EntryLogger,
         track_in: TrackManager,
         track_out: TrackManager,
+        visualize: Visualization
     ) -> None:
         self.cfg = cfg
         self.model = model
         self.entry_logger = entry_logger
         self.track_in = track_in
         self.track_out = track_out
+        self.visualize = visualize
 
         self.in_stream = VideoStream(cfg.in_camera)
         self.out_stream = VideoStream(cfg.out_camera)
 
+    @staticmethod
+    def bbox_intersects_line(bbox, line_points):
+        """
+        Checks if a bounding box intersects a line using Shapely.
+        
+        :param bbox: [x1, y1, x2, y2] format
+        :param line_points: [[x1, y1], [x2, y2]] (line start and end points)
+        :return: True if intersects, else False
+        """
+        # Convert bbox to shapely box
+        bbox_rect = box(min(bbox[0], bbox[2]), min(bbox[1], bbox[3]), max(bbox[0], bbox[2]), max(bbox[1], bbox[3]))
+
+        # Convert line to shapely LineString
+        line = LineString(line_points)
+
+        # Check intersection
+        return bbox_rect.intersects(line)
+
+
     def process_detections(
-        self, detections: Any, frame: Any, cam_type: str, track: TrackManager, track_status: dict
+        self, detections: Any, frame: Any, cam_type: str, track: TrackManager, track_status: dict,
+        line_points: List,
     ) -> Any:
+
         if detections.id is None:
             return frame
 
@@ -99,6 +124,11 @@ class VideoProcessor:
         track_ids = detections.id.cpu().tolist()
 
         for det, track_id in zip(boxes, track_ids):
+            status = track_status.get(int(track_id), None)
+            if status is not None:
+                print(status)
+                
+
             if track_id not in track.track_frame_count:
                 track.track_frame_count[track_id] = 0
 
@@ -107,6 +137,7 @@ class VideoProcessor:
             x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
 
             face = frame[y1:y2, x1:x2]
+
             track.track_frame_count[track_id] += 1
 
             name = track.name_to_track_id.get(track_id, "Detecting...")
@@ -114,19 +145,20 @@ class VideoProcessor:
             if name == "Detecting...":
                 face_emb = self.model.compute_embeddings(face)
                 name = self.model.recognize_face(face_emb)
+                
                 if name != "Detecting...":
                     track.name_to_track_id[track_id] = name
-                    # Check track status
-                    status = track_status.get(int(track_id), None)
                     
-                    if cam_type == "IN":
-                        self.entry_logger.log_person_entry(name, cam_type)
-                    elif cam_type == "OUT" and status == cam_type:
-                        self.entry_logger.log_person_entry(name, cam_type)
-                            
+                    # Here check whether bbox intersected with line points
+                    # Convert bbox format to match the function
+                    bbox = [x2, y2, x1, y1]  # Format: x_max, y_max, x_min, y_min
 
+                    # Check if bbox intersects with line
+                    if self.bbox_intersects_line(bbox, line_points):
+                        self.entry_logger.log_person_entry(name, cam_type)
+           
             if name not in track.name_to_color:
-                track.name_to_color[name] = (0, 0, 0) if name == "Detecting..." else generate_random_color()
+                track.name_to_color[name] = (1, 31, 242) if name == "Detecting..." else self.visualize.generate_random_color()
 
             color = track.name_to_color[name]
             box_width = x2 - x1
@@ -176,19 +208,25 @@ class VideoProcessor:
 
 
                 in_frame_dets = self.process_detections(in_detections, in_frame, "IN", 
-                                                        self.track_in, in_status)
+                                                        self.track_in, in_status, cfg.in_region_points)
                 out_frame_dets = self.process_detections(out_detections, out_frame, "OUT", 
-                                                         self.track_out, out_status)
+                                                         self.track_out, out_status, cfg.out_region_points)
+                
+                # Visualize region areas
+                self.visualize.draw_region(in_frame_dets, cfg.in_region_points)
+                self.visualize.draw_region(out_frame_dets, cfg.out_region_points)
 
             
                 # Concatenate the two frames for a combined view.
-                combined_frame = concat_frames(in_frame_dets, out_frame_dets, mode="horizontal")
+                combined_frame = self.visualize.concat_frames(in_frame_dets, 
+                                                              out_frame_dets, mode="horizontal")
+
                 # Resize combined frame to display
                 combined_frame = cv2.resize(combined_frame, (1900, 720))
 
                 self.entry_logger.visualize_entries(combined_frame)
 
-                if display(combined_frame, "Combined"):
+                if self.visualize.display(combined_frame, "Face Recognition System"):
                     break
 
 
@@ -200,14 +238,16 @@ class VideoProcessor:
 
 if __name__ == "__main__":
     cfg = Config()
-    print(cfg.in_region_points)
+    
     model = FaceRecognitionModel(cfg.device, cfg.face_crops_path,
                                 in_region_points=cfg.in_region_points, out_region_points=cfg.out_region_points,
                                 match_threshold=cfg.match_threshold 
                                 )
     entry_logger = EntryLogger(cfg.logging_path)
+
     track_in = TrackManager()
     track_out = TrackManager()
+    visualize = Visualization()
 
-    video_processor = VideoProcessor(cfg, model, entry_logger, track_in, track_out)
+    video_processor = VideoProcessor(cfg, model, entry_logger, track_in, track_out, visualize)
     video_processor.run()

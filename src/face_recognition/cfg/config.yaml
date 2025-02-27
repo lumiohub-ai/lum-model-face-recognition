@@ -1,6 +1,6 @@
 device: "cuda"
 
-face_crops_path: "data/database"
+face_crops_path: "data/images"
 output_video_path: "data/output.mp4"
 
 
@@ -8,18 +8,27 @@ out_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.201:554/Streaming/Channel
 in_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.200:554/Streaming/Channels/1"
 
 in_region_points:
-  - [80, 391]
-  - [570, 685]
-
+    - [559, 28]
+    - [449, 703]
+  # - [553, 106]
+  # - [543, 349]
+  # - [586, 353]
+  # - [590, 106]
+  # - [555, 106]
+  
 out_region_points:
-  - [614, 713]
-  - [1218, 699]
-
+    - [2, 699]
+    - [1277, 692]
+  # - [2, 658]
+  # - [1275, 649]
+  # - [1268, 711]
+  # - [4, 696]
+  # - [3, 658]
 
 recent_entries_max_len: 5
 
-match_threshold: 0.7
-detection_threshold: 0.5
+match_threshold: 0.01
+detection_threshold: 0.1
 
 check_interval: 60
 

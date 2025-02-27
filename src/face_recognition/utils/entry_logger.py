@@ -2,8 +2,8 @@ from datetime import datetime
 from collections import deque
 import cv2
 import requests
-from gql import gql, Client
-from gql.transport.requests import RequestsHTTPTransport
+# from gql import gql, Client
+# from gql.transport.requests import RequestsHTTPTransport
 from .mutation import LOGIN, RECORD_DATA
 
 class EntryLogger:
@@ -14,7 +14,7 @@ class EntryLogger:
         self.base_y = 30
         self.padding = 10
         self.person_status = {}
-        self.auth_client = self.authorize_user()
+        # self.auth_client = self.authorize_user()
 
     def authorize_user(self):
         url = 'http://localhost:4000/graphql'
@@ -86,8 +86,8 @@ class EntryLogger:
                 "clientStatus": status,
                 "clientWorkingDate": str(today_date),
             }
-
-            self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
+            print(name, status)
+            # self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:

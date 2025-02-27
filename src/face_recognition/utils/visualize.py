@@ -1,45 +1,86 @@
 import random
 import cv2
-from typing import Any, Tuple
+import numpy as np
+from typing import List, Tuple, Optional
 
 
-def generate_random_color():
-    return tuple(random.randint(0, 255) for _ in range(3))
+class Visualization:
+    def __init__(self, image: Optional[np.ndarray] = None):
+        """
+        Initializes the Visualization class.
 
-
-def display(frame, status):
-    cv2.imshow(status, frame)
-    # out.write(frame)
+        Args:
+            image (Optional[np.ndarray]): Image on which regions can be drawn.
+        """
+        self.image = image
     
-    return cv2.waitKey(1) & 0xFF == ord("q")
+    @staticmethod
+    def generate_random_color() -> Tuple[int, int, int]:
+        """
+        Generates a random color in BGR format.
+        
+        Returns:
+            Tuple[int, int, int]: Random BGR color.
+        """
+        return tuple(random.randint(0, 255) for _ in range(3))
+    
+    @staticmethod
+    def display(frame: np.ndarray, window_name: str = "Frame") -> bool:
+        """
+        Displays a frame in a window.
+        
+        Args:
+            frame (np.ndarray): The image frame to be displayed.
+            window_name (str): Name of the display window.
+        
+        Returns:
+            bool: True if 'q' is pressed, otherwise False.
+        """
+        cv2.imshow(window_name, frame)
+        return cv2.waitKey(1) & 0xFF == ord("q")
+    
+    def draw_region(self,
+                    image: np.ndarray,
+                    reg_pts: List[Tuple[int, int]], 
+                    color: Tuple[int, int, int] = (0, 255, 0), 
+                    thickness: int = 5) -> None:
+        """
+        Draws a region using the given points on the stored image.
 
-def concat_frames(frame1: Any, frame2: Any, mode: str = "horizontal") -> Any:
-    """
-    Concatenates two frames either horizontally or vertically.
-    If necessary, the second frame is resized to match the first.
+        Args:
+            reg_pts (List[Tuple[int, int]]): List of region points (2 points for a line, 4 points for a region).
+            color (Tuple[int, int, int]): Color of the region (default is green).
+            thickness (int): Thickness of the region lines.
+        """
+        if image is None:
+            raise ValueError("No image provided for drawing.")
+
+        cv2.polylines(image, [np.array(reg_pts, dtype=np.int32)], isClosed=True, color=color, thickness=thickness)
+        
+        for point in reg_pts:
+            cv2.circle(image, tuple(point), thickness * 2, color, -1)  # Draw small filled circles at corner points
     
-    Args:
-        frame1: First image frame (numpy array).
-        frame2: Second image frame (numpy array).
-        mode: "horizontal" or "vertical" concatenation.
-    
-    Returns:
-        The concatenated image.
-    """
-    if mode == "horizontal":
-        # Resize frame2 if heights differ
-        if frame1.shape[0] != frame2.shape[0]:
-            height = frame1.shape[0]
-            scale = height / frame2.shape[0]
-            frame2 = cv2.resize(frame2, (int(frame2.shape[1] * scale), height))
-        concatenated = cv2.hconcat([frame1, frame2])
-    elif mode == "vertical":
-        # Resize frame2 if widths differ
-        if frame1.shape[1] != frame2.shape[1]:
-            width = frame1.shape[1]
-            scale = width / frame2.shape[1]
-            frame2 = cv2.resize(frame2, (width, int(frame2.shape[0] * scale)))
-        concatenated = cv2.vconcat([frame1, frame2])
-    else:
-        raise ValueError("Unsupported mode. Choose 'horizontal' or 'vertical'.")
-    return concatenated
+    @staticmethod
+    def concat_frames(frame1: np.ndarray, frame2: np.ndarray, mode: str = "horizontal") -> np.ndarray:
+        """
+        Concatenates two frames either horizontally or vertically.
+        If necessary, the second frame is resized to match the first.
+
+        Args:
+            frame1 (np.ndarray): First image frame.
+            frame2 (np.ndarray): Second image frame.
+            mode (str): "horizontal" or "vertical" concatenation.
+
+        Returns:
+            np.ndarray: Concatenated image.
+        """
+        if mode == "horizontal":
+            if frame1.shape[0] != frame2.shape[0]:
+                frame2 = cv2.resize(frame2, (int(frame2.shape[1] * (frame1.shape[0] / frame2.shape[0])), frame1.shape[0]))
+            return cv2.hconcat([frame1, frame2])
+        elif mode == "vertical":
+            if frame1.shape[1] != frame2.shape[1]:
+                frame2 = cv2.resize(frame2, (frame1.shape[1], int(frame2.shape[0] * (frame1.shape[1] / frame2.shape[1]))))
+            return cv2.vconcat([frame1, frame2])
+        else:
+            raise ValueError("Unsupported mode. Choose 'horizontal' or 'vertical'.")
