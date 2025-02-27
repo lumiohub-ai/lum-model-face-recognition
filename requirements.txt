@@ -8,3 +8,4 @@ matplotlib
 facenet_pytorch
 flask
 scikit-learn
+gql==3.5.1

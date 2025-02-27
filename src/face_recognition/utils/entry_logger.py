@@ -1,8 +1,7 @@
 from datetime import datetime
 from collections import deque
 import cv2
-import requests
-from gql import gql, Client
+from gql import Client
 from gql.transport.requests import RequestsHTTPTransport
 from .mutation import LOGIN, RECORD_DATA
 
