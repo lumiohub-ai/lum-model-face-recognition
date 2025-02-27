@@ -190,7 +190,7 @@ class VideoProcessor:
                                                               out_frame_dets, mode="horizontal")
 
                 # Resize combined frame to display
-                combined_frame = cv2.resize(combined_frame, (1280, 360))
+                combined_frame = cv2.resize(combined_frame, (1920, 800))
 
                 self.entry_logger.visualize_entries(combined_frame)
 
