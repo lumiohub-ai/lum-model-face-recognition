@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class FaceRecognitionModel:
     def __init__(self, device, face_crops_path, in_region_points, out_region_points, 
                 match_threshold=0.7, 
-                model_path='/home/hb-nano/mirsaid/face-recognition/models/yolov8n-face.engine'):
+                model_path='yolov8m-face.pt'):
         self.device = device
 
         self.in_region_points = in_region_points

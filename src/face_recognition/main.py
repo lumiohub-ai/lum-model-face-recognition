@@ -7,8 +7,6 @@ from cfg import Config
 from engine import FaceRecognitionModel, TrackManager
 from utils import EntryLogger, Visualization
 
-from shapely.geometry import box, LineString
-
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -93,29 +91,19 @@ class VideoProcessor:
         self.in_stream = VideoStream(cfg.in_camera)
         self.out_stream = VideoStream(cfg.out_camera)
 
-    @staticmethod
-    def bbox_intersects_line(bbox, line_points):
-        """
-        Checks if a bounding box intersects a line using Shapely.
-        
-        :param bbox: [x1, y1, x2, y2] format
-        :param line_points: [[x1, y1], [x2, y2]] (line start and end points)
-        :return: True if intersects, else False
-        """
-        # Convert bbox to shapely box
-        bbox_rect = box(min(bbox[0], bbox[2]), min(bbox[1], bbox[3]), max(bbox[0], bbox[2]), max(bbox[1], bbox[3]))
-
-        # Convert line to shapely LineString
-        line = LineString(line_points)
-
-        # Check intersection
-        return bbox_rect.intersects(line)
+        self.name_to_track_id = {
+            "IN": {},
+            "OUT": {}
+        }
+        self.name_to_color = {}
 
 
     def process_detections(
-        self, detections: Any, frame: Any, cam_type: str, track: TrackManager, track_status: dict,
-        line_points: List,
+        self, detections: Any, frame: Any, cam_type: str, track_status: List
     ) -> Any:
+        
+        if cam_type == "OUT" and len(track_status) > 0:
+            pass
 
         if detections.id is None:
             return frame
@@ -124,43 +112,28 @@ class VideoProcessor:
         track_ids = detections.id.cpu().tolist()
 
         for det, track_id in zip(boxes, track_ids):
-            status = track_status.get(int(track_id), None)
-            if status is not None:
-                print(status)
-                
-
-            if track_id not in track.track_frame_count:
-                track.track_frame_count[track_id] = 0
-
             x1, y1, x2, y2, *rest = map(int, det)
             h, w, _ = frame.shape
             x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
 
             face = frame[y1:y2, x1:x2]
 
-            track.track_frame_count[track_id] += 1
-
-            name = track.name_to_track_id.get(track_id, "Detecting...")
+            name = self.name_to_track_id.get(cam_type, {}).get(track_id, "Detecting...")
 
             if name == "Detecting...":
                 face_emb = self.model.compute_embeddings(face)
                 name = self.model.recognize_face(face_emb)
-                
+
                 if name != "Detecting...":
-                    track.name_to_track_id[track_id] = name
+                    self.name_to_track_id[cam_type][track_id] = name
+            
+            if int(track_id) in track_status and name != "Detecting...":
+                self.entry_logger.log_person_entry(name, cam_type)
                     
-                    # Here check whether bbox intersected with line points
-                    # Convert bbox format to match the function
-                    bbox = [x2, y2, x1, y1]  # Format: x_max, y_max, x_min, y_min
+            if name not in self.name_to_color:
+                self.name_to_color[name] = (1, 31, 242) if name == "Detecting..." else self.visualize.generate_random_color()
 
-                    # Check if bbox intersects with line
-                    if self.bbox_intersects_line(bbox, line_points):
-                        self.entry_logger.log_person_entry(name, cam_type)
-           
-            if name not in track.name_to_color:
-                track.name_to_color[name] = (1, 31, 242) if name == "Detecting..." else self.visualize.generate_random_color()
-
-            color = track.name_to_color[name]
+            color = self.name_to_color[name]
             box_width = x2 - x1
             font_scale = max(0.5, box_width / 300)
             text_size = cv2.getTextSize(name, cv2.FONT_HERSHEY_DUPLEX, font_scale, 1)[0]
@@ -197,20 +170,18 @@ class VideoProcessor:
                 )
 
                 in_detections = self.model.in_counter.track_data
-                in_status = self.model.in_counter.track_status
-
+                in_counted_ids = self.model.in_counter.counted_ids
+            
                 ### OUT
                 self.model.out_counter.count(
                     out_frame
                 )
                 out_detections = self.model.out_counter.track_data
-                out_status = self.model.out_counter.track_status
+                out_counted_ids = self.model.out_counter.counted_ids
 
 
-                in_frame_dets = self.process_detections(in_detections, in_frame, "IN", 
-                                                        self.track_in, in_status, cfg.in_region_points)
-                out_frame_dets = self.process_detections(out_detections, out_frame, "OUT", 
-                                                         self.track_out, out_status, cfg.out_region_points)
+                in_frame_dets = self.process_detections(in_detections, in_frame, "IN", in_counted_ids)
+                out_frame_dets = self.process_detections(out_detections, out_frame, "OUT", out_counted_ids)
                 
                 # Visualize region areas
                 self.visualize.draw_region(in_frame_dets, cfg.in_region_points)
@@ -222,7 +193,7 @@ class VideoProcessor:
                                                               out_frame_dets, mode="horizontal")
 
                 # Resize combined frame to display
-                combined_frame = cv2.resize(combined_frame, (1900, 720))
+                combined_frame = cv2.resize(combined_frame, (1280, 360))
 
                 self.entry_logger.visualize_entries(combined_frame)
 

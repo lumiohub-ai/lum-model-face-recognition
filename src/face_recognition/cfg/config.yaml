@@ -1,6 +1,6 @@
 device: "cuda"
 
-face_crops_path: "data/images"
+face_crops_path: "data/database"
 output_video_path: "data/output.mp4"
 
 
@@ -17,8 +17,10 @@ in_region_points:
   # - [555, 106]
   
 out_region_points:
-    - [2, 699]
-    - [1277, 692]
+    - [234, 217]
+    - [14, 680]
+    # - [2, 699]
+    # - [1277, 692]
   # - [2, 658]
   # - [1275, 649]
   # - [1268, 711]
@@ -27,8 +29,8 @@ out_region_points:
 
 recent_entries_max_len: 5
 
-match_threshold: 0.01
-detection_threshold: 0.1
+match_threshold: 0.7
+detection_threshold: 0.7
 
 check_interval: 60
 

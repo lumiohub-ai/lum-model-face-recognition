@@ -23,10 +23,9 @@ RECORD_DATA = gql('''
         clientName
         clientIn
         clientOut
-        clientWorkingHours
         clientWorkingDate
-        clientId
         clientStatus
+        clientId
     }
 }
 ''')

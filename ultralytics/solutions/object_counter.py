@@ -81,25 +81,22 @@ class ObjectCounter(BaseSolution):
                     # Vertical region: Compare x-coordinates to determine direction
                     if current_centroid[0] > prev_position[0]:  # Moving right
                         # IN
-                        track_status = "IN"
                         self.in_count += 1
                         self.classwise_counts[self.names[cls]]["IN"] += 1
                     else:  # Moving left
                         # OUT
-                        track_status = "OUT"
                         self.out_count += 1
                         self.classwise_counts[self.names[cls]]["OUT"] += 1
 
                 # Horizontal region: Compare y-coordinates to determine direction
                 elif current_centroid[1] > prev_position[1]:  # Moving downward
-                    track_status = "IN"
                     self.in_count += 1
                     self.classwise_counts[self.names[cls]]["IN"] += 1
                 else:  # Moving upward
-                    track_status = "OUT"
                     self.out_count += 1
                     self.classwise_counts[self.names[cls]]["OUT"] += 1
-                self.counted_ids.append(track_id)
+
+                self.counted_ids.append(int(track_id))
 
         elif len(self.region) > 2:  # Polygonal region
             polygon = self.Polygon(self.region)
@@ -114,17 +111,13 @@ class ObjectCounter(BaseSolution):
                     or region_width >= region_height
                     and current_centroid[1] > prev_position[1]
                 ):  # Moving right
-                    track_status = "IN"
                     self.in_count += 1
                     self.classwise_counts[self.names[cls]]["IN"] += 1
                 else:  # Moving left
-                    track_status = "OUT"
                     self.out_count += 1
                     self.classwise_counts[self.names[cls]]["OUT"] += 1
                     
-                self.counted_ids.append(track_id)
-
-        self.track_status[track_id] = track_status
+                self.counted_ids.append(int(track_id))
 
     def store_classwise_counts(self, cls):
         """
@@ -190,6 +183,9 @@ class ObjectCounter(BaseSolution):
             self.region_initialized = True
         self.extract_tracks(im0)  # Extract tracks
 
+
+        # self.annotator = Annotator(im0, line_width=self.line_width)  # Initialize annotator
+
         # Iterate over bounding boxes, track ids and classes index
         for box, track_id, cls in zip(self.boxes, self.track_ids, self.clss):
             # Draw bounding box and counting region
@@ -204,5 +200,9 @@ class ObjectCounter(BaseSolution):
                 prev_position = self.track_history[track_id][-2]
 
             self.count_objects(current_centroid, track_id, prev_position, cls)  # Perform object counting
+        
+        # self.annotator.draw_region(
+        #     reg_pts=self.region, color=(104, 0, 123), thickness=self.line_width * 2
+        # )  # Draw region
 
         return im0  # return output image for more usage
