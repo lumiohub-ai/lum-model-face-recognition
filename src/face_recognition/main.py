@@ -101,9 +101,6 @@ class VideoProcessor:
     def process_detections(
         self, detections: Any, frame: Any, cam_type: str, track_status: List
     ) -> Any:
-        
-        if cam_type == "OUT" and len(track_status) > 0:
-            pass
 
         if detections.id is None:
             return frame
