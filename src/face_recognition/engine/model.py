@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 class FaceRecognitionModel:
     def __init__(self, device, face_crops_path, in_region_points, out_region_points, 
                 match_threshold=0.7, 
-                model_path='yolov8m-face.pt'):
+                model_path='models/yolov8n-face.engine'):
+        
         self.device = device
-
         self.in_region_points = in_region_points
         self.out_region_points = out_region_points
 
@@ -35,9 +35,11 @@ class FaceRecognitionModel:
             show_in=True, 
             show_out=True,
             line_width=2,
-            persist=True,
+            persist=False,
             verbose=False,
             tracker="bytetrack.yaml",
+            conf=0.1,
+            imgsz=960,
         )
         
         self.out_counter = solutions.ObjectCounter(
@@ -48,9 +50,11 @@ class FaceRecognitionModel:
             show_in=True, 
             show_out=True,
             line_width=2,
-            persist=True,
+            persist=False,
             verbose=False,
             tracker="bytetrack.yaml",
+            conf=0.1,
+            imgsz=960,
         )  
 
         self.resnet = (

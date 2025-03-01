@@ -1,9 +1,9 @@
 from datetime import datetime
 from collections import deque
 import cv2
-from gql import Client
-from gql.transport.requests import RequestsHTTPTransport
-from .mutation import LOGIN, RECORD_DATA
+# from gql import Client
+# from gql.transport.requests import RequestsHTTPTransport
+# from .mutation import LOGIN, RECORD_DATA
 
 class EntryLogger:
     def __init__(self, logging_path):
@@ -13,42 +13,42 @@ class EntryLogger:
         self.base_y = 30
         self.padding = 10
         self.person_status = {}
-        self.auth_client = self.authorize_user()
+    #     self.auth_client = self.authorize_user()
 
-    def authorize_user(self):
-        url = 'http://localhost:4000/graphql'
+    # def authorize_user(self):
+    #     url = 'http://localhost:4000/graphql'
 
-        client = Client(
-            transport=RequestsHTTPTransport(
-                url=url,
-                use_json=True,
-            ),
-            fetch_schema_from_transport=True,
-        )
+    #     client = Client(
+    #         transport=RequestsHTTPTransport(
+    #             url=url,
+    #             use_json=True,
+    #         ),
+    #         fetch_schema_from_transport=True,
+    #     )
 
-        login_variables = {
-            "input": {
-                "memberNick": "Admin", 
-                "memberPassword": "123456"
-            }
-        }
+    #     login_variables = {
+    #         "input": {
+    #             "memberNick": "Admin", 
+    #             "memberPassword": "123456"
+    #         }
+    #     }
 
-        loginResponse = client.execute(LOGIN, variable_values=login_variables)
+    #     loginResponse = client.execute(LOGIN, variable_values=login_variables)
 
-        access_token = loginResponse['login']['accessToken']
+    #     access_token = loginResponse['login']['accessToken']
 
-        auth_transport = RequestsHTTPTransport(
-            url=url,
-            headers={'Authorization': f'Bearer {access_token}'},
-            use_json=True,
-        )
+    #     auth_transport = RequestsHTTPTransport(
+    #         url=url,
+    #         headers={'Authorization': f'Bearer {access_token}'},
+    #         use_json=True,
+    #     )
 
-        auth_client = Client(
-            transport=auth_transport,
-            fetch_schema_from_transport=True,
-        )
+    #     auth_client = Client(
+    #         transport=auth_transport,
+    #         fetch_schema_from_transport=True,
+    #     )
 
-        return auth_client
+    #     return auth_client
 
     def log_person_entry(self, name, status):
         update = False
@@ -86,7 +86,7 @@ class EntryLogger:
                 "clientWorkingDate": str(today_date),
             }
 
-            self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
+            # self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:

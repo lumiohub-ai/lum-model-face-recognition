@@ -529,7 +529,15 @@ myenv/
 *.mp4
 *.avi
 *.gif
+*.mkv
+*.MP4
 *.tif
+
+*.engine
+*.onnx
+*.pt
+*.cache
+
 videos/
 runs/
 

@@ -61,9 +61,3 @@ class ShapeDrawer:
         
         cv2.destroyAllWindows()
         return self.shapes
-
-# Example usage
-image_path = "frame_in.jpg"  # Replace with your image path
-drawer = ShapeDrawer(image_path)
-shapes = drawer.run()
-print("Collected Shapes:", shapes)

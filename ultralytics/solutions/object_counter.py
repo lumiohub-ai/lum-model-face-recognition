@@ -70,11 +70,10 @@ class ObjectCounter(BaseSolution):
         if prev_position is None or track_id in self.counted_ids:
             return
         
-        track_status = None
+
         if len(self.region) == 2:  # Linear region (defined as a line segment)
             line = self.LineString(self.region)  # Check if the line intersects the trajectory of the object
             if line.intersects(self.LineString([prev_position, current_centroid])):
-                track_status = 'INTERSECTED'
 
                 # Determine orientation of the region (vertical or horizontal)
                 if abs(self.region[0][0] - self.region[1][0]) < abs(self.region[0][1] - self.region[1][1]):
@@ -160,7 +159,7 @@ class ObjectCounter(BaseSolution):
         if labels_dict:
             self.annotator.display_analytics(im0, labels_dict, (104, 31, 17), (255, 255, 255), 10)
 
-    def count(self, im0):
+    def count(self, im0, region=None):
         """
         Processes input data (frames or object tracks) and updates object counts.
 
@@ -178,11 +177,15 @@ class ObjectCounter(BaseSolution):
             >>> frame = cv2.imread("path/to/image.jpg")
             >>> processed_frame = counter.count(frame)
         """
-        if not self.region_initialized:
-            self.initialize_region()
+        if region is not None:
+            self.region = region
             self.region_initialized = True
+        else:
+            if not self.region_initialized:
+                self.initialize_region()
+                self.region_initialized = True
+                
         self.extract_tracks(im0)  # Extract tracks
-
 
         # self.annotator = Annotator(im0, line_width=self.line_width)  # Initialize annotator
 

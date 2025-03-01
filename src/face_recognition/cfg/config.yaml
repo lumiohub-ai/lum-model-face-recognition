@@ -1,17 +1,17 @@
-device: "cuda"
+device: "cuda:0"
 
-face_crops_path: "data/database"
+face_crops_path: "data/images"
 output_video_path: "data/output.mp4"
 
-
-out_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.201:554/Streaming/Channels/1"
-in_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.200:554/Streaming/Channels/1"
+# video_path: "/home/hb-nano/mirsaid/face-recognition/demo_test.mkv"
+out_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.200:554/Streaming/Channels/1"
+in_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.201:554/Streaming/Channels/1"
 
 in_region_points:
-    - [559, 28]
-    - [449, 703]
-  # - [553, 106]
-  # - [543, 349]
+    # - [559, 28]
+    # - [449, 703]
+  - [553, 106]
+  - [543, 349]
   # - [586, 353]
   # - [590, 106]
   # - [555, 106]
@@ -30,9 +30,7 @@ out_region_points:
 recent_entries_max_len: 5
 
 match_threshold: 0.7
-detection_threshold: 0.7
-
-check_interval: 60
+detection_threshold: 0.1
 
 imgsz: 640
 

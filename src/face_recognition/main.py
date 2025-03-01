@@ -5,7 +5,7 @@ from typing import Any, Tuple, List
 
 from cfg import Config
 from engine import FaceRecognitionModel, TrackManager
-from utils import EntryLogger, Visualization
+from utils import EntryLogger, Visualization, ShapeDrawer
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -50,6 +50,9 @@ class VideoStream:
     def read(self) -> Tuple[bool, Any]:
         with self.lock:
             return self.ret, self.frame
+        
+    def get_first_frame(self) -> Any:
+        return self.frame
 
     def stop(self) -> None:
         # Signal stop under lock.
@@ -97,6 +100,25 @@ class VideoProcessor:
         }
         self.name_to_color = {}
 
+        # Define ROI once using ShapeDrawer
+        in_frame = self.in_stream.get_first_frame()
+        out_frame = self.out_stream.get_first_frame()
+
+        # # ROI
+        self.in_bbox = [372, 30, 1241, 720]
+        self.out_bbox = [2, 114, 547, 717]
+
+        # # Mapped ROI
+        in_frame = in_frame[self.in_bbox[1]:self.in_bbox[3], self.in_bbox[0]:self.in_bbox[2]]
+        out_frame = out_frame[self.out_bbox[1]:self.out_bbox[3], self.out_bbox[0]:self.out_bbox[2]]
+
+        # self.in_line_points = ShapeDrawer(in_frame).run()[0]
+        # self.out_line_points = ShapeDrawer(out_frame).run()[0]
+
+        self.in_line_points = [(196, 13), (171, 640)]
+        self.out_line_points = [(321, 101), (61, 565)]
+
+        self.current_frame_persons = []
 
     def process_detections(
         self, detections: Any, frame: Any, cam_type: str, track_status: List
@@ -121,7 +143,8 @@ class VideoProcessor:
                 face_emb = self.model.compute_embeddings(face)
                 name = self.model.recognize_face(face_emb)
 
-                if name != "Detecting...":
+                if name != "Detecting..." and name not in self.current_frame_persons:
+                    self.current_frame_persons.append(name)
                     self.name_to_track_id[cam_type][track_id] = name
             
             if int(track_id) in track_status and name != "Detecting...":
@@ -139,6 +162,8 @@ class VideoProcessor:
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
             cv2.putText(frame, name, (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX, font_scale, (255, 255, 255), 2)
+            cv2.putText(frame, str(track_id), (text_x - 10, text_y - 10), cv2.FONT_HERSHEY_DUPLEX, font_scale, (255, 255, 255), 2)
+
 
         return frame
 
@@ -146,6 +171,9 @@ class VideoProcessor:
         self.in_stream.start()
         self.out_stream.start()
         frame_number = 0
+
+        in_bbox = [372, 30, 1241, 720]
+        out_bbox = [2, 114, 547, 717]
 
         try:
             while True:
@@ -160,10 +188,14 @@ class VideoProcessor:
 
                 if not in_ret or not out_ret:
                     break
-                
+
+                # # Map bbox to the frame
+                in_frame = in_frame[in_bbox[1]:in_bbox[3], in_bbox[0]:in_bbox[2]]
+                out_frame = out_frame[out_bbox[1]:out_bbox[3], out_bbox[0]:out_bbox[2]]
+
                 ### IN 
                 self.model.in_counter.count(
-                    in_frame
+                    in_frame, region=self.in_line_points
                 )
 
                 in_detections = self.model.in_counter.track_data
@@ -171,19 +203,21 @@ class VideoProcessor:
             
                 ### OUT
                 self.model.out_counter.count(
-                    out_frame
+                    out_frame, region=self.out_line_points
                 )
+
                 out_detections = self.model.out_counter.track_data
                 out_counted_ids = self.model.out_counter.counted_ids
 
 
                 in_frame_dets = self.process_detections(in_detections, in_frame, "IN", in_counted_ids)
                 out_frame_dets = self.process_detections(out_detections, out_frame, "OUT", out_counted_ids)
+
+                self.current_frame_persons = []
                 
                 # Visualize region areas
-                self.visualize.draw_region(in_frame_dets, cfg.in_region_points)
-                self.visualize.draw_region(out_frame_dets, cfg.out_region_points)
-
+                self.visualize.draw_region(in_frame_dets, self.in_line_points)
+                self.visualize.draw_region(out_frame_dets, self.out_line_points)
             
                 # Concatenate the two frames for a combined view.
                 combined_frame = self.visualize.concat_frames(in_frame_dets, 
