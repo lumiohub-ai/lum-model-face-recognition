@@ -5,78 +5,15 @@ import queue
 from typing import Any, Tuple, List
 
 from cfg import Config
-from engine import FaceRecognitionModel, TrackManager
-from utils import EntryLogger, Visualization, ShapeDrawer
+from engine import FaceRecognitionModel
+from utils import EntryLogger, Visualization, ShapeDrawer, VideoStream
+
+from datetime import datetime
 
 import warnings
 warnings.filterwarnings("ignore")
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
-def is_video_file(source: str) -> bool:
-    return isinstance(source, str) and source.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))
-
-class VideoStream:
-    def __init__(self, src: Any) -> None:
-        self.src = src
-        self.is_video = is_video_file(src)
-        self.cap = cv2.VideoCapture(src)
-        self.stopped = False
-        self.lock = threading.Lock()
-        self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame
-
-        ret, frame = self.cap.read()
-        if not ret:
-            raise ValueError(f"Unable to read from source: {src}")
-        self.ret = ret
-        self.frame = frame
-        self.thread = None  # Store reference to thread
-
-    def start(self) -> "VideoStream":
-        if not self.is_video:
-            self.thread = threading.Thread(target=self.update, daemon=True)
-            self.thread.start()
-        return self
-
-    def update(self) -> None:
-        while True:
-            with self.lock:
-                if self.stopped:
-                    break
-            ret, frame = self.cap.read()
-            if not ret:
-                with self.lock:
-                    self.stopped = True
-                break
-            if not self.frame_queue.full():
-                self.frame_queue.put((ret, frame))
-
-    def read(self) -> Tuple[bool, Any]:
-        if self.is_video:
-            ret, frame = self.cap.read()
-            return ret, frame
-        if not self.frame_queue.empty():
-            self.ret, self.frame = self.frame_queue.get()
-        return self.ret, self.frame
-        
-    def get_first_frame(self) -> Any:
-        return self.frame
-
-    def stop(self) -> None:
-        with self.lock:
-            if self.stopped:
-                return
-            self.stopped = True
-        if self.thread is not None:
-            self.thread.join()
-        self.cap.release()
-
-    def __enter__(self) -> "VideoStream":
-        return self.start()
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.stop()
-
 
 class VideoProcessor:
     def __init__(self, cfg: Config, model: FaceRecognitionModel, 
@@ -97,6 +34,11 @@ class VideoProcessor:
         self.name_to_color = {}
         self.current_frame_persons = []
         # Ensure ShapeDrawer completes before continuing
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.output_filename = f"combined_output_{timestamp}.mp4"
+        self.fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        self.video_writer = None
     
     @staticmethod
     def get_first_frame(source: str) -> Any:
@@ -149,7 +91,7 @@ class VideoProcessor:
             self.in_stream.start()
         if not self.out_stream.is_video:
             self.out_stream.start()
-        
+
         try:
             while True:
 
@@ -177,10 +119,17 @@ class VideoProcessor:
                 
                 combined_frame = self.visualize.concat_frames(in_frame, out_frame, mode="horizontal")
                 combined_frame = cv2.resize(combined_frame, (1920, 800))
+
+                if self.video_writer is None:
+                    self.video_writer = cv2.VideoWriter(self.output_filename, self.fourcc, 20.0, (1920, 800))
+                
+                self.video_writer.write(combined_frame)
                 
                 self.entry_logger.visualize_entries(combined_frame)
                 if self.visualize.display(combined_frame, "Face Recognition System"):
                     break
+        except:
+            pass
 
         finally:
             self.in_stream.stop()

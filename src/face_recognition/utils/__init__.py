@@ -2,5 +2,6 @@
 from .visualize import Visualization
 from .entry_logger import EntryLogger
 from .drawer import ShapeDrawer
+from .video_stream import VideoStream
 
-"__all__" == ["Visualization", "EntryLogger", "ShapeDrawer"]
+"__all__" == ["Visualization", "EntryLogger", "ShapeDrawer", "VideoStream"]
