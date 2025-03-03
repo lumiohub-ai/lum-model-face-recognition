@@ -181,6 +181,7 @@ class ObjectCounter(BaseSolution):
             self.region = region
             self.region_initialized = True
         else:
+            print("Region not provided. Defaulting to the entire frame.")
             if not self.region_initialized:
                 self.initialize_region()
                 self.region_initialized = True

@@ -6,9 +6,8 @@ import cv2
 # from .mutation import LOGIN, RECORD_DATA
 
 class EntryLogger:
-    def __init__(self, logging_path):
+    def __init__(self):
         self.entry_time = {}
-        self.logging_path = logging_path
         self.recent_entries = deque(maxlen=3)
         self.base_y = 30
         self.padding = 10

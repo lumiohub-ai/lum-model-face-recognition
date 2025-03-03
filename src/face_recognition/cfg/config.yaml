@@ -1,39 +1,39 @@
 device: "cuda:0"
 
-face_crops_path: "data/images"
+# Database parameters
+face_crops_path: "data/database"
 output_video_path: "data/output.mp4"
 
-# video_path: "/home/hb-nano/mirsaid/face-recognition/demo_test.mkv"
-out_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.200:554/Streaming/Channels/1"
-in_camera: "rtsp://admin:bHfthUmGVXxtuXTu@192.168.218.201:554/Streaming/Channels/1"
+# Video parameters
+video_path: ""
 
+# out_camera: ""
+# in_camera:  ""
+
+in_camera: ""
+out_camera: ""
+
+# Define line parameters
 in_region_points:
-    # - [559, 28]
-    # - [449, 703]
   - [553, 106]
   - [543, 349]
-  # - [586, 353]
-  # - [590, 106]
-  # - [555, 106]
   
 out_region_points:
     - [234, 217]
     - [14, 680]
-    # - [2, 699]
-    # - [1277, 692]
-  # - [2, 658]
-  # - [1275, 649]
-  # - [1268, 711]
-  # - [4, 696]
-  # - [3, 658]
 
-recent_entries_max_len: 5
+# Database parameters
+recent_entries_max_len: 3
 
-match_threshold: 0.7
+# Model parameters and configurations
+model_path: 'yolov8m-face.pt'
+match_threshold: 0.65
 detection_threshold: 0.1
+imgsz: 1280
+tracker: "bytetrack.yaml"
 
-imgsz: 640
-
-logging_path: 'data/entry_log.csv'
-
+# Video parameters
 skip_frames: 5
+
+# Entry parameters
+logging_path: 'data/entry_log.csv'

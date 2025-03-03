@@ -10,6 +10,7 @@ from ultralytics import solutions
 from facenet_pytorch import InceptionResnetV1
 import cv2
 import numpy as np
+from cfg import Config
 
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -19,42 +20,35 @@ logger = logging.getLogger(__name__)
 
 
 class FaceRecognitionModel:
-    def __init__(self, device, face_crops_path, in_region_points, out_region_points, 
-                match_threshold=0.7, 
-                model_path='models/yolov8n-face.engine'):
+    def __init__(self):
         
-        self.device = device
-        self.in_region_points = in_region_points
-        self.out_region_points = out_region_points
+        cfg = Config()
+
+        self.device = cfg.device
 
         self.in_counter = solutions.ObjectCounter(
             show=False,
-            region=in_region_points,
-            model=model_path,
+            model=cfg.model_path,
             classes=[0],
             show_in=True, 
             show_out=True,
-            line_width=2,
-            persist=False,
             verbose=False,
-            tracker="bytetrack.yaml",
-            conf=0.1,
-            imgsz=960,
+            tracker=cfg.tracker,
+            conf=cfg.detection_threshold,
+            imgsz=cfg.imgsz,
         )
         
         self.out_counter = solutions.ObjectCounter(
             show=False,
-            region=out_region_points,
-            model=model_path,
+            region=cfg.out_region_points,
+            model=cfg.model_path,
             classes=[0],
             show_in=True, 
             show_out=True,
-            line_width=2,
-            persist=False,
             verbose=False,
-            tracker="bytetrack.yaml",
-            conf=0.1,
-            imgsz=960,
+            tracker=cfg.tracker,
+            conf=cfg.detection_threshold,
+            imgsz=cfg.imgsz,
         )  
 
         self.resnet = (
@@ -63,8 +57,8 @@ class FaceRecognitionModel:
             .to(self.device)
         )
         
-        self.face_crops_path = face_crops_path
-        self.match_threshold = match_threshold
+        self.face_crops_path = cfg.face_crops_path
+        self.match_threshold = cfg.match_threshold
         self.database = self.load_embeddings()
 
     def compute_embeddings(self, face):
