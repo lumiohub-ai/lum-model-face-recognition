@@ -533,6 +533,9 @@ myenv/
 *.MP4
 *.tif
 
+*.txt
+*.json
+
 *.engine
 *.onnx
 *.pt
