@@ -27,7 +27,7 @@ recent_entries_max_len: 3
 
 # Model parameters and configurations
 model_path: 'yolov8m-face.pt'
-match_threshold: 0.65
+match_threshold: 0.7
 detection_threshold: 0.1
 imgsz: 1280
 tracker: "bytetrack.yaml"

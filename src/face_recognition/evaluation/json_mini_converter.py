@@ -32,6 +32,12 @@ def linear_interpolation(start_seq, end_seq, label, start_frame, end_frame,
     return interpolated_boxes
 
 def process_video_annotation(video_annotation, video_dir, labels_dict, label_studio_fps):
+    if isinstance(video_annotation, list):
+        for video in video_annotation:
+            video_annotation = video
+    else:
+        video_annotation = video_annotation
+
     video_path = video_dir
     video_name = os.path.basename(video_path)
     
@@ -42,20 +48,21 @@ def process_video_annotation(video_annotation, video_dir, labels_dict, label_stu
 
         image_height = vidcap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         image_width = vidcap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        frame_rate_ratio = 1
 
-        frame_rate_ratio = 1
     else:
-        frame_rate_ratio = 1
-    
-    total_frames = max(int(seq['frame'] * frame_rate_ratio) for subject in video_annotation['box'] for seq in subject['sequence'])
+        print("Error: Video file not found.")
+        return
     
     # Gather labels from this video
     for subject in video_annotation['box']:
+        
         for label in subject['labels']:
             if label not in labels_dict:
                 labels_dict[label] = len(labels_dict)
-    
-    boxes_dict = {frame: [] for frame in range(1, total_frames + 1)}
+
+    total_frames = video_annotation['box'][0]['framesCount']
+    boxes_dict = {frame: [] for frame in range(1, int(total_frames) + 1)}
     
     for idx, subject in enumerate(video_annotation['box']):
         label = idx
@@ -133,6 +140,13 @@ def show_video_annotations(output_video_path, output_txt_path):
         print("Error: Could not open video.")
         exit()
 
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    image_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    image_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter(f'{output_video_path}_visualized.avi', fourcc, fps, (image_width, image_height))
+
     frame_count = 0  # Track frame index
 
     while True:
@@ -161,6 +175,7 @@ def show_video_annotations(output_video_path, output_txt_path):
 
         # Show frame
         cv2.imshow("Tracking Verification", frame)
+        out.write(frame)
 
         # Control playback speed and allow exit
         key = cv2.waitKey(30) & 0xFF  # Adjust the speed by changing 30 (milliseconds delay)
@@ -170,6 +185,7 @@ def show_video_annotations(output_video_path, output_txt_path):
     # Release resources
     cap.release()
     cv2.destroyAllWindows()
+    out.release()
 
 def main(json_path, video_dir, output_txt_path, label_studio_fps, verify=True):
     print("Parsing annotations from JSON")
@@ -178,11 +194,10 @@ def main(json_path, video_dir, output_txt_path, label_studio_fps, verify=True):
     
     labels_dict = {}
     data = []
-    for video_annotation in video_annotations:
-        boxes_dict = process_video_annotation(
-            video_annotation, video_dir, labels_dict, label_studio_fps
-        )
-        data.append(boxes_dict)
+    boxes_dict = process_video_annotation(
+            video_annotations, video_dir, labels_dict, label_studio_fps
+    )
+    data.append(boxes_dict)
 
     print(f"Writing annotations to {output_txt_path}")
 
@@ -227,7 +242,7 @@ if __name__ == "__main__":
     parser.add_argument("-j", "--json_path", required=True, help="Path to JSON annotations")
     parser.add_argument("-v", "--video_dir", help="Path to directory containing video files")
     parser.add_argument("--label_studio_fps", type=float, default=25, help="Label Studio FPS")
-    parser.add_argument("--output_txt_path", default='output_mot.txt', help="Path to output txt file")
+    parser.add_argument("--output_txt_path", default='output_mot_10.txt', help="Path to output txt file")
     parser.add_argument("--verify", action='store_true', default=True, help="Verify the output video")
     args = parser.parse_args()
 
