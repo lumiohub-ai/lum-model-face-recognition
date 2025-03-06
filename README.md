@@ -4,6 +4,21 @@
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/bybatkhuu/model.python-template/2.build-publish.yml?logo=GitHub)](https://github.com/bybatkhuu/model.python-template/actions/workflows/2.build-publish.yml)
 [![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/bybatkhuu/model.python-template?logo=GitHub&color=blue)](https://github.com/bybatkhuu/model.python-template/releases)
 
+## 📋 Table of Contents
+
+- [✨ Features](#features)
+- [🛠 Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Download Repository](#download-or-clone-the-repository)
+  - [Package Installation](#install-the-package)
+- [⚙️ Configuration](#️configuration)
+- [🚸 Usage/Examples](#usageexamples)
+- [📊 Evaluation](#evaluation)
+- [🖥️ NVIDIA Jetson Nano setup](#jetson)
+- [📚 Documentation](#-documentation)
+- [📑 Research References](#--research-references)
+
+
 ## ✨ Features
 
 - Face Detection/Tracking
@@ -128,9 +143,14 @@ python src/face_recognition/main.py
 ```
 
 ---
-## Evaluation
+## 📊 Evaluation
 
-### This process is currently in progress.
+This process is currently in progress.
+
+---
+## 🖥️ NVIDIA Jetson Nano setup
+
+This process is currently in progress.
 
 ---
 
@@ -138,7 +158,6 @@ python src/face_recognition/main.py
 
 - [Description](https://docs.google.com/document/d/1DaPsSgqk6UXJVogyn9UbPGN5JYFbu2do8p9r11yKAKA)
 - [Methodology and Evaluation](https://docs.google.com/document/d/1SsCB4fBA2nK6PQISYrcaki0moe4ID7Mwm4J2cF_g9i0)
-
 
 --- 
 
