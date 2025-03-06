@@ -119,7 +119,7 @@ skip_frames: 5  # Number of frames to skip between detections (reduces processin
 
 ## 🚸 Usage/Examples
 
-### For running a face recognition application, use the following commands:
+##### For running a face recognition application, use the following commands:
 
 [**`src/face_recognition/main.py`**](https://github.com/humblebeeintel/face-recognition/blob/main/src/face_recognition/main.py):
 
