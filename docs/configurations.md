@@ -1,0 +1,48 @@
+## ⚙️ Configuration
+
+Before running setup configurations first!!!
+
+[**`src/face_recognition/cfg/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/src/face_recognition/cfg/config.yaml):
+
+```yaml
+# Device settings
+device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+
+# Database settings
+face_crops_path: "data/database"  # Path to the folder containing face images for recognition
+output_video_path: "data/output.mp4"  # Path to save the output video with annotations
+
+# Camera input settings (RTSP links or video file paths)
+in_camera: ""  # RTSP link or video file path for the entry camera
+out_camera: ""  # RTSP link or video file path for the exit camera
+
+# Define entry and exit regions (coordinates of the regions of interest)
+in_region_points:  
+  - [553, 106]  # Point 1 (X, Y)
+  - [543, 349]  # Point 2 (X, Y)
+
+out_region_points:  
+  - [234, 217]  # Point 1 (X, Y)
+  - [14, 680]   # Point 2 (X, Y)
+
+# Database settings for recent entries
+recent_entries_max_len: 3  # Maximum number of recent face entries to store for tracking
+
+# Model configuration
+model_path: "models/yolov8m-face.pt"  # Path to the face detection model
+match_threshold: 0.7  # Threshold for face similarity matching
+detection_threshold: 0.25  # Confidence threshold for face detection
+imgsz: 960  # Image size for inference (higher values improve accuracy but increase processing time)
+tracker: "bytetrack.yaml"  # Path to the tracker configuration file
+
+# Video processing settings
+skip_frames: 5  # Number of frames to skip between detections (reduces processing load)                       
+```
+
+## 🚸 Usage/Examples
+
+#### For running a face recognition application, use the following command:
+
+```
+python src/face_recognition/main.py
+```

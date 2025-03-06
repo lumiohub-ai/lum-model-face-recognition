@@ -11,10 +11,10 @@
   - [Prerequisites](#prerequisites)
   - [Download Repository](#download-or-clone-the-repository)
   - [Package Installation](#install-the-package)
-- [⚙️ Configuration](#️configuration)
+- [⚙️ Configuration](docs/configurations.md)
 - [🚸 Usage/Examples](#usageexamples)
-- [📊 Evaluation](#evaluation)
-- [🖥️ NVIDIA Jetson Nano setup](#jetson)
+- [📊 Evaluation](docs/evaluation.md)
+- [🖥️ NVIDIA Jetson Nano setup](docs/jetson_nano.md)
 - [📚 Documentation](#-documentation)
 - [📑 Research References](#--research-references)
 
