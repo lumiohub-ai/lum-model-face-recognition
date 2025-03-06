@@ -1,48 +1,28 @@
 import pandas as pd
+import json
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 
+video_name = 'video11'
+alg_name = 'alg1'
 
-gt_path = 'output_mot_11.txt'
-pred_path = 'output_11_processed_fps_recognition.txt'
+id_to_name_path = f'annotations/id_to_name_{video_name}.json'
+gt_path = f'TrackEval/data/gt/mot_challenge/hbface-train/{video_name}/gt/gt.txt'
+pred_path = f'results/{video_name}_recognition_{alg_name}.txt'
+
+with open(id_to_name_path, "r") as file:
+    id_to_name = json.load(file)
+
+id_to_name = {int(k): v for k, v in id_to_name.items()}
 
 # Load and prepare data 
 gt_df = pd.read_csv(gt_path, names=['frame', 'track_id', 'x', 'y', 'w', 'h', 'confidence', 'class', 'visibility']) 
 pred_df = pd.read_csv(pred_path, names=['frame', 'x', 'y', 'w', 'h', 'name'])
 
-# Map track IDs to names in ground truth 
-# 10 
-# id_to_name = { 
-#     1: 'Bahodir', 
-#     2: 'Batkhuu', 
-#     3: 'Mirsaid', 
-#     4: 'Sarvar', 
-#     5: 'Azamat', 
-#     6: 'Maruf', 
-#     7: 'Oybek', 
-#     8: 'MuhammadAmin' 
-# }
-
-# 11
-id_to_name = {
-    1: 'Azamat',
-    2: 'Oybek',
-    3: 'Maruf',
-    4: 'Bahodir',
-    5: 'Sarvar',
-    6: 'MuhammadAmin',
-    7: 'Batkhuu',
-    8: 'Mirsaid',
-}
-
-
 # Clean ground truth data 
 gt_df = gt_df[['frame', 'track_id', 'x', 'y', 'w', 'h']] 
 gt_df['name'] = gt_df['track_id'].map(id_to_name) 
 gt_df = gt_df[['frame', 'x', 'y', 'w', 'h', 'name']]
-
-# Save the cleaned ground truth data
-gt_df.to_csv('gt_cleaned.csv', index=False)
 
 # Lists to store ground truth and predicted names 
 true_names = [] # Ground truth 

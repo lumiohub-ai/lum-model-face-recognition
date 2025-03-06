@@ -9,8 +9,22 @@ from ultralytics import YOLO
 from engine import FaceRecognitionModel
 
 
-video_path = 'output_11_processed_fps.mp4'
+
+video_path = 'videos/output_10_processed_fps.mp4'
 video_name = os.path.basename(video_path).split('.')[0]
+
+video_name = 'video10'
+alg_name = 'alg2'
+
+output_recognition_path = f'results/{video_name}_recognition_{alg_name}.txt'
+output_tracking_path = f'TrackEval/data/trackers/mot_challenge/hbface-train/{alg_name}/data/{video_name}.txt'
+os.makedirs(os.path.dirname(output_tracking_path), exist_ok=True)
+
+if os.path.exists(output_recognition_path):
+    os.remove(output_recognition_path)
+if os.path.exists(output_tracking_path):
+    os.remove(output_tracking_path)
+
 
 cap = cv2.VideoCapture(video_path)
 
@@ -19,11 +33,11 @@ if not cap.isOpened():
     sys.exit()
 
 cfg = {
-    'model_arch': 'yolov8n-face.pt',
+    'model_arch': 'models/yolov8n-face.pt',
     'conf' : 0.25,
     'imgsz': 960,
     'persist': True,
-    'tracker': 'bytetrack.yaml',
+    'tracker': 'botsort.yaml',
     'match_threshold': 0.7,
 }
 
@@ -79,12 +93,12 @@ while True:
         if name != "Detecting...":
             recognition_txt = f"{frame_num},{x1},{y1},{w},{h},{name}\n"
 
-            with open(f'{video_name}_recognition.txt', 'a') as f:
+            with open(output_recognition_path, 'a') as f:
                 f.write(recognition_txt)
 
 
         track_txt = f"{frame_num},{track_id},{x1},{y1},{w},{h},{conf},-1,-1,-1,-1\n"
-        with open(f'{video_name}_mot.txt', 'a') as f:
+        with open(output_tracking_path, 'a') as f:
             f.write(track_txt)
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)

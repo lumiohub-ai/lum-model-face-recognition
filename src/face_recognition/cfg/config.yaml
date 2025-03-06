@@ -2,7 +2,7 @@
 device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-face_crops_path: "data/database"  # Path to the folder containing face images for recognition
+face_crops_path: "data/hb-kor"  # Path to the folder containing face images for recognition
 output_video_path: "data/output.mp4"  # Path to save the output video with annotations
 
 # Camera input settings (RTSP links or video file paths)
