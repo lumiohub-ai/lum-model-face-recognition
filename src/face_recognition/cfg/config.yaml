@@ -1,39 +1,32 @@
-device: "cuda:0"
+# Device settings
+device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
-# Database parameters
-face_crops_path: "data/database"
-output_video_path: "data/output.mp4"
+# Database settings
+face_crops_path: "data/database"  # Path to the folder containing face images for recognition
+output_video_path: "data/output.mp4"  # Path to save the output video with annotations
 
-# Video parameters
-video_path: ""
+# Camera input settings (RTSP links or video file paths)
+in_camera: ""  # RTSP link or video file path for the entry camera
+out_camera: ""  # RTSP link or video file path for the exit camera
 
-# out_camera: ""
-# in_camera:  ""
+# Define entry and exit regions (coordinates of the regions of interest)
+in_region_points:  
+  - [553, 106]  # Point 1 (X, Y)
+  - [543, 349]  # Point 2 (X, Y)
 
-in_camera: ""
-out_camera: ""
+out_region_points:  
+  - [234, 217]  # Point 1 (X, Y)
+  - [14, 680]   # Point 2 (X, Y)
 
-# Define line parameters
-in_region_points:
-  - [553, 106]
-  - [543, 349]
-  
-out_region_points:
-    - [234, 217]
-    - [14, 680]
+# Database settings for recent entries
+recent_entries_max_len: 3  # Maximum number of recent face entries to store for tracking
 
-# Database parameters
-recent_entries_max_len: 3
+# Model configuration
+model_path: "models/yolov8m-face.pt"  # Path to the face detection model
+match_threshold: 0.7  # Threshold for face similarity matching
+detection_threshold: 0.1  # Confidence threshold for face detection
+imgsz: 1280  # Image size for inference (higher values improve accuracy but increase processing time)
+tracker: "bytetrack.yaml"  # Path to the tracker configuration file
 
-# Model parameters and configurations
-model_path: 'yolov8m-face.pt'
-match_threshold: 0.7
-detection_threshold: 0.1
-imgsz: 1280
-tracker: "bytetrack.yaml"
-
-# Video parameters
-skip_frames: 5
-
-# Entry parameters
-logging_path: 'data/entry_log.csv'
+# Video processing settings
+skip_frames: 5  # Number of frames to skip between detections (reduces processing load)
