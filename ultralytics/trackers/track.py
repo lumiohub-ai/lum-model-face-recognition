@@ -80,13 +80,17 @@ def on_predict_postprocess_end(predictor: object, persist: bool = False) -> None
         det = (predictor.results[i].obb if is_obb else predictor.results[i].boxes).cpu().numpy()
         if len(det) == 0:
             continue
-        tracks = tracker.update(det, im0s[i])
+        tracks, removed_tracks_ids = tracker.update(det, im0s[i])
+
         if len(tracks) == 0:
             continue
+
         idx = tracks[:, -1].astype(int)
         predictor.results[i] = predictor.results[i][idx]
 
-        update_args = {"obb" if is_obb else "boxes": torch.as_tensor(tracks[:, :-1])}
+        if len(removed_tracks_ids) >= 0:
+            update_args = {"obb" if is_obb else "boxes": torch.as_tensor(tracks[:, :-1]), 
+                        "removed_tracks": torch.as_tensor(removed_tracks_ids)}
         predictor.results[i].update(**update_args)
 
 

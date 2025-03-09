@@ -298,6 +298,9 @@ class BYTETracker:
         lost_stracks = []
         removed_stracks = []
 
+        # added by mirsaid
+        list_of_ended_track_ids = []
+
         scores = results.conf
         bboxes = results.xywhr if hasattr(results, "xywhr") else results.xywh
         # Add index
@@ -389,6 +392,7 @@ class BYTETracker:
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
                 track.mark_removed()
+                list_of_ended_track_ids.append(track.track_id)
                 removed_stracks.append(track)
 
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
@@ -402,7 +406,8 @@ class BYTETracker:
         if len(self.removed_stracks) > 1000:
             self.removed_stracks = self.removed_stracks[-999:]  # clip remove stracks to 1000 maximum
 
-        return np.asarray([x.result for x in self.tracked_stracks if x.is_activated], dtype=np.float32)
+        return np.asarray([x.result for x in self.tracked_stracks if x.is_activated], dtype=np.float32), list_of_ended_track_ids 
+        # x.result => track.result => coords.tolist() + [self.track_id, self.score, self.cls, self.idx]
 
     def get_kalmanfilter(self):
         """Returns a Kalman filter object for tracking bounding boxes using KalmanFilterXYAH."""

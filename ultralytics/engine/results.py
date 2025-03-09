@@ -268,6 +268,7 @@ class Results(SimpleClass):
         self.names = names
         self.path = path
         self.save_dir = None
+        self.removed_tracks = None
         self._keys = "boxes", "masks", "probs", "keypoints", "obb"
 
     def __getitem__(self, idx):
@@ -305,7 +306,7 @@ class Results(SimpleClass):
             if v is not None:
                 return len(v)
 
-    def update(self, boxes=None, masks=None, probs=None, obb=None, keypoints=None):
+    def update(self, boxes=None, masks=None, probs=None, obb=None, removed_tracks=None, keypoints=None):
         """
         Updates the Results object with new detection data.
 
@@ -327,6 +328,8 @@ class Results(SimpleClass):
         """
         if boxes is not None:
             self.boxes = Boxes(ops.clip_boxes(boxes, self.orig_shape), self.orig_shape)
+        if removed_tracks is not None:
+            self.removed_tracks = removed_tracks
         if masks is not None:
             self.masks = Masks(masks, self.orig_shape)
         if probs is not None:

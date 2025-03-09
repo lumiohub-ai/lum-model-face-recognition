@@ -1,5 +1,5 @@
 # Device settings
-device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+device: "cuda:1"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
 face_crops_path: "data/hb-kor"  # Path to the folder containing face images for recognition

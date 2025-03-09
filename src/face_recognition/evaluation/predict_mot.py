@@ -1,114 +1,165 @@
 import cv2
 import sys
 import os
+import argparse
 
 sys.path.append(os.curdir)
 sys.path.append(os.path.join(os.curdir, 'src/face_recognition'))
 
 from ultralytics import YOLO
 from engine import FaceRecognitionModel
+from facenet_pytorch import MTCNN
+
+def save_crops(crops, track_id):
+    os.makedirs(f'crops/{track_id}', exist_ok=True)
+    for frame_num, crop in crops.items():
+        cv2.imwrite(f'crops/{track_id}/{frame_num}.jpg', crop)
 
 
+def set_paths(video_name, alg_name):
+    output_recognition_path = f'results/{video_name}_recognition_{alg_name}.txt'
+    output_tracking_path = f'TrackEval/data/trackers/mot_challenge/hbface-train/{alg_name}/data/{video_name}.txt'
+    os.makedirs(os.path.dirname(output_tracking_path), exist_ok=True)
 
-video_path = 'videos/output_10_processed_fps.mp4'
-video_name = os.path.basename(video_path).split('.')[0]
-
-video_name = 'video10'
-alg_name = 'alg2'
-
-output_recognition_path = f'results/{video_name}_recognition_{alg_name}.txt'
-output_tracking_path = f'TrackEval/data/trackers/mot_challenge/hbface-train/{alg_name}/data/{video_name}.txt'
-os.makedirs(os.path.dirname(output_tracking_path), exist_ok=True)
-
-if os.path.exists(output_recognition_path):
-    os.remove(output_recognition_path)
-if os.path.exists(output_tracking_path):
-    os.remove(output_tracking_path)
+    if os.path.exists(output_recognition_path):
+        os.remove(output_recognition_path)
+    if os.path.exists(output_tracking_path):
+        os.remove(output_tracking_path)
+    return output_recognition_path, output_tracking_path
 
 
-cap = cv2.VideoCapture(video_path)
+def predict(video_path, video_name, alg_name,
+            model_arch, confidence_threshold, imgsz, tracker, match_threshold,
+            show=True
+            ):
+    output_recognition_path, output_tracking_path= set_paths(video_name, alg_name)
+    
+    cap = cv2.VideoCapture(video_path)
 
-if not cap.isOpened():
-    print("Error: Could not open video.")
-    sys.exit()
+    if not cap.isOpened():
+        print("Error: Could not open video.")
+        sys.exit()
 
-cfg = {
-    'model_arch': 'models/yolov8n-face.pt',
-    'conf' : 0.25,
-    'imgsz': 960,
-    'persist': True,
-    'tracker': 'botsort.yaml',
-    'match_threshold': 0.7,
-}
+    cfg = {
+        'model_arch': model_arch,
+        'conf' : confidence_threshold,
+        'imgsz': imgsz,
+        'persist': True,
+        'tracker': tracker,
+        'match_threshold': match_threshold,
+    }
 
-detector = YOLO(cfg['model_arch'])
-model = FaceRecognitionModel()
+    detector = YOLO(cfg['model_arch'])
 
-frame_num = 0
-name_to_track_id = {}
+    model = FaceRecognitionModel(match_threshold=cfg['match_threshold'])
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+    frame_num = 0
+    track_crops_frame = {}
+    passed_tracks = []
+    name_to_track_id = {}
+    all_tracks = []
 
-    frame_num += 1
+    last_frame = cap.get(cv2.CAP_PROP_FRAME_COUNT) - 1
 
-    # Do something with the frame here
-    detections = detector.track(
-            frame,
-            verbose=False,
-            conf=cfg['conf'],
-            imgsz=cfg['imgsz'],
-            persist=cfg['persist'],
-            tracker=cfg['tracker'],
-    )
-
-    if detections[0].boxes.id is None:
-        cv2.imshow('frame', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+    while True:
+        ret, frame = cap.read()
+        if not ret:
             break
-        continue
+        # save one frame
+        frame_num += 1
 
-    boxes = detections[0].boxes.data.cpu().tolist()
-    track_ids = detections[0].boxes.id.cpu().tolist()
+        # Do something with the frame here
+        detections = detector.track(
+                frame,
+                verbose=False,
+                conf=cfg['conf'],
+                imgsz=cfg['imgsz'],
+                persist=cfg['persist'],
+                tracker=cfg['tracker'],
+        )
 
-    for det, track_id in zip(boxes, track_ids):
-        conf = det[5]
-        track_id = int(track_id)
-        x1, y1, x2, y2, _, _, _ = map(int, det)
-        w = x2 - x1
-        h = y2 - y1
+        if detections[0].boxes.id is None:
+            if show:
+                cv2.imshow('frame', frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            continue
 
-        face = frame[y1:y2, x1:x2]
-        name = name_to_track_id.get(track_id, "Detecting...")
+        boxes = detections[0].boxes.data.cpu().tolist()
+        track_ids = detections[0].boxes.id.cpu().tolist()
         
-        if name == "Detecting...":
-            face_emb = model.compute_embeddings(face)
-            name = model.recognize_face(face_emb)
+        for det, track_id in zip(boxes, track_ids):
+            track_id = int(track_id)
+            
+            all_tracks.append(track_id)
 
-            if name != "Detecting...":
-                name_to_track_id[track_id] = name
+            x1, y1, x2, y2, _, _, _ = map(int, det)
 
-        if name != "Detecting...":
-            recognition_txt = f"{frame_num},{x1},{y1},{w},{h},{name}\n"
+            face = frame[y1:y2, x1:x2]
+            
+            if track_id not in track_crops_frame.keys():
+                track_crops_frame[track_id] = {}
 
-            with open(output_recognition_path, 'a') as f:
-                f.write(recognition_txt)
+            track_crops_frame[track_id][frame_num] = face
+
+        removed_tracks = detections[0].removed_tracks.tolist()
+        removed_tracks = [id for id in removed_tracks if id not in passed_tracks]
+
+        for id in removed_tracks:
+            if id == 31:
+                pass
+
+            passed_tracks.append(id)
+            face_embeddings = model.compute_embeddings(track_crops_frame[id].values())
+            # After recognition, delete crops to save memory
+            del track_crops_frame[id]
+
+            name = model.recognize_face(face_embeddings)
+            name_to_track_id[id] = name
+            
+            text_show = f'{id} recognized as {name}'
+            
+            if name != "Unknown":
+                print(f'{id} recognized as {name}')
+                cv2.putText(frame, text_show, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        if frame_num == last_frame:
+            for id in all_tracks:
+                if id not in passed_tracks:
+                    face_embeddings = model.compute_embeddings(track_crops_frame[id].values())
+
+                    del track_crops_frame[id]
+
+                    name = model.recognize_face(face_embeddings)
+                    name_to_track_id[id] = name
+                    text_show = f'{id} recognized as {name}'
+                    if name != "Unknown":
+                        cv2.putText(frame, text_show, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+        if show:    
+            cv2.imshow('frame', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    cap.release()
+    cv2.destroyAllWindows()
 
 
-        track_txt = f"{frame_num},{track_id},{x1},{y1},{w},{h},{conf},-1,-1,-1,-1\n"
-        with open(output_tracking_path, 'a') as f:
-            f.write(track_txt)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-p', type=str, required=True)
+    parser.add_argument('-v', type=str, required=True)
+    parser.add_argument('-a', type=str, required=True)
+    parser.add_argument('-m', type=str, required=True, description='Model architecture')
+    parser.add_argument('-c', type=float, required=True, description='Confidence threshold')
+    parser.add_argument('-i', type=int, required=True, description='Image size')
+    parser.add_argument('-t', type=str, required=True, description='Tracker')
+    parser.add_argument('-mt', type=int, required=True, description='Match threshold')
+    parser.add_argument('-s', type=bool, default=True, description='Show video')
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(frame, str(track_id), (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    args = parser.parse_args()
 
-    cv2.imshow('frame', frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
-
+    predict(args.video_path, args.video_name, args.alg_name,
+            args.model_arch, args.confidence_threshold, args.imgsz, 
+            args.tracker, args.mt, show=True
+            )
