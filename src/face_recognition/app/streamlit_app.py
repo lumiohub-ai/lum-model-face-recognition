@@ -3,7 +3,7 @@ import cv2
 import os
 import tempfile
 from cfg import Config
-from engine import FaceRecognitionModel, TrackManager
+from models import FaceRecognitionModel, TrackManager
 from utils import Visualization, EntryLogger
 from ultralytics import YOLO
 import os

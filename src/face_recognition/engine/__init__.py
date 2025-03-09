@@ -1,5 +1,5 @@
 # This file makes the directory a package.
-from .model import FaceRecognitionModel
-from .tracking import TrackManager
+from .recognition import FaceRecognition
+from .models import FaceEngine
 
-"__all__" == ["FaceRecognitionModel", "TrackManager"]
+"__all__" == ["FaceRecognition", "FaceEngine"]

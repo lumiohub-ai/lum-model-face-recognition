@@ -3,7 +3,7 @@ import threading
 import queue
 from typing import Any, Tuple
 
-class VideoStream:
+class StreamHandler:
     def __init__(self, src: Any) -> None:
         self.src = src
         self.is_video = self.is_video_file(src)
@@ -17,6 +17,7 @@ class VideoStream:
             raise ValueError(f"Unable to read from source: {src}")
         self.ret = ret
         self.frame = frame
+        self.last_frame = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) - 1)
         self.thread = None  # Store reference to thread
 
     @staticmethod
@@ -24,7 +25,7 @@ class VideoStream:
         return isinstance(source, str) and source.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))
 
 
-    def start(self) -> "VideoStream":
+    def start(self) -> "StreamHandler":
         if not self.is_video:
             self.thread = threading.Thread(target=self.update, daemon=True)
             self.thread.start()
@@ -63,7 +64,7 @@ class VideoStream:
             self.thread.join()
         self.cap.release()
 
-    def __enter__(self) -> "VideoStream":
+    def __enter__(self) -> "StreamHandler":
         return self.start()
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:

@@ -4,6 +4,37 @@ import cv2
 # from gql import Client
 # from gql.transport.requests import RequestsHTTPTransport
 # from .mutation import LOGIN, RECORD_DATA
+from gql import gql
+
+LOGIN = gql('''
+    mutation Login($input: LoginInput!) {
+        login(input: $input) {
+            _id
+            memberType
+            memberStatus
+            memberAuthType
+            memberPhone
+            memberNick
+            createdAt
+            updatedAt
+            accessToken
+        }
+    }
+''')
+
+RECORD_DATA = gql('''
+    mutation CreateClientDate($input: DateInput!) {
+    createClientDate(input: $input) {
+        _id
+        clientName
+        clientIn
+        clientOut
+        clientWorkingDate
+        clientStatus
+        clientId
+    }
+}
+''')
 
 class EntryLogger:
     def __init__(self):

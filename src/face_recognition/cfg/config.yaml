@@ -2,21 +2,13 @@
 device: "cuda:1"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-face_crops_path: "data/hb-kor"  # Path to the folder containing face images for recognition
+db_path: "data/hb-kor"  # Path to the folder containing face images for recognition
 output_video_path: "data/output.mp4"  # Path to save the output video with annotations
 
+video_path: "videos/output_10.mkv"
 # Camera input settings (RTSP links or video file paths)
 in_camera: ""  # RTSP link or video file path for the entry camera
 out_camera: ""  # RTSP link or video file path for the exit camera
-
-# Define entry and exit regions (coordinates of the regions of interest)
-in_region_points:  
-  - [553, 106]  # Point 1 (X, Y)
-  - [543, 349]  # Point 2 (X, Y)
-
-out_region_points:  
-  - [234, 217]  # Point 1 (X, Y)
-  - [14, 680]   # Point 2 (X, Y)
 
 # Database settings for recent entries
 recent_entries_max_len: 3  # Maximum number of recent face entries to store for tracking

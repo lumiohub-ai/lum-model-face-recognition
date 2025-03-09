@@ -1,28 +1,19 @@
 import os
-import logging
-
-import sys
-import os
-from PIL import Image
-sys.path.append(os.curdir)
 
 import torch
-from facenet_pytorch import InceptionResnetV1
 import cv2
 import numpy as np
+from PIL import Image
 
+from facenet_pytorch import InceptionResnetV1
 from sklearn.metrics.pairwise import cosine_similarity
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 
 class FaceRecognition:
     # TODO - Set up data driven thresholds
     # TODO - Calculate AUC for reid of face recogniton model
 
-    def __init__(self, db_path, device, match_threshold=0.7):
+    def __init__(self, db_path: str, match_threshold: float = 0.7, device: str = "cuda"):
+        super().__init__()
         self.device = device
         self.db_path = db_path
         self.resnet = (
@@ -36,9 +27,9 @@ class FaceRecognition:
 
     def compute_embeddings(self, faces):
         resized_faces = [cv2.resize(face, (160, 160)) for face in faces]
-        resized_faces = [np.array(Image.fromarray(face).convert("RGB")) for face in resized_faces]
-
-        face_tensors = torch.tensor(np.array(resized_faces)).permute(0, 3, 1, 2).float().to(self.device) / 255.0
+        rgb_faces = [cv2.cvtColor(face, cv2.COLOR_BGR2RGB) for face in resized_faces]
+        
+        face_tensors = torch.tensor(np.array(rgb_faces)).permute(0, 3, 1, 2).float().to(self.device) / 255.0
         
         with torch.no_grad():
             embeddings = self.resnet(face_tensors).cpu().numpy()
@@ -54,9 +45,10 @@ class FaceRecognition:
                 if file.lower().endswith((".png", ".jpg", ".jpeg")):
                     face_path = os.path.join(self.db_path, file)
                     face_image = cv2.imread(face_path)
+
                     if face_image is None:
-                        logger.warning(f"Could not read image file: {file}")
                         continue
+
                     face_images.append(face_image)
                     
                     name = file.split(".")[0]
@@ -68,7 +60,7 @@ class FaceRecognition:
                 name_to_embeddings[name] = face_emb
 
         except Exception as e:
-            logger.error(f"Error loading embeddings: {str(e)}")
+            pass
 
         db_names = list(name_to_embeddings.keys())
         db_embs = np.array(list(name_to_embeddings.values()))
