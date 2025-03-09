@@ -2,7 +2,7 @@ import os
 import argparse
 import logging
 import csv
-from evaluation.predict_mot import predict
+from evaluation.predict_mot import FaceRecognitionSystem
 from evaluation.reca import eval_recognition
 from evaluation.eval_mot import eval_mot
 
@@ -12,31 +12,26 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def parse_arguments():
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(description="Run face recognition on a video")
+    parser.add_argument("--model_arch", type=str, required=True, help="Model architecture")
     parser.add_argument("--alg_name", type=str, required=True, help="Name of the algorithm")
-    parser.add_argument("--model", type=str, required=True, help="Detector model")
     parser.add_argument("--conf", type=float, default=0.5, help="Confidence threshold")
     parser.add_argument("--match_threshold", type=int, default=0.7, help="Match threshold")
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
     parser.add_argument("--tracker", type=str, default="default_tracker", help="Tracker name")
     return parser.parse_args()
 
-def process_videos(video_paths, args):
+def process_videos(face_system, video_paths, args):
     """Processes videos and evaluates recognition results."""
     results = {}
     
     for video_name, video_path in video_paths.items():
         logging.info(f"Processing {video_name} - {video_path}")
 
-        predict(video_path, video_name, args.alg_name, args.model, 
-                args.conf, args.imgsz, args.tracker, args.match_threshold)
-
-        precision, recall, accuracy = eval_recognition(video_name, args.alg_name)
-        
-        results[video_name] = {
-            "precision": precision,
-            "recall": recall,
-            "accuracy": accuracy
-        }
+        face_system.process_video(
+            video_path=video_path,
+            video_name=video_name,
+            alg_name=args.alg_name,
+        )
 
     return results
 
@@ -98,6 +93,16 @@ def calculate_and_save_avg(results, main_path, alg_name):
 def main():
     args = parse_arguments()
 
+    face_system = FaceRecognitionSystem(
+        model_arch=args.model_arch,
+        confidence_threshold=args.conf,
+        imgsz=args.imgsz,
+        tracker=args.tracker,
+        match_threshold=args.match_threshold,
+        show=True,
+        eval=True
+    )
+
     video_paths = {
         "video10": "videos/output_10_processed_fps.mp4",
         "video11": "videos/output_11_processed_fps.mp4",
@@ -106,7 +111,7 @@ def main():
     benchmark = "hbface"
     main_path = "results.csv"
 
-    results = process_videos(video_paths, args)
+    results = process_videos(face_system, video_paths, args)
     results = evaluate_mot(benchmark, args, results)
     
     save_results(results, args.alg_name)
