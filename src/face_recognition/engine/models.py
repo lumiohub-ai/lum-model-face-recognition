@@ -146,6 +146,7 @@ class FaceEngine:
                             'w': box[2],
                             'h': box[3],
                             'conf': box[4],
+                            'name': name,
                         })
 
                 self.name_to_track_id[track_id] = name

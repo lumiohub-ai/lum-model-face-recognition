@@ -1,8 +1,4 @@
-import sys
-import os
-sys.path.append(os.curdir)
-
-from src.face_recognition.hbface import HBFace
+from hbface import HBFace
 
 video_path = 'videos/output_10.mkv'
 
