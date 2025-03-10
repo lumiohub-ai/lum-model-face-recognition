@@ -15,9 +15,12 @@ class HBFace(FaceEngine):
         self.video_path = video_path
         if video_path is None:
             self.video_path = self.args.video_path
+        
+        self.recognized_names = set()
+
         self.stream = StreamHandler(self.video_path)
         self.visualize = Visualization()
-        self.entry_logger = EntryLogger() 
+        self.entry_logger = EntryLogger()
 
     def run(self) -> None:
         if not self.stream.is_video:
@@ -48,6 +51,7 @@ class HBFace(FaceEngine):
 
                 for name in recognized_persons:
                     self.entry_logger.log_person_entry(name, self.cam_type)
+                    self.recognized_names.add(name)
                 
                 self.entry_logger.visualize_entries(annotated_frame)
                 self.visualize.display(annotated_frame, window_name=self.cam_type)

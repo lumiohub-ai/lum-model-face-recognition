@@ -16,8 +16,8 @@ recent_entries_max_len: 3  # Maximum number of recent face entries to store for 
 # Model configuration
 model_path: "models/yolov8m-face.pt"  # Path to the face detection model
 match_threshold: 0.7  # Threshold for face similarity matching
-detection_threshold: 0.1  # Confidence threshold for face detection
-imgsz: 1280  # Image size for inference (higher values improve accuracy but increase processing time)
+detection_threshold: 0.5  # Confidence threshold for face detection
+imgsz: 960  # Image size for inference (higher values improve accuracy but increase processing time)
 tracker: "bytetrack.yaml"  # Path to the tracker configuration file
 
 # Video processing settings
