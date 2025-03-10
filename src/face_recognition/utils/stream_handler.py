@@ -17,7 +17,7 @@ class StreamHandler:
             raise ValueError(f"Unable to read from source: {src}")
         self.ret = ret
         self.frame = frame
-        self.last_frame = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) - 1)
+        self.last_frame = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) + 1)
         self.thread = None  # Store reference to thread
 
     @staticmethod

@@ -1,5 +1,8 @@
 from typing import Any, List, Tuple
 from cfg import Config
+import sys
+import os
+sys.path.append(os.curdir)
 from ultralytics import YOLO
 from engine import FaceRecognition
 from utils import Visualization
@@ -113,7 +116,7 @@ class FaceEngine:
             face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
             name = self.face_recognition.recognize_face(face_embeddings)
             
-            del self.track_crops_frame[track_id]
+            del self.track_crops_frame[track_id] # to save memory leakages
             
             if name != "Unknown":
                 if name not in self.name_to_consistent_id:

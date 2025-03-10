@@ -106,10 +106,10 @@ def process_video_fps(video_path, label_studio_fps):
     if not os.path.exists(video_path):
         print(f"Error: Video file not found - {video_path}")
         return
-
     try:
         # Load video
         video_clip = VideoFileClip(video_path)
+
         output_path = os.path.basename(video_path).split('.')[0] + '_processed_fps.mp4'
 
         # Set the FPS
@@ -152,6 +152,7 @@ def show_video_annotations(output_video_path, output_txt_path):
     while True:
         # Read frame from video
         ret, frame = cap.read()
+    
         if not ret:
             break  # Stop if video ends
 
@@ -228,8 +229,6 @@ def main(json_path, video_dir, output_txt_path, label_studio_fps, verify=True):
     # Verify the output video
     if verify:
         show_video_annotations(output_video_path, output_txt_path)
-    
-    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -241,7 +240,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("-j", "--json_path", required=True, help="Path to JSON annotations")
     parser.add_argument("-v", "--video_dir", help="Path to directory containing video files")
-    parser.add_argument("--label_studio_fps", type=float, default=25, help="Label Studio FPS")
+    parser.add_argument("--label_studio_fps", type=float, default=30, help="Label Studio FPS")
     parser.add_argument("--output_txt_path", default='output_mot_10.txt', help="Path to output txt file")
     parser.add_argument("--verify", action='store_true', default=True, help="Verify the output video")
     args = parser.parse_args()

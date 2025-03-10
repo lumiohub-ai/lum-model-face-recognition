@@ -1,5 +1,6 @@
 import pandas as pd
 import json
+import os
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 import argparse
@@ -9,6 +10,11 @@ def eval_recognition(video_name, alg_name):
     id_to_name_path = f'annotations/id_to_name_{video_name}.json'
     gt_path = f'TrackEval/data/gt/mot_challenge/hbface-train/{video_name}/gt/gt.txt'
     pred_path = f'results/{video_name}_recognition_{alg_name}.txt'
+
+    # Check all files exist
+    for path in [id_to_name_path, gt_path, pred_path]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
 
     with open(id_to_name_path, "r") as file:
         id_to_name = json.load(file)
