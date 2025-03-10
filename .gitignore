@@ -518,7 +518,7 @@ model.python-template
 version.py
 sample.py
 example.py
-test.py
+
 
 #ignore models
 *.pt
