@@ -3,6 +3,7 @@ device: "cuda:1"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
 db_path: "data/ilhan"  # Path to the folder containing face images for recognition
+matched_path: "comparison"  # Path to the folder to save matched face images
 output_video_path: "data/output.mp4"  # Path to save the output video with annotations
 
 video_path: "videos/output_10.mkv"

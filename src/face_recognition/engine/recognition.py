@@ -80,7 +80,7 @@ class FaceRecognition:
         sorted_names = [max_sim_names[idx] for idx in sorted_indices]
 
         return sorted_names[0].split('_')[0] if len(sorted_names) > 0 \
-            and max_sim_values[sorted_indices[0]] > self.match_threshold else "Unknown"
+            and max_sim_values[sorted_indices[0]] > self.match_threshold else "Unknown", sorted_indices[0]
 
     def check_new_faces(self):
         for file in os.listdir(self.db_path):

@@ -114,30 +114,36 @@ class FaceEngine:
                 continue
                 
             face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
-            name = self.face_recognition.recognize_face(face_embeddings)
-            
-            del self.track_crops_frame[track_id] # to save memory leakages
+            name, matched_frame_idx = self.face_recognition.recognize_face(face_embeddings)
             
             if name != "Unknown":
                 if name not in self.name_to_consistent_id:
                     self.name_to_consistent_id[name] = track_id
-
                     persons_logged.append(name)
-
                     consistent_id = track_id
                 else:
                     consistent_id = self.name_to_consistent_id[name]
-                    
+
                 # Map the original track ID to the consistent ID
                 self.id_mapping[track_id] = consistent_id
-                
                 # Use consistent ID for display and result storage
                 display_id = consistent_id
+
+                # Concat the frame image with database image and save it
+                matched_frame_img = list(self.track_crops_frame[track_id].values())[matched_frame_idx]
+                matched_frame_img = cv2.resize(matched_frame_img, (160, 160))
+                
+                matched_database_img = cv2.imread(os.path.join(self.args.db_path, name + ".jpg.jpg"))
+                matched_database_img = cv2.resize(matched_database_img, (160, 160))
+
+                concat_img = cv2.hconcat([matched_frame_img, matched_database_img])
+                cv2.imwrite(os.path.join(self.args.matched_path, name + ".jpg"), concat_img)
 
                 if self.eval:
                     # Add to MOT results with the consistent ID
                     for frame_num in self.track_boxes_frame[track_id]:
                         box = self.track_boxes_frame[track_id][frame_num]
+
                         self.mot_results.append({
                             'frame': frame_num,
                             'id': display_id,  # Use consistent ID in results
@@ -149,8 +155,10 @@ class FaceEngine:
                             'name': name,
                         })
 
+            
                 self.name_to_track_id[track_id] = name
 
+            del self.track_crops_frame[track_id] # to save memory leakages
         return persons_logged
     
     
