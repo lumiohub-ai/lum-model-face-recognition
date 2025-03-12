@@ -3,7 +3,6 @@ import os
 import torch
 import cv2
 import numpy as np
-from PIL import Image
 
 from facenet_pytorch import InceptionResnetV1
 from sklearn.metrics.pairwise import cosine_similarity

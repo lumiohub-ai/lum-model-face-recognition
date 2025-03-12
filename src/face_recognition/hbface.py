@@ -9,7 +9,7 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 class HBFace(FaceEngine):
     def __init__(self, video_path, cam_type, annot=True, eval=False) -> None:
-        super().__init__(eval=eval)
+        super().__init__(video_path=video_path, eval=eval)
         self.cam_type = cam_type
         self.annot = annot
         self.video_path = video_path

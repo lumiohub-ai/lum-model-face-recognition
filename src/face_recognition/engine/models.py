@@ -10,8 +10,11 @@ import cv2
 
 
 class FaceEngine:
-    def __init__(self, eval: bool = False) -> None:
+    def __init__(self, video_path: str = None, eval: bool = False) -> None:
         self.args = Config()
+        self.video_path = video_path
+        if video_path is not None:
+            self.video_path = video_path
 
         self.device = self.args.device
         self.eval = eval
@@ -133,12 +136,13 @@ class FaceEngine:
                 matched_frame_img = list(self.track_crops_frame[track_id].values())[matched_frame_idx]
                 matched_frame_img = cv2.resize(matched_frame_img, (160, 160))
                 
-                matched_database_img = cv2.imread(os.path.join(self.args.db_path, name + ".jpg.jpg"))
+                matched_database_img = cv2.imread(os.path.join(self.args.db_path, name + ".jpg"))
                 matched_database_img = cv2.resize(matched_database_img, (160, 160))
 
                 concat_img = cv2.hconcat([matched_frame_img, matched_database_img])
-                cv2.imwrite(os.path.join(self.args.matched_path, name + ".jpg"), concat_img)
-
+                cv2.imwrite(os.path.join(self.args.matched_path, 
+                                         f'{name}_{display_id}_{os.path.basename(self.video_path)}.jpg'), 
+                concat_img)
                 if self.eval:
                     # Add to MOT results with the consistent ID
                     for frame_num in self.track_boxes_frame[track_id]:

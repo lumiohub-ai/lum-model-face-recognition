@@ -8,14 +8,39 @@ from hbface import HBFace
 import json
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-def evaluate_recognition(video_name, alg_name):
+def evaluate_passed_accuracy(gt_path, pred_path):
+    # Get unique track IDs from ground truth
+    gt_df = pd.read_csv(gt_path, names=['frame', 'track_id', 'x', 'y', 'w', 'h', 'confidence', 'class', 'visibility'])
+    gt_df = gt_df[['frame', 'track_id']]
+    gt_df = gt_df.drop_duplicates(subset=['track_id'])
+
+    gt_ids = set(gt_df['track_id'])
+    gt_ids_aranged = np.arange(1, len(gt_ids) + 1)
+
+    # Get unique track IDs from predictions
+    pred_df = pd.read_csv(pred_path, names=['frame', 'x', 'y', 'w', 'h', 'name'])
+    unique_names = pred_df['name'].unique()
+    pred_ids_aranged = np.arange(1, len(unique_names) + 1)
+
+    # Calculate accuracy with aranged IDs
+    correct = len(set(gt_ids_aranged) & set(pred_ids_aranged))
+    total = len(gt_ids)
+
+    accuracy = correct / total if total > 0 else 0
+
+    print(f"Passed Accuracy: {accuracy:.4f}")
+
+    return accuracy
+    
+def evaluate_recognition(video_name, alg_name, benchmark="hbface"):
     id_to_name_path = f'annotations/id_to_name_{video_name}.json'
-    gt_path = f'TrackEval/data/gt/mot_challenge/hbface-train/{video_name}/gt/gt.txt'
-    pred_path = f'results/{video_name}_recognition_{alg_name}.txt'
+    gt_path = f'TrackEval/data/gt/mot_challenge/{benchmark}-train/{video_name}/gt/gt.txt'
+    pred_path = f'results/{video_name}_recognition_{alg_name}-{benchmark}.txt'
 
     # Check all files exist
     for path in [id_to_name_path, gt_path, pred_path]:
@@ -35,6 +60,13 @@ def evaluate_recognition(video_name, alg_name):
     gt_df = gt_df[['frame', 'track_id', 'x', 'y', 'w', 'h']] 
     gt_df['name'] = gt_df['track_id'].map(id_to_name) 
     gt_df = gt_df[['frame', 'x', 'y', 'w', 'h', 'name']]
+    gt_df = gt_df[gt_df['name'] != 'Unknown']
+
+    # Get all unique GT names (even those not matched)
+    all_gt_names = sorted(gt_df['name'].unique())
+    
+    # Get all unique predicted names (even those not matched)
+    all_pred_names = sorted(pred_df['name'].unique())
 
     # Lists to store ground truth and predicted names 
     true_names = [] # Ground truth 
@@ -70,7 +102,7 @@ def evaluate_recognition(video_name, alg_name):
         iou = intersection_area / float(box1_area + box2_area - intersection_area)
         return iou
 
-    # Variables to count metrics
+    # Variables to count metrics (original method)
     id_tp = 0  # Identity True Positive
     id_fp = 0  # Identity False Positive
     id_fn = 0  # Identity False Negative
@@ -146,37 +178,118 @@ def evaluate_recognition(video_name, alg_name):
         # Count unmatched predictions as false positives
         id_fp += len(frame_pred) - len(matched_pred)
 
-
-    # Calculate ID precision, recall, F1, and accuracy
-    id_precision = id_tp / (id_tp + id_fp) if (id_tp + id_fp) > 0 else 0
-    id_recall = id_tp / (id_tp + id_fn) if (id_tp + id_fn) > 0 else 0
-    id_f1 = 2 * (id_precision * id_recall) / (id_precision + id_recall) if (id_precision + id_recall) > 0 else 0
-    id_accuracy = id_tp / (id_tp + id_fp + id_fn) if (id_tp + id_fp + id_fn) > 0 else 0
+    # Create a modified confusion matrix with all unique names
+    # Initialize a matrix of zeros with shape (len(all_gt_names), len(all_pred_names))
+    modified_cm = np.zeros((len(all_gt_names), len(all_pred_names)))
     
-    print(f"Precision: {id_precision:.4f}")
-    print(f"Recall: {id_recall:.4f}")
-    print(f"F1 Score: {id_f1:.4f}")
-    print(f"Accuracy: {id_accuracy:.4f}")
-
+    # Fill in the matrix with counts from matched detections
     if true_names and pred_names:
-        # Get unique names (classes)
-        unique_names = sorted(list(set(true_names) | set(pred_names)))
-
-        # Calculate confusion matrix
-        cm = confusion_matrix(true_names, pred_names, labels=unique_names)
-
-        # Plot confusion matrix
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=unique_names)
-        disp.plot(cmap=plt.cm.Blues)
-        plt.title('Identity Confusion Matrix')
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        plt.savefig(f'results/plots/{video_name}_confusion_matrix_{alg_name}.png')
+        for gt, pred in zip(true_names, pred_names):
+            gt_idx = all_gt_names.index(gt)
+            pred_idx = all_pred_names.index(pred)
+            modified_cm[gt_idx, pred_idx] += 1
     
+    # NEW METRICS CALCULATION - PERSON-BASED METRICS
+    # Create sets to track unique people and predictions
+    gt_people = set(all_gt_names)
+    pred_people = set(all_pred_names)
+    
+    # Create a dictionary to track which GT people were correctly identified
+    correctly_identified = set()
+    
+    # For each person in the confusion matrix, check if they were correctly identified
+    for i, gt_name in enumerate(all_gt_names):
+        # Find the index where prediction matches ground truth (if any)
+        try:
+            pred_idx = all_pred_names.index(gt_name)
+            # If there's a non-zero value at this location, the person was correctly identified
+            if modified_cm[i, pred_idx] > 0:
+                correctly_identified.add(gt_name)
+        except ValueError:
+            # This ground truth name doesn't exist in predictions
+            pass
+    
+    # Calculate metrics
+    person_tp = len(correctly_identified)
+    person_fn = len(gt_people) - person_tp
+    
+    # Count incorrect identifications (predicted names that are wrong)
+    # This includes both names that don't exist in GT and names used incorrectly
+    incorrect_identifications = set()
+    
+    # Names that don't exist in ground truth
+    non_existent_names = pred_people - gt_people
+    incorrect_identifications.update(non_existent_names)
+    
+    # Names that exist but were used incorrectly
+    for j, pred_name in enumerate(all_pred_names):
+        if pred_name in gt_people:  # Name exists in ground truth
+            # Check if this name was predicted for wrong people
+            for i, gt_name in enumerate(all_gt_names):
+                if gt_name != pred_name and modified_cm[i, j] > 0:
+                    incorrect_identifications.add(pred_name)
+                    break
+    
+    person_fp = len(incorrect_identifications)
+    
+    # Calculate person-based metrics
+    person_precision = person_tp / (person_tp + person_fp) if (person_tp + person_fp) > 0 else 0
+    person_recall = person_tp / (person_tp + person_fn) if (person_tp + person_fn) > 0 else 0
+    person_f1 = 2 * (person_precision * person_recall) / (person_precision + person_recall) if (person_precision + person_recall) > 0 else 0
+    person_accuracy = person_tp / (person_tp + person_fp + person_fn) if (person_tp + person_fp + person_fn) > 0 else 0
+    
+    # Print only person-based metrics
+    print(f"\n---- Person-based Metrics ----")
+    print(f"TP: {person_tp} (People correctly identified)")
+    print(f"FP: {person_fp} (Incorrect identifications)")
+    print(f"FN: {person_fn} (People never correctly identified)")
+    print(f"Precision: {person_precision:.4f}")
+    print(f"Recall: {person_recall:.4f}")
+    print(f"F1 Score: {person_f1:.4f}")
+    print(f"Accuracy: {person_accuracy:.4f}")
+            
+    # Plot confusion matrix with all names
+    if true_names and pred_names:
+        # Create a custom plot rather than using ConfusionMatrixDisplay
+        fig, ax = plt.subplots(figsize=(12, 10))
+        im = ax.imshow(modified_cm, interpolation='nearest', cmap=plt.cm.Blues)
+        
+        # Add colorbar
+        cbar = ax.figure.colorbar(im, ax=ax)
+        
+        # Set up x and y ticks with proper alignment
+        ax.set_xticks(np.arange(len(all_pred_names)))
+        ax.set_yticks(np.arange(len(all_gt_names)))
+        
+        # Set labels
+        ax.set_xticklabels(all_pred_names, rotation=90)
+        ax.set_yticklabels(all_gt_names)
+        
+        # Loop over data dimensions and create text annotations
+        thresh = modified_cm.max() / 2.
+        for i in range(len(all_gt_names)):
+            for j in range(len(all_pred_names)):
+                if modified_cm[i, j] > 0:  # Only show text for non-zero values
+                    ax.text(j, i, int(modified_cm[i, j]),
+                            ha="center", va="center",
+                            color="white" if modified_cm[i, j] > thresh else "black")
+        
+        # Add title and labels
+        ax.set_title('Identity Confusion Matrix')
+        ax.set_xlabel('Predicted Names')
+        ax.set_ylabel('Ground Truth Names')
+        
+        # Adjust layout and save
+        fig.tight_layout()
+        fig.savefig(f'results/plots/{video_name}_confusion_matrix_{alg_name}.png')
+        plt.close(fig)
     else:
         print("No matches found for confusion matrix.")
 
-    return id_precision, id_recall, id_accuracy
+    passed_acc = evaluate_passed_accuracy(gt_path, pred_path)
+
+    # Return the person-based metrics
+    return person_precision, person_recall, person_accuracy, passed_acc
 
 # Function to extract data from a given path
 def extract_data(summary_path):
@@ -214,8 +327,9 @@ def evaluate_mot(benchmark, tracker_to_eval, split_to_eval="train"):
     results_dir = f'TrackEval/data/trackers/mot_challenge/{benchmark}-{split_to_eval}/{tracker_to_eval}/pedestrian_detailed.csv'
     return extract_data(results_dir)
 
-def save_results(mot_results, output_recognition_path, output_tracking_path):
+def save_inference_results(mot_results, output_recognition_path, output_tracking_path):
     """Saves recognition and tracking results to text files."""
+    print(f"Saving results to {output_recognition_path} and {output_tracking_path}")
     if not mot_results:
         logging.warning("No results to save.")
         return
@@ -245,22 +359,23 @@ def inference(results, video_paths, alg_name, benchmark):
     """Processes videos and evaluates recognition results."""
     for video_name, video_path in video_paths.items():
         logging.info(f"Processing {video_name} - {video_path}")
-        output_recognition_path, output_tracking_path = set_paths(video_name, alg_name, benchmark)
+        # output_recognition_path, output_tracking_path = set_paths(video_name, alg_name, benchmark)
 
-        # Process the video
-        streamer = HBFace(video_path, cam_type="IN", annot=True, eval=True)
-        streamer.run()
+        # # Process the video
+        # streamer = HBFace(video_path, cam_type="IN", annot=True, eval=True)
+        # streamer.run()
 
-        mot_results = streamer.mot_results
+        # mot_results = streamer.mot_results
 
-        # Save MOT results
-        save_results(mot_results, output_recognition_path, output_tracking_path)
+        # # Save MOT results
+        # save_inference_results(mot_results, output_recognition_path, output_tracking_path)
 
-        precision, recall, accuracy = evaluate_recognition(video_name, alg_name)
+        precision, recall, accuracy, passed_accuracy = evaluate_recognition(video_name, alg_name, benchmark=benchmark)
         results[video_name] = {
             "precision": precision,
             "recall": recall,
-            "accuracy": accuracy
+            "accuracy": accuracy,
+            "passed_accuracy": passed_accuracy
         }
 
         logging.info(f"Finished processing {video_name}")
@@ -303,7 +418,7 @@ def save_results(results, alg_name):
     logging.info(f"Results saved successfully to {output_path}.")
 
 def set_paths(video_name, alg_name, benchmark):
-    output_recognition_path = f'results/{video_name}_recognition_{alg_name}.txt'
+    output_recognition_path = f'results/{video_name}_recognition_{alg_name}-{benchmark}.txt'
     output_tracking_path = f'TrackEval/data/trackers/mot_challenge/{benchmark}-train/{alg_name}/data/{video_name}.txt'
     
     # Create directories if they don't exist
@@ -326,7 +441,7 @@ def main():
     }
 
     benchmark = "ilhan"
-    alg_name = "alg1-ilhan"
+    alg_name = "alg1"
     
     results = {}
     results = inference(results, video_paths, alg_name, benchmark)
