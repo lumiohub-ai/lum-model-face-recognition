@@ -80,7 +80,7 @@ class EntryLogger:
 
     #     return auth_client
 
-    def log_person_entry(self, name, status):
+    def log_person_entry(self, name, status, track_id):
         update = False
 
         now =  datetime.now()
@@ -101,7 +101,7 @@ class EntryLogger:
 
         if update:
             self.entry_time[name] = now
-            self.recent_entries.append(f'Person: {name} has {status} at {today_time}')
+            self.recent_entries.append(f'Person: {name} has {status} at {today_time}, with track_id: {track_id}')
 
             if status == 'IN':
                 call = 'clientIn'

@@ -9,6 +9,7 @@ import json
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 import numpy as np
+import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -359,16 +360,17 @@ def inference(results, video_paths, alg_name, benchmark):
     """Processes videos and evaluates recognition results."""
     for video_name, video_path in video_paths.items():
         logging.info(f"Processing {video_name} - {video_path}")
-        # output_recognition_path, output_tracking_path = set_paths(video_name, alg_name, benchmark)
+        output_recognition_path, output_tracking_path = set_paths(video_name, alg_name, benchmark)
 
-        # # Process the video
-        # streamer = HBFace(video_path, cam_type="IN", annot=True, eval=True)
-        # streamer.run()
+        # Process the video
+        streamer = HBFace(video_path, cam_type="IN", annot=True, eval=True,
+                          roi=(302, 82, 986, 976), line_points=[(129, 241), (1799, 267)])
+        streamer.run()
 
-        # mot_results = streamer.mot_results
+        mot_results = streamer.mot_results
 
-        # # Save MOT results
-        # save_inference_results(mot_results, output_recognition_path, output_tracking_path)
+        # Save MOT results
+        save_inference_results(mot_results, output_recognition_path, output_tracking_path)
 
         precision, recall, accuracy, passed_accuracy = evaluate_recognition(video_name, alg_name, benchmark=benchmark)
         results[video_name] = {
@@ -432,24 +434,45 @@ def set_paths(video_name, alg_name, benchmark):
     return output_recognition_path, output_tracking_path
 
 def main():
-    video_paths = {
-        "videoa1-1": "client/pred_videos/videoa1-1_eval.mp4",
-        "videoa1-2": "client/pred_videos/videoa1-2_eval.mp4",
-        "videoa1-3": "client/pred_videos/videoa1-3_eval.mp4",
-        "videoa1-4": "client/pred_videos/videoa1-4_eval.mp4",
-        "videoa1-5": "client/pred_videos/videoa1-5_eval.mp4",
-    }
 
-    benchmark = "ilhan"
-    alg_name = "alg1"
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Run inference and evaluate tracking on videos.')
     
+    # Add arguments
+    parser.add_argument('--videos', nargs='+', help='List of video names to process', default=["videoa1-1", "videoa1-2", "videoa1-3", "videoa1-4", "videoa1-5"])
+    parser.add_argument('--video_dir', default='client/pred_videos', help='Directory containing videos')
+    parser.add_argument('--alg_name', default='alg7', help='Algorithm name')
+    parser.add_argument('--benchmark', default='ilhan', help='Benchmark name') # hbface or ilhan
+    parser.add_argument('--output', default=None, help='Output filename for results CSV')
+    
+    # Parse arguments
+    args = parser.parse_args()
+    
+    # Set up video paths dictionary
+    video_paths = {}
+    
+    # If specific videos are provided, use those
+    if args.videos:
+        for video in args.videos:
+            video_paths[video] = os.path.join(args.video_dir, f"{video}_eval.mp4")
+    else:
+        # Default videos if none specified
+        default_videos = ["videoa1-1", "videoa1-2", "videoa1-3", "videoa1-4", "videoa1-5"]
+        for video in default_videos:
+            video_paths[video] = os.path.join(args.video_dir, f"{video}_eval.mp4")
+    
+    # Process the videos
     results = {}
-    results = inference(results, video_paths, alg_name, benchmark)
-    results = evaluate_tracking(results, alg_name, benchmark)
-
+    results = inference(results, video_paths, args.alg_name, args.benchmark)
+    results = evaluate_tracking(results, args.alg_name, args.benchmark)
+    
+    # Determine output filename
+    output_filename = args.output if args.output else f"{args.alg_name}_results.csv"
+    
     # Save results to a CSV file
-    save_results(results, alg_name)
-
+    save_results(results, output_filename)
+    
+    print(f"Processing complete. Results saved to {output_filename}")
 
 if __name__ == "__main__":
     main()

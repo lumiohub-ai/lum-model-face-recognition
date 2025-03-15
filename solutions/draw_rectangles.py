@@ -37,7 +37,7 @@ def draw_rectangle_interactive(image_path):
     cv2.destroyAllWindows()
 
 # Example usage
-image_path = "frame_out.jpg"  # Replace with your image path
+image_path = "frame.jpg"  # Replace with your image path
 draw_rectangle_interactive(image_path)
 
 

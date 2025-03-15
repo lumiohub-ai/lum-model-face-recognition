@@ -63,7 +63,8 @@ class ShapeDrawer:
         return self.shapes
 
 # Example usage
-image_path = "frame_in.jpg"  # Replace with your image path
-drawer = ShapeDrawer(image_path)
+image_path = "frame.jpg"  # Replace with your image path
+image = cv2.imread(image_path)
+drawer = ShapeDrawer(image)
 shapes = drawer.run()
 print("Collected Shapes:", shapes)
