@@ -9,7 +9,6 @@ from utils import Visualization
 import cv2
 from shapely.geometry import LineString
 
-from face_alignment.mtcnn import MTCNN
 
 
 class FaceEngine:
@@ -23,7 +22,6 @@ class FaceEngine:
         self.eval = eval
 
         self.detector = YOLO(self.args.model_path).to(self.device).eval()
-        self.mtcnn = MTCNN(device=self.device, crop_size=(160, 160))
 
         self.tracker = self.args.tracker
 
@@ -55,10 +53,6 @@ class FaceEngine:
 
         self.visualize = Visualization()
     
-    def track_with_mtcnn(self, frame) -> None:
-        bbox, faces = self.mtcnn.align_multi(frame)
-        
-        
 
     def track(self, frame) -> None:
         detections = self.detector.track(
