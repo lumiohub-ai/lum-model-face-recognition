@@ -20,7 +20,8 @@ myenv/
 *.onnx
 *.pt
 *.cache
-
+*.dat
+*.csv
 videos/
 runs/
 
