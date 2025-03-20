@@ -58,6 +58,10 @@ class HBFace(FaceEngine):
             for name, track_id in recognized_persons.items():
                 self.entry_logger.log_person_entry(name, self.cam_type, track_id)
                 self.recognized_names.add(name)
+
+            # Draw line points
+            if self.line_points is not None:
+                cv2.line(annotated_frame, self.line_points[0], self.line_points[1], (0, 255, 0), 2)
             
             self.entry_logger.visualize_entries(annotated_frame)
             self.visualize.display(annotated_frame, window_name=self.cam_type)
