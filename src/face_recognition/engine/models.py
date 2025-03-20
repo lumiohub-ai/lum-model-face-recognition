@@ -16,14 +16,11 @@ import cv2
 from shapely.geometry import LineString
 
 class FaceEngine:
-    def __init__(self, video_path: str = None, eval: bool = False) -> None:
-        self.args = Config()
-        self.video_path = video_path
-        if video_path is not None:
-            self.video_path = video_path
+    def __init__(self, args) -> None:
+        self.args = args
 
         self.device = self.args.device
-        self.eval = eval
+        self.eval = self.args.eval
 
         self.detector = YOLO(self.args.model_path)
 
@@ -60,8 +57,6 @@ class FaceEngine:
 
         self.visualize = Visualization()
         self.frames = {}
-
-        self.args.show_configs()
     
     def track(self, frame) -> None:
         detections = self.detector.track(
@@ -130,7 +125,7 @@ class FaceEngine:
             frame_num,
             roi=None,
             align=True,
-            padding=0.1,
+            padding_ratio=0.1,
         ):  
             im0 = frame.copy()
 
@@ -145,7 +140,7 @@ class FaceEngine:
                    continue
 
                 # Initial crop with padding
-                padding = int(max(w, h) * 0.0)
+                padding = int(max(w, h) * padding_ratio)
                 x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
                 x2, y2 = min(frame.shape[1], x2 + padding), min(frame.shape[0], y2 + padding)
 

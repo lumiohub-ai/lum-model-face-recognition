@@ -363,7 +363,7 @@ def inference(results, video_paths, alg_name, benchmark):
         output_recognition_path, output_tracking_path = set_paths(video_name, alg_name, benchmark)
 
         # Process the video
-        streamer = HBFace(video_path, cam_type="IN", annot=True, eval=True,
+        streamer = HBFace(cam_type="IN", video_path=video_path, eval=True,
                           roi=(302, 82, 986, 976), line_points=[(129, 241), (1799, 267)])
         streamer.run()
 
