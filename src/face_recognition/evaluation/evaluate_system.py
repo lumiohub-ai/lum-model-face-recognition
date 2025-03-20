@@ -441,7 +441,7 @@ def main():
     # Add arguments
     parser.add_argument('--videos', nargs='+', help='List of video names to process', default=["videoa1-1", "videoa1-2", "videoa1-3", "videoa1-4", "videoa1-5"])
     parser.add_argument('--video_dir', default='client/pred_videos', help='Directory containing videos')
-    parser.add_argument('--alg_name', default='alg7', help='Algorithm name')
+    parser.add_argument('--alg_name', default='alg11', help='Algorithm name')
     parser.add_argument('--benchmark', default='ilhan', help='Benchmark name') # hbface or ilhan
     parser.add_argument('--output', default=None, help='Output filename for results CSV')
     

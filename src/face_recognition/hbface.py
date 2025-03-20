@@ -1,10 +1,11 @@
+import sys
 import os
+sys.path.append(os.curdir)
 
 import cv2
-from .engine import FaceEngine
-import face_alignment
+
+from src.face_recognition.engine import FaceEngine
 from src.face_recognition.utils import Visualization, StreamHandler, EntryLogger
-import numpy as np
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
@@ -17,6 +18,7 @@ class HBFace(FaceEngine):
         self.annot = annot
         self.video_path = video_path
         self.line_points = line_points
+        
         if video_path is None:
             self.video_path = self.args.video_path
         
@@ -36,8 +38,7 @@ class HBFace(FaceEngine):
             
             if not ret:
                 break
-            
-            
+        
             frame_num += 1
 
             # Track faces in the frame
@@ -49,7 +50,6 @@ class HBFace(FaceEngine):
 
             # Process detections
             annotated_frame = self.process_detections(frame, frame_num, roi=self.roi)
-            
 
             # Process removed tracks and recognize faces
             recognized_persons = self.recognize_tracks(detections, line_points=self.line_points,

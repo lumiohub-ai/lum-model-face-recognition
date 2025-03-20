@@ -17,4 +17,3 @@ shapely==2.0.7
 streamlit==1.42.1
 tensorboard==2.18.0
 typeguard==4.3.0
-ultralytics-thop==2.0.14

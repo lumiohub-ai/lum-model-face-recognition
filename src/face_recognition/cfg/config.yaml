@@ -1,8 +1,8 @@
 # Device settings
-device: "cuda:1"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-db_path: "data/ilhan"  # Path to the folder containing face images for recognition
+db_path: "data/hb-kor"  # Path to the folder containing face images for recognition
 matched_path: "comparison"  # Path to the folder to save matched face images
 output_video_path: "data/output.mp4"  # Path to save the output video with annotations
 
@@ -16,7 +16,7 @@ recent_entries_max_len: 3  # Maximum number of recent face entries to store for 
 
 # Model configuration
 model_path: "models/yolov8m-face.pt"  # Path to the face detection model
-match_threshold: 0.7  # Threshold for face similarity matching
+match_threshold: 0.6  # Threshold for face similarity matching
 detection_threshold: 0.5  # Confidence threshold for face detection
 imgsz: 1280  # Image size for inference (higher values improve accuracy but increase processing time)
 tracker: "bytetrack.yaml"  # Path to the tracker configuration file
