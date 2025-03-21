@@ -129,13 +129,13 @@ line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
 
 #### For running a face recognition application, use the following command:
 
-```
+```bash
 python examples/test.py
 ```
 
 **For arguments passed to the class, reference the config.yaml file where all parameters can be configured.**
 
-```
+```python
 import sys
 import os
 sys.path.append(os.curdir)
