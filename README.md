@@ -93,8 +93,6 @@ git clone https://github.com/humblebeeintel/TrackEval
 
 ## ⚙️ Configuration
 
-Before running setup configurations first!!!
-
 [**`src/face_recognition/cfg/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/src/face_recognition/cfg/config.yaml):
 
 ```yaml
@@ -102,34 +100,29 @@ Before running setup configurations first!!!
 device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-face_crops_path: "data/database"  # Path to the folder containing face images for recognition
+db_path: "data/hb-kor"  # Path to the folder containing face images for recognition
+video_path: "videos/output_10.mkv"
 output_video_path: "data/output.mp4"  # Path to save the output video with annotations
-
-# Camera input settings (RTSP links or video file paths)
-in_camera: ""  # RTSP link or video file path for the entry camera
-out_camera: ""  # RTSP link or video file path for the exit camera
-
-# Define entry and exit regions (coordinates of the regions of interest)
-in_region_points:  
-  - [553, 106]  # Point 1 (X, Y)
-  - [543, 349]  # Point 2 (X, Y)
-
-out_region_points:  
-  - [234, 217]  # Point 1 (X, Y)
-  - [14, 680]   # Point 2 (X, Y)
-
-# Database settings for recent entries
-recent_entries_max_len: 3  # Maximum number of recent face entries to store for tracking
 
 # Model configuration
 model_path: "models/yolov8m-face.pt"  # Path to the face detection model
-match_threshold: 0.7  # Threshold for face similarity matching
-detection_threshold: 0.25  # Confidence threshold for face detection
-imgsz: 960  # Image size for inference (higher values improve accuracy but increase processing time)
+detection_threshold: 0.5  # Confidence threshold for face detection
+imgsz: 1280  # Image size for inference (higher values improve accuracy but increase processing time)
 tracker: "bytetrack.yaml"  # Path to the tracker configuration file
 
-# Video processing settings
-skip_frames: 5  # Number of frames to skip between detections (reduces processing load)                       
+# Face recognition settings
+match_threshold: 0.6  # Threshold for face similarity matching
+
+# Other settings
+show: True  # Show the output video with annotations
+save_output: True  # Save the output video with annotations
+
+# Evaluation settings
+eval: False  # Enable evaluation mode
+
+# ROI settings
+roi: null  # Enable region of interest (ROI) mode
+line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])                     
 ```
 
 ## 🚸 Usage/Examples
@@ -137,8 +130,28 @@ skip_frames: 5  # Number of frames to skip between detections (reduces processin
 #### For running a face recognition application, use the following command:
 
 ```
-python src/face_recognition/main.py
+python examples/test.py
 ```
+
+**For arguments passed to the class, reference the config.yaml file where all parameters can be configured.**
+
+```
+import sys
+import os
+sys.path.append(os.curdir)
+from src.face_recognition.hbface import HBFace
+
+video_path = 'in.mp4'
+
+# For argument given to class, refer to config.yaml, every parameter can  be input here
+streamer = HBFace(video_path=video_path, cam_type='IN', show=True, db_path='data/hb-kor',
+                  match_threshold=0.5, detection_threshold=0.5, imgsz=960, eval=False)
+
+streamer.run()
+
+print(streamer.recognized_names)
+```
+
 
 ---
 ## 📊 Evaluation
@@ -189,14 +202,14 @@ Arguments:
 ```
 python src/face_recognition/evaluation/evaluate_system.py
 ```
-Required Parameters
 
---videos: A list of video names to process. Multiple videos can be specified by separating them with spaces.
---video_dir: The directory containing the video files to be processed.
---alg_name: The name of the face recognition algorithm to evaluate.
---benchmark: The benchmark dataset to use for evaluation.
---output: The filename for the output CSV file containing evaluation results.
+#### Required Parameters
 
+- `--videos`: Specify one or more video filenames for processing. Multiple entries should be space-delimited.
+- `--video_dir`: Designate the directory path containing the target video files.
+- `--alg_name`: Indicate the face recognition algorithm to be evaluated.
+- `--benchmark`: Select the benchmark dataset for performance evaluation.
+- `--output`: Define the destination CSV filename where evaluation results will be stored.
 
 ---
 ## 🖥️ NVIDIA Jetson Nano Setup
