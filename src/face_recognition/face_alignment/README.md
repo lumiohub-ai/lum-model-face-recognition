@@ -1,1 +1,0 @@
-Face alignment script is from [AdaFace](https://github.com/mk-minchul/AdaFace) repositpry: https://github.com/mk-minchul/AdaFace/tree/master/face_alignment
