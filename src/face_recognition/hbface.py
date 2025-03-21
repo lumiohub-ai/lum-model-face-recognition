@@ -11,9 +11,11 @@ from src.face_recognition.utils import Visualization, StreamHandler, EntryLogger
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 class HBFace(FaceEngine):
-    def __init__(self, cam_type=None, **kwargs) -> None:
+    def __init__(self, cam_type=None, 
+                 config_path="src/face_recognition/cfg/config.yaml", **kwargs) -> None:
+        
         self.cam_type = cam_type
-        self.load_cfgs(**kwargs)
+        self.load_cfgs(config_path, **kwargs)
 
         self.stream = StreamHandler(self.args.video_path)
         self.visualize = Visualization()
@@ -23,9 +25,14 @@ class HBFace(FaceEngine):
 
         super().__init__(args=self.args)
 
-    def load_cfgs(self, **kwargs):
-        config_path="src/face_recognition/cfg/config.yaml"
+        self.show_configs()
 
+    def show_configs(self) -> None:
+        # Show configurations to user with colors printings
+        for key, value in self.args.__dict__.items():
+            print(f"\033[1m{key}\033[0m: {value}")
+
+    def load_cfgs(self, config_path, **kwargs):
         # Load config from yaml file
         try:
             with open(config_path, 'r') as file:
@@ -41,7 +48,7 @@ class HBFace(FaceEngine):
         for key, value in config.items():
             if key not in kwargs:  # Only set from config if not explicitly provided
                 setattr(self.args, key, value)
-        
+
         # Add explicitly provided parameters
         for key, value in kwargs.items():
             setattr(self.args, key, value)
