@@ -62,7 +62,7 @@ class HBFace(FaceEngine):
         frame_num = 0
         while True:
             ret, frame = self.stream.read()
-            
+
             if not ret:
                 break
         
@@ -72,7 +72,8 @@ class HBFace(FaceEngine):
             detections = self.track(frame)
 
             if detections is None:
-                self.visualize.display(frame, window_name=self.cam_type)
+                if self.args.show:
+                    self.visualize.display(frame, window_name=self.cam_type)
                 continue
 
             # Process detections
@@ -91,7 +92,9 @@ class HBFace(FaceEngine):
                 cv2.line(annotated_frame, self.args.line_points[0], self.args.line_points[1], (0, 255, 0), 2)
             
             self.entry_logger.visualize_entries(annotated_frame)
-            self.visualize.display(annotated_frame, window_name=self.cam_type)
+
+            if self.args.show:
+                self.visualize.display(annotated_frame, window_name=self.cam_type)
             
         self.stream.stop()
         cv2.destroyAllWindows()
