@@ -2,7 +2,6 @@ import sys
 import os
 sys.path.append(os.curdir)
 
-from src.face_recognition.cfg import Config
 from src.face_recognition.engine import FaceRecognition
 from src.face_recognition.utils import Visualization
 
@@ -19,23 +18,9 @@ class FaceEngine:
     def __init__(self, args) -> None:
         self.args = args
 
-        self.device = self.args.device
-        self.eval = self.args.eval
-
         self.detector = YOLO(self.args.model_path)
 
-        self.tracker = self.args.tracker
-    
-        self.conf = self.args.detection_threshold
-        self.imgsz = self.args.imgsz
-        self.tracker = self.args.tracker
-
-        self.sharpness_score = []
-        self.face_recognition = FaceRecognition(
-            db_path=self.args.db_path,
-            match_threshold=self.args.match_threshold,
-            device=self.device
-        )
+        self.face_recognition = FaceRecognition(args)
 
         # Initialize tracking variables
         self.track_crops_frame = {}
@@ -48,7 +33,8 @@ class FaceEngine:
         self.name_to_track_id = {}
         self.name_to_consistent_id = {}
         self.dlib_detector = dlib.get_frontal_face_detector()
-        self.dlib_predictor = dlib.shape_predictor("models/shape_predictor_68_face_landmarks.dat")  # Download required
+        self.dlib_predictor = dlib.shape_predictor(
+            "models/shape_predictor_68_face_landmarks.dat")  # Download required
 
         self.id_mapping = {}
         self.mot_results = []
@@ -62,9 +48,9 @@ class FaceEngine:
         detections = self.detector.track(
                 frame,
                 verbose=False,
-                conf=self.conf,
-                imgsz=self.imgsz,
-                tracker=self.tracker,
+                conf=self.args.detection_threshold,
+                imgsz=self.args.imgsz,
+                tracker=self.args.tracker,
                 persist=True,
             )
         
@@ -75,35 +61,37 @@ class FaceEngine:
         
         return detections[0]
         
-    def align_face_dlib(self, image, detector, predictor, desired_size=150):
-        # Convert to grayscale for Dlib (optional, improves performance)
+    def align_face_dlib(self, image, detector, predictor, desired_size=160):
+        # Convert to grayscale for Dlib
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Detect faces in the cropped image
+        # Detect faces
         rects = detector(gray, 1)
-        if len(rects) == 0:
-            # print("No faces detected by Dlib in cropped region")
-            return image
 
+        if len(rects) == 0:
+            return None # No face detected, return None instead of original image
+        
+        # Get the original face rectangle
+        x1, y1, x2, y2 = rects[0].left(), rects[0].top(), rects[0].right(), rects[0].bottom()
+        
         # Get landmarks for the first detected face
         shape = predictor(gray, rects[0])
         landmarks = np.array([[shape.part(i).x, shape.part(i).y] for i in range(68)])
-
+        
         # Extract eye coordinates
         left_eye = landmarks[36:42].mean(axis=0).astype(int)
         right_eye = landmarks[42:48].mean(axis=0).astype(int)
-
-        # Calculate angle and center
+        
+        # Calculate angle
         dY = right_eye[1] - left_eye[1]
         dX = right_eye[0] - left_eye[0]
-        angle = np.degrees(np.arctan2(dY, dX)) * -1  # Negative for correct rotation
-
+        angle = np.degrees(np.arctan2(dY, dX)) * -1 # Negative for correct rotation
+        
         # Center of the image
         center = (image.shape[1] // 2, image.shape[0] // 2)
-
+        
         # Compute rotation matrix
         M = cv2.getRotationMatrix2D(center, angle, scale=1.0)
-
+        
         # Align the image
         aligned = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
 
@@ -111,13 +99,26 @@ class FaceEngine:
         eye_center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
         x, y = eye_center[0] - desired_size // 2, eye_center[1] - desired_size // 2
         x, y = max(0, x), max(0, y)
-        aligned = aligned[y:y + desired_size, x:x + desired_size]
-
-        # Ensure the crop is the correct size (if the crop goes out of bounds, resize the whole image)
-        if aligned.shape[0] != desired_size or aligned.shape[1] != desired_size:
-            aligned = cv2.resize(aligned, (desired_size, desired_size))
-
-        return aligned  
+        aligned_face = aligned[y:y + desired_size, x:x + desired_size]
+        
+        # Resize to desired size
+        if aligned_face.shape[0] > 0 and aligned_face.shape[1] > 0:
+            # First resize to base size
+            aligned_face = cv2.resize(aligned_face, (desired_size, desired_size))
+            
+            # Upsampling to improve quality
+            upsampling_factor = 2  # You can adjust this factor as needed
+            upsampled_size = desired_size * upsampling_factor
+            aligned_face = cv2.resize(aligned_face, (upsampled_size, upsampled_size), 
+                                    interpolation=cv2.INTER_CUBIC)
+            
+            # Resize back to desired size with better quality
+            aligned_face = cv2.resize(aligned_face, (desired_size, desired_size), 
+                                    interpolation=cv2.INTER_AREA)
+        else:
+            # Fallback if the dimensions are invalid
+            return None
+        return aligned_face
 
     def process_detections(
             self,
@@ -125,7 +126,7 @@ class FaceEngine:
             frame_num,
             roi=None,
             align=True,
-            padding_ratio=0.1,
+            padding_ratio=0.2 ,
         ):  
             im0 = frame.copy()
 
@@ -150,8 +151,10 @@ class FaceEngine:
                     continue
 
                 # Align the face using Dlib
-                if align:
-                    aligned_face = self.align_face_dlib(face, self.dlib_detector, self.dlib_predictor)
+                aligned_face = self.align_face_dlib(face, self.dlib_detector, self.dlib_predictor)
+            
+                if aligned_face is None:
+                    continue
 
                 if track_id not in self.track_crops_frame:
                     self.track_crops_frame[track_id], self.track_boxes_frame[track_id] = {}, {}
@@ -212,7 +215,7 @@ class FaceEngine:
                 # Use consistent ID for display and result storage
                 display_id = consistent_id
 
-                if self.eval:
+                if self.args.eval:
                     # Add to MOT results with the consistent ID
                     for frame_num in self.track_boxes_frame[track_id]:
                         box = self.track_boxes_frame[track_id][frame_num]
@@ -224,7 +227,7 @@ class FaceEngine:
                             'w': box[2],
                             'h': box[3],
                             'conf': box[4],
-                            'name': name,
+                            'name': name
                         })
 
             

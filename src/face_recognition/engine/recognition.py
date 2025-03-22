@@ -5,27 +5,23 @@ import cv2
 import numpy as np
 
 from facenet_pytorch import InceptionResnetV1
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances, manhattan_distances
 
 class FaceRecognition:
-    def __init__(self, db_path: str, match_threshold: float = 0.7, device: str = "cuda"):
-        super().__init__()
-        self.device = device
-        self.db_path = db_path
+    def __init__(self, args) -> None:
+        self.args = args
         self.resnet = (
             InceptionResnetV1(pretrained="vggface2", classify=False)
             .eval()
-            .to(self.device)
+            .to(self.args.device)
         )
-        self.match_threshold = match_threshold
         self.db_names, self.db_embs = self.load_embeddings()
-        
 
     def compute_embeddings(self, faces):
         resized_faces = [cv2.resize(face, (160, 160)) for face in faces]
         rgb_faces = [cv2.cvtColor(face, cv2.COLOR_BGR2RGB) for face in resized_faces]
         
-        face_tensors = torch.tensor(np.array(rgb_faces)).permute(0, 3, 1, 2).float().to(self.device) / 255.0
+        face_tensors = torch.tensor(np.array(rgb_faces)).permute(0, 3, 1, 2).float().to(self.args.device) / 255.0
         
         with torch.no_grad():
             embeddings = self.resnet(face_tensors).cpu().numpy()
@@ -37,9 +33,9 @@ class FaceRecognition:
         face_images = []
         face_names = []
 
-        for file in os.listdir(self.db_path):
+        for file in os.listdir(self.args.db_path):
             if file.lower().endswith((".png", ".jpg", ".jpeg")):
-                face_path = os.path.join(self.db_path, file)
+                face_path = os.path.join(self.args.db_path, file)
                 face_image = cv2.imread(face_path)
 
                 if face_image is None:
@@ -57,13 +53,20 @@ class FaceRecognition:
         db_names = list(name_to_embeddings.keys())
         db_embs = np.array(list(name_to_embeddings.values()))
 
-        print(f"Loaded {len(db_names)} face embeddings from {self.db_path} as database")
+        print(f"Loaded {len(db_names)} face embeddings from {self.args.db_path} as database")
 
         return db_names, db_embs
 
     def recognize_face(self, face_embs):  
-        similarities = cosine_similarity(face_embs, self.db_embs)
-        
+        if self.args.method == 'cosine':
+            similarities = cosine_similarity(face_embs, self.db_embs)
+        elif self.args.method == 'euclidean':
+            similarities = -euclidean_distances(face_embs, self.db_embs)  # Negate to make it similar to cosine similarity
+        elif self.args.method == 'manhattan':
+            similarities = -manhattan_distances(face_embs, self.db_embs)  # Negate to make it similar to cosine similarity
+        else:
+            raise ValueError(f"Unknown method: {self.args.method}")
+             
         # Get the indices of maximum similarity for each face
         max_sim_indices = np.argmax(similarities, axis=1)
         max_sim_values = np.max(similarities, axis=1)
@@ -71,16 +74,18 @@ class FaceRecognition:
 
         # Sorted by similarity
         sorted_indices = np.argsort(-max_sim_values)
+        sorted_similarities = max_sim_values[sorted_indices]
         sorted_names = [max_sim_names[idx] for idx in sorted_indices]
-
+        
         return sorted_names[0].split('_')[0] if len(sorted_names) > 0 \
-            and max_sim_values[sorted_indices[0]] > self.match_threshold else "Unknown"
+            and max_sim_values[sorted_indices[0]] > self.args.match_threshold else "Unknown"
 
     def check_new_faces(self):
-        for file in os.listdir(self.db_path):
+        for file in os.listdir(self.args.db_path):
             if file.lower().endswith((".png", ".jpg", ".jpeg")):
                 name = file.split(".")[0].split("_")[0]
-                if name not in self.database:
-                    self.database[name] = self.compute_embeddings(
-                        cv2.imread(os.path.join(self.db_path, file)))
+
+                if name not in self.db_names:
+                    self.db_names.append(self.compute_embeddings(
+                       [cv2.imread(os.path.join(self.db_path, file))]))
 
