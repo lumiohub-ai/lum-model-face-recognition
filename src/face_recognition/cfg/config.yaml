@@ -1,5 +1,5 @@
 # Device settings
-device: "cuda:1"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
 db_path: "data/ilhan-aligned"  # Path to the folder containing face images for recognition
@@ -14,6 +14,7 @@ tracker: "bytetrack.yaml"  # Path to the tracker configuration file
 
 # Face recognition settings
 match_threshold: 0.6  # Threshold for face similarity matching
+method: "cosine"  # Distance metric for face similarity matching (cosine, euclidean, manhattan)
 
 # Other settings
 show: True  # Show the output video with annotations
