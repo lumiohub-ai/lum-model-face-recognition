@@ -61,20 +61,17 @@ class FaceEngine:
         
         return detections[0]
         
-    def align_face_dlib(self, image, detector, predictor, desired_size=160):
+    def align_face(self, face, size=160):
         # Convert to grayscale for Dlib
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
         # Detect faces
-        rects = detector(gray, 1)
+        rects = self.dlib_detector(gray, 1)
 
         if len(rects) == 0:
             return None # No face detected, return None instead of original image
         
-        # Get the original face rectangle
-        x1, y1, x2, y2 = rects[0].left(), rects[0].top(), rects[0].right(), rects[0].bottom()
-        
         # Get landmarks for the first detected face
-        shape = predictor(gray, rects[0])
+        shape = self.dlib_predictor(gray, rects[0])
         landmarks = np.array([[shape.part(i).x, shape.part(i).y] for i in range(68)])
         
         # Extract eye coordinates
@@ -87,157 +84,128 @@ class FaceEngine:
         angle = np.degrees(np.arctan2(dY, dX)) * -1 # Negative for correct rotation
         
         # Center of the image
-        center = (image.shape[1] // 2, image.shape[0] // 2)
+        center = (face.shape[1] // 2, face.shape[0] // 2)
         
         # Compute rotation matrix
         M = cv2.getRotationMatrix2D(center, angle, scale=1.0)
         
         # Align the image
-        aligned = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
+        aligned = cv2.warpAffine(face, M, (face.shape[1], face.shape[0]))
 
-        # Crop and resize to desired size, centering on eye midpoint
         eye_center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
-        x, y = eye_center[0] - desired_size // 2, eye_center[1] - desired_size // 2
+        x, y = eye_center[0] - size // 2, eye_center[1] - size // 2
         x, y = max(0, x), max(0, y)
-        aligned_face = aligned[y:y + desired_size, x:x + desired_size]
+        aligned_face = aligned[y:y + size, x:x + size]
         
         # Resize to desired size
         if aligned_face.shape[0] > 0 and aligned_face.shape[1] > 0:
-            # First resize to base size
-            aligned_face = cv2.resize(aligned_face, (desired_size, desired_size))
-            
-            # Upsampling to improve quality
-            upsampling_factor = 2  # You can adjust this factor as needed
-            upsampled_size = desired_size * upsampling_factor
-            aligned_face = cv2.resize(aligned_face, (upsampled_size, upsampled_size), 
-                                    interpolation=cv2.INTER_CUBIC)
-            
-            # Resize back to desired size with better quality
-            aligned_face = cv2.resize(aligned_face, (desired_size, desired_size), 
-                                    interpolation=cv2.INTER_AREA)
+            aligned_face = cv2.resize(aligned_face, (size, size))
         else:
-            # Fallback if the dimensions are invalid
             return None
+        
         return aligned_face
 
-    def process_detections(
-            self,
-            frame,
-            frame_num,
-            roi=None,
-            align=True,
-            padding_ratio=0.2 ,
-        ):  
-            im0 = frame.copy()
-
-            if self.current_dets is None:
-                return
-            
-            for idx, det in enumerate(self.current_dets):
-                x1, y1, x2, y2, track_id, conf, _ = map(int, det)
-                w, h = x2 - x1, y2 - y1
-
-                if not self.iou((x1, x2, w, h), roi):
-                   continue
-
-                # Initial crop with padding
-                padding = int(max(w, h) * padding_ratio)
-                x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
-                x2, y2 = min(frame.shape[1], x2 + padding), min(frame.shape[0], y2 + padding)
-
-                face = frame[y1:y2, x1:x2]
-
-                if face.size == 0:
-                    continue
-
-                # Align the face using Dlib
-                aligned_face = self.align_face_dlib(face, self.dlib_detector, self.dlib_predictor)
-            
-                if aligned_face is None:
-                    continue
-
-                if track_id not in self.track_crops_frame:
-                    self.track_crops_frame[track_id], self.track_boxes_frame[track_id] = {}, {}
-
-                self.track_crops_frame[track_id][frame_num] = aligned_face
-                self.track_boxes_frame[track_id][frame_num] = [x1, y1, w, h, conf]
-
-                center = (x1 + w // 2, y1 + h // 2)
-                self.track_road_history.setdefault(track_id, []).append(center)
-                self.all_tracks.add(track_id)
-                color = self.visualize.define_color(track_id)
-
-                cv2.rectangle(im0, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(im0, f"id: {track_id}", (x1, y1), self.visualize.font, self.visualize.font_scale, color, 2)
-
-            if roi is not None:
-                cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 255, 0), 2)
-
+    def process_detections(self, frame, frame_num):
+        im0 = frame.copy()
+        if not self.current_dets:
             return im0
+        
+        for det in self.current_dets:
+            x1, y1, x2, y2, track_id, conf, _ = map(int, det)
+            width, height = x2 - x1, y2 - y1
             
-    def recognize_tracks(
-        self,
-        detections,
-        line_points = None,
-        last_frame = False
-    ) -> List[int]:
+            if not self.is_within_roi((x1, y1, width, height), self.args.roi):
+                continue
+                
+            # Extract face with padding
+            padding = int(max(width, height) * self.args.padding_ratio)
+            x1_padded = max(0, x1 - padding)
+            y1_padded = max(0, y1 - padding)
+            x2_padded = min(frame.shape[1], x2 + padding)
+            y2_padded = min(frame.shape[0], y2 + padding)
+            
+            face = frame[y1_padded:y2_padded, x1_padded:x2_padded]
+            if not face.size:
+                continue
+                
+            # Process optional face alignment
+            aligned_face = face
+            if self.args.align:
+                aligned_result = self.align_face(face)
+                if aligned_result is not None:
+                    aligned_face = aligned_result
+            
+            # Track management
+            self.track_crops_frame.setdefault(track_id, {})[frame_num] = aligned_face
+            self.track_boxes_frame.setdefault(track_id, {})[frame_num] = [x1_padded, y1_padded, width, height, conf]
+            
+            # Track center point for history
+            center = (x1_padded + width // 2, y1_padded + height // 2)
+            self.track_road_history.setdefault(track_id, []).append(center)
+            self.all_tracks.add(track_id)
+            
+            # Visualization
+            color = self.visualize.define_color(track_id)
+            cv2.rectangle(im0, (x1_padded, y1_padded), (x2_padded, y2_padded), color, 2)
+            cv2.putText(im0, f"id: {track_id}", (x1_padded, y1_padded), 
+                    self.visualize.font, self.visualize.font_scale, color, 2)
+        
+        # Draw ROI if specified
+        if self.args.roi is not None:
+            roi = self.args.roi
+            cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 255, 0), 2)
+        
+        return im0
+            
+    def recognize_tracks(self, detections, last_frame=False) -> dict:
         persons_logged = {}
         
-        removed_tracks = detections.removed_tracks.tolist()
+        # Determine which tracks to process
+        removed_tracks = detections.removed_tracks.tolist() if not last_frame else list(self.all_tracks - set(self.passed_tracks))
         removed_tracks = [track_id for track_id in removed_tracks if track_id not in self.passed_tracks]
-
-        if last_frame:
-            removed_tracks = self.all_tracks - set(self.passed_tracks)
-
+        
         for track_id in removed_tracks:
             self.passed_tracks.append(track_id)
             
-            if not self.count_line_passing(track_id, line_points):
-                 continue
-
-            # Skip if track has no data
-            if track_id not in self.track_crops_frame or not self.track_crops_frame[track_id]:
+            # Skip invalid tracks early
+            if (not self.count_line_passing(track_id) or 
+                track_id not in self.track_crops_frame or 
+                not self.track_crops_frame[track_id]):
                 continue
                 
+            # Face recognition processing
             face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
-            name = self.face_recognition.recognize_face(face_embeddings)
+            name, best_sim = self.face_recognition.recognize_face(face_embeddings)
             
-            if name != "Unknown":
-                if name not in self.name_to_consistent_id:
-                    self.name_to_consistent_id[name] = track_id
-                    persons_logged[name] = track_id
-                    consistent_id = track_id
-                else:
-                    consistent_id = self.name_to_consistent_id[name]
-
-                # Map the original track ID to the consistent ID
-                self.id_mapping[track_id] = consistent_id
-                # Use consistent ID for display and result storage
-                display_id = consistent_id
-
-                if self.args.eval:
-                    # Add to MOT results with the consistent ID
-                    for frame_num in self.track_boxes_frame[track_id]:
-                        box = self.track_boxes_frame[track_id][frame_num]
-                        self.mot_results.append({
-                            'frame': frame_num,
-                            'id': display_id,  # Use consistent ID in results
-                            'x': box[0],
-                            'y': box[1],
-                            'w': box[2],
-                            'h': box[3],
-                            'conf': box[4],
-                            'name': name
-                        })
-
+            if name == "Unknown":
+                continue
+                
+            # Consistent ID management - use existing ID or create new one
+            consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
+            persons_logged[name] = track_id
+            self.id_mapping[track_id] = consistent_id
             
-                self.name_to_track_id[track_id] = name
-
-            del self.track_crops_frame[track_id] # to save memory leakages
-
+            # Handle evaluation if enabled
+            if self.args.eval:
+                for frame_num, box in self.track_boxes_frame[track_id].items():
+                    self.mot_results.append({
+                        'frame': frame_num,
+                        'id': consistent_id,
+                        'x': box[0],
+                        'y': box[1],
+                        'w': box[2],
+                        'h': box[3],
+                        'conf': box[4],
+                        'name': name
+                    })
+                    
+            # Store name mapping and clean up memory
+            self.name_to_track_id[track_id] = name
+            del self.track_crops_frame[track_id]  
+            
         return persons_logged
     
-    def iou(self, box1, box2):
+    def is_within_roi(self, box1, box2):
         if box2 is None:
             return True # because user does not want to roi check
         
@@ -253,27 +221,22 @@ class FaceEngine:
         # Check if there is an intersection
         return xA < xB and yA < yB  # Returns True if boxes intersect, else False
 
-    def count_line_passing(self, track_id, line_points) -> bool:
-        if line_points is None:
-            return True # because user does not want to count line passing
-
-        # Get first and last point of the road history
-        if track_id not in self.track_road_history:
-            return False
+    def count_line_passing(self, track_id) -> bool:
+        # Early returns for cases where counting isn't needed or possible
+        if self.args.line_points is None:
+            return True  # User doesn't require line passing check
+            
+        road_points = self.track_road_history.get(track_id, [])
         
-        road_points = self.track_road_history[track_id]
-
         if len(road_points) < 2:
             return False
-        
-        first_point = road_points[0]
-        last_point = road_points[-1]
-
+            
+        # Check if track trajectory intersects with counting line
+        first_point, last_point = road_points[0], road_points[-1]
         track_line = LineString([first_point, last_point])
-        default_line = LineString(line_points)
-
-        if track_line.intersects(default_line):
-            return True
+        default_line = LineString(self.args.line_points)
+        
+        return track_line.intersects(default_line)
     
 
     

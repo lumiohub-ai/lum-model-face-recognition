@@ -28,9 +28,11 @@ class HBFace(FaceEngine):
         self.show_configs()
 
     def show_configs(self) -> None:
-        # Show configurations to user with colors printings
+        """Display configuration settings."""
+        print("\n=== Configuration Settings ===")
         for key, value in self.args.__dict__.items():
             print(f"\033[1m{key}\033[0m: {value}")
+        print("===========================\n")
 
     def load_cfgs(self, config_path, **kwargs):
         # Load config from yaml file
@@ -77,11 +79,10 @@ class HBFace(FaceEngine):
                 continue
 
             # Process detections
-            annotated_frame = self.process_detections(frame, frame_num, roi=self.args.roi)
+            annotated_frame = self.process_detections(frame, frame_num)
 
             # Process removed tracks and recognize faces
-            recognized_persons = self.recognize_tracks(detections, line_points=self.args.line_points,
-                                                        last_frame=(frame_num == self.stream.last_frame))
+            recognized_persons = self.recognize_tracks(detections, last_frame=(frame_num == self.stream.last_frame))
 
             for name, track_id in recognized_persons.items():
                 self.entry_logger.log_person_entry(name, self.cam_type, track_id)
@@ -97,4 +98,4 @@ class HBFace(FaceEngine):
                 self.visualize.display(annotated_frame, window_name=self.cam_type)
             
         self.stream.stop()
-        cv2.destroyAllWindows()
+        # cv2.destroyAllWindows()

@@ -14,6 +14,8 @@ tracker: "bytetrack.yaml"  # Path to the tracker configuration file
 
 # Face recognition settings
 match_threshold: 0.6  # Threshold for face similarity matching
+padding_ratio: 0.2  # Padding ratio for face cropping
+align: True  # Enable face alignment
 method: "cosine"  # Distance metric for face similarity matching (cosine, euclidean, manhattan)
 
 # Other settings

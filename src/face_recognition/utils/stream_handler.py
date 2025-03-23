@@ -63,6 +63,7 @@ class StreamHandler:
         if self.thread is not None:
             self.thread.join()
         self.cap.release()
+        # cv2.destroyAllWindows()
 
     def __enter__(self) -> "StreamHandler":
         return self.start()

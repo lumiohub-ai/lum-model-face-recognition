@@ -101,7 +101,8 @@ class EntryLogger:
 
         if update:
             self.entry_time[name] = now
-            self.recent_entries.append(f'Person: {name} has {status} at {today_time}, with track_id: {track_id}')
+            call = f'Person: {name} has {status} at {today_time}, with track_id: {track_id}'
+            self.recent_entries.append(call)
 
             if status == 'IN':
                 call = 'clientIn'
@@ -115,6 +116,7 @@ class EntryLogger:
                 "clientStatus": status,
                 "clientWorkingDate": str(today_date),
             }
+
 
             # self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
 

@@ -157,8 +157,8 @@ def inference(results, video_paths, alg_name, benchmark):
 
         # Process the video
         streamer = HBFace(cam_type="IN", video_path=video_path, eval=True, 
-                        db_path="data/ilhan-aligned", show=True,
-                        match_threshold=0.6, detection_threshold=0.5, imgsz=1280,
+                        db_path="data/ilhan2", show=True,
+                        match_threshold=0.7, detection_threshold=0.5, imgsz=1280,
                         roi=(302, 82, 986, 976), line_points=[(129, 241), (1799, 267)])
                 
         streamer.run()
