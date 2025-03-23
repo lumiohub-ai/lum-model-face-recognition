@@ -98,4 +98,4 @@ class HBFace(FaceEngine):
                 self.visualize.display(annotated_frame, window_name=self.cam_type)
             
         self.stream.stop()
-        # cv2.destroyAllWindows()
+        cv2.destroyAllWindows()
