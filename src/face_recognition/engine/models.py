@@ -40,7 +40,7 @@ class FaceEngine:
 
         self.current_dets = None
 
-        self.visualize = Visualization()
+        self.visualize = self.args.visualize
         self.frames = {}
     
     def track(self, frame) -> None:

@@ -6,7 +6,7 @@ import cv2
 import yaml
 
 from src.face_recognition.engine import FaceEngine
-from src.face_recognition.utils import Visualization, StreamHandler, EntryLogger
+from src.face_recognition.utils import Visualization, StreamHandler, EntryLogger, ColorLogger
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
@@ -20,7 +20,13 @@ class HBFace(FaceEngine):
         self.stream = StreamHandler(self.args.video_path)
         self.visualize = Visualization()
         self.entry_logger = EntryLogger()
+        self.logger = ColorLogger()
 
+        # Add logger to the args
+        self.args.logger = self.logger
+        self.args.entry_logger = self.entry_logger
+        self.args.visualize = self.visualize
+        
         self.recognized_names = set()
 
         super().__init__(args=self.args)
@@ -31,7 +37,7 @@ class HBFace(FaceEngine):
         """Display configuration settings."""
         print("\n=== Configuration Settings ===")
         for key, value in self.args.__dict__.items():
-            print(f"\033[1m{key}\033[0m: {value}")
+            self.logger.info(f"{key}: {value}")
         print("===========================\n")
 
     def load_cfgs(self, config_path, **kwargs):
@@ -40,7 +46,7 @@ class HBFace(FaceEngine):
             with open(config_path, 'r') as file:
                 config = yaml.safe_load(file)
         except Exception:
-            print("Error loading config file. Using as empty config.")
+            self.logger.error("Error loading config file.")
             config = {}
         
         # Create args object to store all parameters
@@ -99,3 +105,4 @@ class HBFace(FaceEngine):
             
         self.stream.stop()
         cv2.destroyAllWindows()
+        self.logger.info("Exiting..., Successfully processed all frames.")

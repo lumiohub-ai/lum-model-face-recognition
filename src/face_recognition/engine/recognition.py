@@ -53,7 +53,7 @@ class FaceRecognition:
         db_names = list(name_to_embeddings.keys())
         db_embs = np.array(list(name_to_embeddings.values()))
 
-        print(f"Loaded {len(db_names)} face embeddings from {self.args.db_path} as database")
+        self.args.logger.info(f"Loaded {len(db_names)} embeddings from {self.args.db_path}")
 
         return db_names, db_embs
     
