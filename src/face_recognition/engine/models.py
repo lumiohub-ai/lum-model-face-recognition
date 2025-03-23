@@ -5,7 +5,6 @@ sys.path.append(os.curdir)
 from src.face_recognition.engine import FaceRecognition
 from src.face_recognition.utils import Visualization
 
-from typing import List
 import numpy as np
 
 import dlib
@@ -99,7 +98,11 @@ class FaceEngine:
         
         # Resize to desired size
         if aligned_face.shape[0] > 0 and aligned_face.shape[1] > 0:
-            aligned_face = cv2.resize(aligned_face, (size, size))
+            # Upsample to desired size
+
+            aligned_face = cv2.resize(aligned_face, (size, size), 
+                                  interpolation=cv2.INTER_CUBIC)
+            
         else:
             return None
         
