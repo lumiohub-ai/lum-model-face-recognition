@@ -199,13 +199,16 @@ class InceptionResnetV1(nn.Module):
             initialized. (default: {None})
         dropout_prob {float} -- Dropout probability. (default: {0.6})
     """
-    def __init__(self, pretrained=None, classify=False, num_classes=None, dropout_prob=0.6, device=None):
+    def __init__(self, pretrained=None, classify=False, num_classes=None, dropout_prob=0.6, device=None,
+                 layer='layer5'
+                 ):
         super().__init__()
 
         # Set simple attributes
         self.pretrained = pretrained
         self.classify = classify
         self.num_classes = num_classes
+        self.layer = layer
 
         if pretrained == 'vggface2':
             tmp_classes = 8631
@@ -269,65 +272,70 @@ class InceptionResnetV1(nn.Module):
             self.device = device
             self.to(device)
 
-    def forward(self, x, layer_name='repeat_3'):
+    def forward(self, x):
         """Calculate embeddings or logits given a batch of input image tensors.
-        Optionally return intermediate layer outputs with spatial dimensions reduced.
-        
+
         Arguments:
             x {torch.tensor} -- Batch of image tensors representing faces.
-            layer_name {str} -- Optional name of layer to extract features from.
-            
+
         Returns:
-            torch.tensor -- Batch of embedding vectors or multinomial logits,
-                            or intermediate layer representation if layer_name is specified.
+            torch.tensor -- Batch of embedding vectors or multinomial logits.
         """
         layer_outputs = {}
         
-        # Define all layers and their names
-        layers = {
-            'conv2d_1a': self.conv2d_1a,
-            'conv2d_2a': self.conv2d_2a,
-            'conv2d_2b': self.conv2d_2b,
-            'maxpool_3a': self.maxpool_3a,
-            'conv2d_3b': self.conv2d_3b,
-            'conv2d_4a': self.conv2d_4a,
-            'conv2d_4b': self.conv2d_4b,
-            'repeat_1': self.repeat_1,
-            'mixed_6a': self.mixed_6a,
-            'repeat_2': self.repeat_2,
-            'mixed_7a': self.mixed_7a,
-            'repeat_3': self.repeat_3,
-            'block8': self.block8,
-            'avgpool_1a': self.avgpool_1a,
-            'dropout': self.dropout
-        }
-        
-        # Process through each layer and store outputs
-        for name, layer in layers.items():
-            x = layer(x)
-            
-            # Global average pooling to remove spatial dimensions
-            if layer_name == name:
-                # If we have spatial dimensions (H,W > 1), apply global average pooling
-                if x.size(-1) > 1 and x.size(-2) > 1:
-                    return torch.mean(x, dim=[-1, -2])  # Global average pooling
-                # If dimensions are already 1x1 spatial, just squeeze them out
-                elif x.size(-1) == 1 and x.size(-2) == 1:
-                    return x.squeeze(-1).squeeze(-2)
-        
-        # Continue with the regular processing if no layer_name is specified
-        x = x.view(x.shape[0], -1)  # Flatten
-        x = self.last_linear(x)
+        x = self.conv2d_1a(x)
+        layer_outputs['layer0'] = x
+        x = self.conv2d_2a(x)
+        layer_outputs['layer1'] = x
+        x = self.conv2d_2b(x)
+        layer_outputs['layer2'] = x
+        x = self.maxpool_3a(x)
+        layer_outputs['layer3'] = x
+        x = self.conv2d_3b(x)
+        layer_outputs['layer4'] = x
+        x = self.conv2d_4a(x)
+        layer_outputs['layer5'] = x
+        x = self.conv2d_4b(x)
+        layer_outputs['layer6'] = x
+        x = self.repeat_1(x)
+        layer_outputs['layer7'] = x
+        x = self.mixed_6a(x)
+        layer_outputs['layer8'] = x
+        x = self.repeat_2(x)
+        layer_outputs['layer9'] = x
+        x = self.mixed_7a(x)
+        layer_outputs['layer10'] = x
+        x = self.repeat_3(x)
+        layer_outputs['layer11'] = x
+        x = self.block8(x)
+        layer_outputs['layer12'] = x
+        x = self.avgpool_1a(x)
+        layer_outputs['layer13'] = x
+        x = self.dropout(x)
+        layer_outputs['layer14'] = x
+        x = self.last_linear(x.view(x.shape[0], -1))
+        layer_outputs['layer15'] = x
         x = self.last_bn(x)
-        
+        layer_outputs['layer16'] = x
         if self.classify:
             x = self.logits(x)
         else:
             x = F.normalize(x, p=2, dim=1)
-
+        
+        if self.layer:
+            for key, value in layer_outputs.items():
+                if key == self.layer:
+                    if len(value.shape) == 4:
+                        feature_mean = torch.mean(
+                            value, dim=(2, 3))
+                        normalized_feature = feature_mean / \
+                            feature_mean.norm(p=2, dim=1, keepdim=True)
+                        return normalized_feature
+                    else:
+                        return value
+        
         return x
-
-
+    
 def load_weights(mdl, name):
     """Download pretrained state_dict and load into model.
 

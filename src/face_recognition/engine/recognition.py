@@ -11,7 +11,7 @@ class FaceRecognition:
     def __init__(self, args) -> None:
         self.args = args
         self.resnet = (
-            InceptionResnetV1(pretrained="vggface2", classify=False)
+            InceptionResnetV1(pretrained="vggface2", classify=False, layer=self.args.layer)
             .eval()
             .to(self.args.device)
         )
