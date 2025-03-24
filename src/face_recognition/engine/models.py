@@ -3,7 +3,6 @@ import os
 sys.path.append(os.curdir)
 
 from src.face_recognition.engine import FaceRecognition
-from src.face_recognition.utils import Visualization
 
 import numpy as np
 
@@ -12,6 +11,8 @@ from ultralytics import YOLO
 import cv2
 
 from shapely.geometry import LineString
+
+from sklearn.metrics.pairwise import cosine_similarity
 
 class FaceEngine:
     def __init__(self, args) -> None:
@@ -31,6 +32,8 @@ class FaceEngine:
         
         self.name_to_track_id = {}
         self.name_to_consistent_id = {}
+
+        self.sift = cv2.SIFT_create()
         self.dlib_detector = dlib.get_frontal_face_detector()
         self.dlib_predictor = dlib.shape_predictor(
             "models/shape_predictor_68_face_landmarks.dat")  # Download required
@@ -178,7 +181,7 @@ class FaceEngine:
                 
             # Face recognition processing
             face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
-            name, best_sim = self.face_recognition.recognize_face(face_embeddings)
+            name, _ = self.face_recognition.recognize_face(face_embeddings)
             
             if name == "Unknown":
                 continue
@@ -240,9 +243,6 @@ class FaceEngine:
         default_line = LineString(self.args.line_points)
         
         return track_line.intersects(default_line)
-    
-
-    
         
         
         

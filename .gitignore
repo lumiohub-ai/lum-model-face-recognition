@@ -33,3 +33,8 @@ results/
 .vscode/
 
 hb-videos/
+
+# Ignore all folders named "models"
+/models
+# But do NOT ignore the specific folder "facenet_pytorch/models"
+!/facenet_pytorch/models
