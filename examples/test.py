@@ -3,11 +3,17 @@ import os
 sys.path.append(os.curdir)
 from src.face_recognition.hbface import HBFace
 
-video_path = 'hb-videos/out.mp4'
 
-streamer = HBFace(video_path=video_path, cam_type='IN', show=True, db_path='data/hb-kor-aug',
-                  match_threshold=0.6, detection_threshold=0.5, imgsz=1280, eval=False)
+in_camera = '' 
+out_camera = ''
 
-streamer.run()
-
-print(streamer.recognized_names)
+# Multiple cameras
+face_engine_multi = HBFace(
+    cam_types=["IN", "OUT"],
+    video_path=[in_camera, out_camera],
+    multi_camera=True,
+    show=True,
+    match_threshold=0.7,
+    db_path='data/hb-kor',
+)
+face_engine_multi.run()
