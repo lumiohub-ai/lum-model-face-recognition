@@ -12,8 +12,8 @@ sys.path.append(os.curdir)
 from src.face_recognition.hbface import HBFace
 
 # RTSP streams for IN and OUT cameras
-in_camera = 'rtsp://admin:Namhbai01@192.168.13.16:554'
-out_camera = 'rtsp://admin:Namhbai01@192.168.13.17:554'
+in_camera = ''
+out_camera = ''
 
 print("Starting face recognition...")
 print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
