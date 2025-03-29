@@ -1,0 +1,22 @@
+# Use your existing image as base
+FROM vision-app:v2
+
+# Set timezone configuration environment
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Tashkent
+
+# Install utilities and configure tzdata without prompts
+RUN apt-get update && \
+    apt-get install -y \
+        tzdata \
+        curl \
+        nano \
+        netcat && \
+    ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Optional: show timezone in build logs
+RUN date
