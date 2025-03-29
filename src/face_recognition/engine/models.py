@@ -63,38 +63,50 @@ class FaceEngine:
         
         return detections[0]
         
-    def align_face(self, face, size=160):
-        # Convert to grayscale for Dlib
-        gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
-        # Detect faces
+    def align_face(self, image, desired_size=160):
+        # Convert to grayscale for Dlib (optional, improves performance)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Detect faces in the cropped image
         rects = self.dlib_detector(gray, 1)
         if len(rects) == 0:
-            return None # No face detected, return None instead of original image
-        
+            # print("No faces detected by Dlib in cropped region")
+            return image
+
         # Get landmarks for the first detected face
         shape = self.dlib_predictor(gray, rects[0])
         landmarks = np.array([[shape.part(i).x, shape.part(i).y] for i in range(68)])
-        
+
         # Extract eye coordinates
         left_eye = landmarks[36:42].mean(axis=0).astype(int)
         right_eye = landmarks[42:48].mean(axis=0).astype(int)
-        
-        # Calculate angle
+
+        # Calculate angle and center
         dY = right_eye[1] - left_eye[1]
         dX = right_eye[0] - left_eye[0]
-        angle = np.degrees(np.arctan2(dY, dX)) * -1 # Negative for correct rotation
-        
+        angle = np.degrees(np.arctan2(dY, dX)) * -1  # Negative for correct rotation
+
         # Center of the image
-        center = (face.shape[1] // 2, face.shape[0] // 2)
-        
+        center = (image.shape[1] // 2, image.shape[0] // 2)
+
         # Compute rotation matrix
         M = cv2.getRotationMatrix2D(center, angle, scale=1.0)
-        
+
         # Align the image
-        aligned = cv2.warpAffine(face, M, (face.shape[1], face.shape[0]))
+        aligned = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
 
-        return aligned
+        # Crop and resize to desired size, centering on eye midpoint
+        eye_center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
+        x, y = eye_center[0] - desired_size // 2, eye_center[1] - desired_size // 2
+        x, y = max(0, x), max(0, y)
+        aligned = aligned[y:y + desired_size, x:x + desired_size]
 
+        # Ensure the crop is the correct size (if the crop goes out of bounds, resize the whole image)
+        if aligned.shape[0] != desired_size or aligned.shape[1] != desired_size:
+            aligned = cv2.resize(aligned, (desired_size, desired_size))
+
+        return aligned  
+    
     def process_detections(self, frame, frame_num):
         im0 = frame.copy()
         if not self.current_dets:
