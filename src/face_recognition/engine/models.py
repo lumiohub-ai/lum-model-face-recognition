@@ -68,7 +68,6 @@ class FaceEngine:
         gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
         # Detect faces
         rects = self.dlib_detector(gray, 1)
-
         if len(rects) == 0:
             return None # No face detected, return None instead of original image
         
@@ -94,22 +93,7 @@ class FaceEngine:
         # Align the image
         aligned = cv2.warpAffine(face, M, (face.shape[1], face.shape[0]))
 
-        eye_center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
-        x, y = eye_center[0] - size // 2, eye_center[1] - size // 2
-        x, y = max(0, x), max(0, y)
-        aligned_face = aligned[y:y + size, x:x + size]
-        
-        # Resize to desired size
-        if aligned_face.shape[0] > 0 and aligned_face.shape[1] > 0:
-            # Upsample to desired size
-
-            aligned_face = cv2.resize(aligned_face, (size, size), 
-                                  interpolation=cv2.INTER_CUBIC)
-            
-        else:
-            return None
-        
-        return aligned_face
+        return aligned
 
     def process_detections(self, frame, frame_num):
         im0 = frame.copy()
