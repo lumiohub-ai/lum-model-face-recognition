@@ -1,40 +1,42 @@
-FROM nvcr.io/nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
-# Install system dependencies
+WORKDIR /usr/src/vision-app
+
+# Install system dependencies and Python
 RUN apt-get update && apt-get install -y \
-    python3-pip \
+    build-essential \
+    cmake \
+    libopenblas-dev \
+    liblapack-dev \
+    libx11-dev \
+    libgtk-3-dev \
     python3-dev \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
+    python3-pip \
+    python3-numpy \
     git \
-    ffmpeg \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
-WORKDIR /app
+# Set Python3 as default
+RUN ln -sf /usr/bin/python3 /usr/bin/python && \
+    ln -sf /usr/bin/pip3 /usr/bin/pip
 
-# Copy project files
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install PyTorch with GPU support
+RUN pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
+
+# Copy the rest of the application
 COPY . .
 
-# Upgrade pip and install dependencies
-RUN pip install --upgrade pip
+# Expose the port the app runs on
+EXPOSE 5003
 
-# Process requirements file to fix dependency conflicts
-RUN pip install -r requirements.txt
+RUN apt-get update && apt-get install curl -y
+RUN apt-get update && apt-get install nano -y
+RUN apt-get update && apt-get install -y netcat
 
-# Set CUDA environment variables
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-ENV CUDA_VISIBLE_DEVICES=0
-
-# Set PYTHONPATH to ensure module imports work correctly
-ENV PYTHONPATH="${PYTHONPATH}:/app"
-
-# Make scripts executable
-RUN chmod +x examples/test.py
-
-# Create required directories if they don't exist
-RUN mkdir -p data/hb-kor models videos results
-
-# Default command
-CMD ["python3", "examples/test.py"]
+# Command to run the application
+# CMD ["python", "examples/test.py"]

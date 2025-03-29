@@ -120,8 +120,8 @@ class FaceEngine:
             x1, y1, x2, y2, track_id, conf, _ = map(int, det)
             width, height = x2 - x1, y2 - y1
             
-            if not self.is_within_roi((x1, y1, width, height), self.args.roi):
-                continue
+            # if not self.is_within_roi((x1, y1, width, height), self.args.roi):
+            #     continue
                 
             # Extract face with padding
             padding = int(max(width, height) * self.args.padding_ratio)
@@ -156,10 +156,10 @@ class FaceEngine:
             cv2.putText(im0, f"id: {track_id}", (x1_padded, y1_padded), 
                     self.visualize.font, self.visualize.font_scale, color, 2)
         
-        # Draw ROI if specified
-        if self.args.roi is not None:
-            roi = self.args.roi
-            cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 255, 0), 2)
+        # # Draw ROI if specified
+        # if self.args.roi is not None:
+        #     roi = self.args.roi
+        #     cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 255, 0), 2)
         
         return im0
             

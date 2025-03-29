@@ -21,7 +21,7 @@ layer: null # Feature extraction layer (layer0, layer16)
 
 # Other settings
 show: True  # Show the output video with annotations
-save_output: True  # Save the output video with annotations
+save_video: True  # Save the output video with annotations
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
