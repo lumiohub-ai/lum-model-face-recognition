@@ -37,7 +37,7 @@ def draw_rectangle_interactive(image_path):
     cv2.destroyAllWindows()
 
 # Example usage
-image_path = "frame.jpg"  # Replace with your image path
+image_path = "/home/hbvision/mirsaid/smart-office/frame_in.jpg"  # Replace with your image path
 draw_rectangle_interactive(image_path)
 
 

@@ -16,6 +16,15 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 sys.path.append(os.curdir)
 
 # Import local modules
+from numpy.typing import NDArray
+
+# Set RTSP environment variable for OpenCV
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+
+# Add current directory to path
+sys.path.append(os.curdir)
+
+# Import local modules
 from src.face_recognition.engine import FaceEngine
 from src.face_recognition.utils import Visualization, StreamHandler, EntryLogger, ColorLogger
 
@@ -132,6 +141,8 @@ class HBFace:
         try:
             with open(config_path, 'r') as file:
                 config = yaml.safe_load(file)
+        except Exception as e:
+            self.logger.error(f"Error loading config file: {e}")
         except Exception as e:
             self.logger.error(f"Error loading config file: {e}")
             config = {}

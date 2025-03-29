@@ -63,7 +63,7 @@ class ShapeDrawer:
         return self.shapes
 
 # Example usage
-image_path = "frame.jpg"  # Replace with your image path
+image_path = "/home/hbvision/mirsaid/smart-office/frame_OUT.jpg"  # Replace with your image path
 image = cv2.imread(image_path)
 drawer = ShapeDrawer(image)
 shapes = drawer.run()

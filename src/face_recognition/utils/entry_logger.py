@@ -45,7 +45,7 @@ class EntryLogger:
         self.auth_client = self.authorize_user()
 
     def authorize_user(self):
-        url = 'http://localhost:5002/graphql'
+        url = 'http://backend:4000/graphql'
 
         client = Client(
             transport=RequestsHTTPTransport(
@@ -57,8 +57,8 @@ class EntryLogger:
 
         login_variables = {
             "input": {
-                "memberNick": "Ilhan", 
-                "memberPassword": "1223456"
+                "memberNick": "Admin", 
+                "memberPassword": "123456"
             }
         }
 
