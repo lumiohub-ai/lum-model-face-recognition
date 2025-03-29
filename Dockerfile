@@ -34,9 +34,23 @@ COPY . .
 # Expose the port the app runs on
 EXPOSE 5003
 
-RUN apt-get update && apt-get install curl -y
-RUN apt-get update && apt-get install nano -y
-RUN apt-get update && apt-get install -y netcat
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Tashkent
+
+# Install utilities and tzdata without prompts
+RUN apt-get update && \
+    apt-get install -y \
+        tzdata \
+        curl \
+        nano \
+        netcat && \
+    ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN date
 
 # Command to run the application
 # CMD ["python", "examples/test.py"]
