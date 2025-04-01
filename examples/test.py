@@ -1,14 +1,7 @@
 import sys
 import os
-
-# Set timezone to Asia/Tashkent
-os.environ['TZ'] = 'Asia/Tashkent'
-import time
-time.tzset()
-
-from datetime import datetime
 sys.path.append(os.curdir)
-
+from datetime import datetime
 from src.face_recognition.hbface import HBFace
 
 # RTSP streams for IN and OUT cameras
@@ -26,8 +19,8 @@ face_engine_multi = HBFace(
     line_points=[[(0, 273), (631, 264)], [(1, 2), (636, 712)]],
     multi_camera=True,
     show=False,  # Disable display, just process and save
-    match_threshold=0.7,
-    detection_threshold=0.7,
+    match_threshold=0.6,
+    detection_threshold=0.5,
     imgsz=1280,
     padding_ratio=0.2,
     db_path='data/hb-uzb',

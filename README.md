@@ -139,19 +139,38 @@ python examples/test.py
 import sys
 import os
 sys.path.append(os.curdir)
+from datetime import datetime
 from src.face_recognition.hbface import HBFace
 
-video_path = 'in.mp4'
+# RTSP streams for IN and OUT cameras
+in_camera = ''
+out_camera = ''
 
-# For argument given to class, refer to config.yaml, every parameter can  be input here
-streamer = HBFace(video_path=video_path, cam_type='IN', show=True, db_path='data/hb-kor',
-                  match_threshold=0.5, detection_threshold=0.5, imgsz=960, eval=False)
+print("Starting face recognition...")
+print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-streamer.run()
+# Initialize HBFace for multi-camera setup
+face_engine_multi = HBFace(
+    cam_types=["IN", "OUT"],
+    video_path=[in_camera, out_camera],
+    roi=[(383, 53, 1015, 709), (639, 1, 1276, 717)],
+    line_points=[[(0, 273), (631, 264)], [(1, 2), (636, 712)]],
+    multi_camera=True,
+    show=False,  # Disable display, just process and save
+    match_threshold=0.6,
+    detection_threshold=0.5,
+    imgsz=1280,
+    padding_ratio=0.2,
+    db_path='data/hb-uzb',
+)
 
-print(streamer.recognized_names)
+# Run the face recognition system
+face_engine_multi.run()
+
+print("Face recognition completed.")
+print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
 ```
-
 
 ---
 ## 📊 Evaluation
