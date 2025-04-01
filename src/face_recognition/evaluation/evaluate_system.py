@@ -223,7 +223,7 @@ class Evaluator:
 
         # Create face recognition system with evaluation enabled
         streamer = HBFace(
-            cam_type="IN", 
+            cam_type=["IN"], 
             video_path=video_path, 
             eval=True,
             db_path=self.db_path, 
@@ -241,7 +241,7 @@ class Evaluator:
 
         # Save MOT results
         self.save_inference_results(
-            streamer.mot_results, 
+            streamer.engines[0].mot_results, 
             output_recognition_path, 
             output_tracking_path
         )

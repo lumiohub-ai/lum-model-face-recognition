@@ -1,5 +1,5 @@
 # Device settings
-device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+device: "cuda:1"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
 db_path: "data/ilhan-aligned"  # Path to the folder containing face images for recognition
@@ -11,6 +11,10 @@ model_path: "models/yolov8m-face.pt"  # Path to the face detection model
 detection_threshold: 0.5  # Confidence threshold for face detection
 imgsz: 1280  # Image size for inference (higher values improve accuracy but increase processing time)
 tracker: "bytetrack.yaml"  # Path to the tracker configuration file
+
+# SVM settings
+svm_model_path: "models/svm_model.joblib"  # Path to the SVM model for face recognition
+svm_label_path: "models/svm_labels.pkl"  # Path to the SVM labels for face recognition
 
 # Face recognition settings
 match_threshold: 0.6  # Threshold for face similarity matching

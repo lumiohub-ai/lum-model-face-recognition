@@ -3,6 +3,8 @@ import os
 import torch
 import cv2
 import numpy as np
+import joblib
+import pickle
 
 from facenet_pytorch import InceptionResnetV1
 from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances, manhattan_distances
@@ -15,7 +17,13 @@ class FaceRecognition:
             .eval()
             .to(self.args.device)
         )
-        self.db_names, self.db_embs = self.load_embeddings()
+        self.svm_classifier = joblib.load(self.args.svm_model_path)
+        with open(self.args.svm_label_path, 'rb') as f:
+            self.id_to_name = pickle.load(f)
+
+        self.args.logger.info(f"Loaded SVM classifier with {len(self.id_to_name)} classes")
+
+        self.db_names, self.db_embs = self.load_embeddings()      
 
     def compute_embeddings(self, faces):
         resized_faces = [cv2.resize(face, (160, 160)) for face in faces]
@@ -59,14 +67,7 @@ class FaceRecognition:
         return db_names, db_embs
     
     def recognize_face(self, face_embs):  
-        if self.args.method == 'cosine':
-            similarities = cosine_similarity(face_embs, self.db_embs)
-        elif self.args.method == 'euclidean':
-            similarities = -euclidean_distances(face_embs, self.db_embs)  # Negate to make it similar to cosine similarity
-        elif self.args.method == 'manhattan':
-            similarities = -manhattan_distances(face_embs, self.db_embs)  # Negate to make it similar to cosine similarity
-        else:
-            raise ValueError(f"Unknown method: {self.args.method}")
+        similarities = cosine_similarity(face_embs, self.db_embs)
              
         # Get the indices of maximum similarity for each face
         max_sim_indices = np.argmax(similarities, axis=1)
@@ -89,4 +90,47 @@ class FaceRecognition:
                 if name not in self.db_names:
                     self.db_names.append(self.compute_embeddings(
                        [cv2.imread(os.path.join(self.db_path, file))]))
+                    
+    # def recognize_face(self, face_embs):        
+    #     if self.svm_classifier is None:
+    #         return "Unknown", 0.0
+        
+    #     # Make predictions for each frame
+    #     if len(face_embs.shape) > 1 and face_embs.shape[0] > 1:
+    #         # Multiple frames
+    #         predictions = []
+    #         confidences = []
+            
+    #         for i in range(face_embs.shape[0]):
+    #             # Get embedding for this frame
+    #             frame_embedding = face_embs[i].reshape(1, -1)
+                
+    #             # Predict class
+    #             predicted_class = self.svm_classifier.predict(frame_embedding)[0]
+    #             class_probabilities = self.svm_classifier.predict_proba(frame_embedding)[0]
+                
+    #             # Get confidence for this prediction
+    #             confidence = class_probabilities[predicted_class]
+                
+    #             predictions.append(predicted_class)
+    #             confidences.append(confidence)
+            
+    #         # Find the index of the prediction with highest confidence
+    #         best_idx = np.argmax(confidences)
+    #         predicted_class = predictions[best_idx]
+    #         confidence = confidences[best_idx]
+    #     else:
+    #         # Single embedding
+    #         frame_embedding = face_embs.reshape(1, -1)
+    #         predicted_class = self.svm_classifier.predict(frame_embedding)[0]
+    #         class_probabilities = self.svm_classifier.predict_proba(frame_embedding)[0]
+    #         confidence = class_probabilities[predicted_class]
+        
+    #     print(f"Predicted class: {self.id_to_name[predicted_class]}, Confidence: {confidence}")
+        
+    #     # Apply threshold
+    #     if confidence > self.args.match_threshold:
+    #         return self.id_to_name[predicted_class], confidence
+    #     else:
+    #         return "Unknown", confidence
 

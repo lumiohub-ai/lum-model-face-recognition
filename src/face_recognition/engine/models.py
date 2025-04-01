@@ -47,6 +47,7 @@ class FaceEngine:
         self.frames = {}
     
     def track(self, frame) -> None:
+        
         detections = self.detector.track(
                 frame,
                 verbose=False,
@@ -71,7 +72,7 @@ class FaceEngine:
         rects = self.dlib_detector(gray, 1)
         if len(rects) == 0:
             # print("No faces detected by Dlib in cropped region")
-            return image
+            return None
 
         # Get landmarks for the first detected face
         shape = self.dlib_predictor(gray, rects[0])
@@ -108,6 +109,7 @@ class FaceEngine:
         return aligned  
     
     def process_detections(self, frame, frame_num):
+        min_face_size = 50
         im0 = frame.copy()
         if not self.current_dets:
             return im0
@@ -115,10 +117,9 @@ class FaceEngine:
         for det in self.current_dets:
             x1, y1, x2, y2, track_id, conf, _ = map(int, det)
             width, height = x2 - x1, y2 - y1
+
+            self.all_tracks.add(track_id)
             
-            # if not self.is_within_roi((x1, y1, width, height), self.args.roi):
-            #     continue
-                
             # Extract face with padding
             padding = int(max(width, height) * self.args.padding_ratio)
             x1_padded = max(0, x1 - padding)
@@ -127,24 +128,26 @@ class FaceEngine:
             y2_padded = min(frame.shape[0], y2 + padding)
             
             face = frame[y1_padded:y2_padded, x1_padded:x2_padded]
-            if not face.size:
+
+            # Track center point for history
+            center = (x1_padded + width // 2, y1_padded + height // 2)
+            self.track_road_history.setdefault(track_id, []).append(center)
+            
+            if width < min_face_size or height < min_face_size or not face.size :
                 continue
                 
             # Process optional face alignment
             aligned_face = face
             if self.args.align:
                 aligned_result = self.align_face(face)
-                if aligned_result is not None:
-                    aligned_face = aligned_result
+                aligned_face = aligned_result
+
+            if aligned_face is None:
+                continue
             
             # Track management
             self.track_crops_frame.setdefault(track_id, {})[frame_num] = aligned_face
             self.track_boxes_frame.setdefault(track_id, {})[frame_num] = [x1_padded, y1_padded, width, height, conf]
-            
-            # Track center point for history
-            center = (x1_padded + width // 2, y1_padded + height // 2)
-            self.track_road_history.setdefault(track_id, []).append(center)
-            self.all_tracks.add(track_id)
             
             # Visualization
             color = self.visualize.define_color(track_id)
