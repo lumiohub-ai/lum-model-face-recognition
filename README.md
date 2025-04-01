@@ -91,6 +91,14 @@ pip install -r requirements.txt
 git clone https://github.com/humblebeeintel/TrackEval
 ```
 
+### 4. 📥 Download databases and models
+
+1. Download models from here: [LINK](https://drive.google.com/drive/folders/140jyB_uM2PF9-CBVtQCR4hFJJ4Ql0TFs?usp=sharing)
+
+2. Download database from here: [LINK](https://drive.google.com/drive/folders/1kntepMW_Pr2ws-xxGcKbV4kKd4DNY9Yu?usp=sharing)
+
+3. Place put them in the main directory of the repository 
+
 ## ⚙️ Configuration
 
 [**`src/face_recognition/cfg/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/src/face_recognition/cfg/config.yaml):

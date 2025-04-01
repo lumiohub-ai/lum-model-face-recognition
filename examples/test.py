@@ -5,7 +5,7 @@ from datetime import datetime
 from src.face_recognition.hbface import HBFace
 
 # RTSP streams for IN and OUT cameras
-in_camera = ''
+in_camera = '' 
 out_camera = ''
 
 print("Starting face recognition...")
