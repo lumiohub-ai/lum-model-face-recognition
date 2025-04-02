@@ -56,7 +56,6 @@ class HBFace:
         self.video_paths = video_paths
         roi_all = kwargs.pop('roi', None)
         line_points_all = kwargs.pop('line_points', None)
-        self.entry_logger = EntryLogger()
 
         os.makedirs("saved_videos", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -219,15 +218,13 @@ class HBFace:
             annotated_frame = engine.process_detections(frame, frame_num)
             recognized_persons = engine.recognize_tracks(detections, last_frame=last_frame)
 
-            entry_logger = self.entry_logger if hasattr(self, 'entry_logger') else engine.args.entry_logger
             for name, (track_id, appear_time) in recognized_persons.items():
-                entry_logger.log_person_entry(name, cam_type, track_id, appear_time)
+                self.entry_logger.log_person_entry(name, cam_type, track_id, appear_time)
 
 
             if engine.args.line_points is not None:
-                cv2.line(annotated_frame, engine.args.line_points[0],
-                         engine.args.line_points[1], (0, 255, 0), 2)
-
+                annotated_frame = self._draw_line(annotated_frame, engine.args.line_points)
+                
             cv2.putText(
                 annotated_frame,
                 f"Camera: {cam_type}",

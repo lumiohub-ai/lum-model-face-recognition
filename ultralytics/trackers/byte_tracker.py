@@ -390,9 +390,9 @@ class BYTETracker:
             activated_stracks.append(track)
         # Step 5: Update state
         for track in self.lost_stracks:
-            list_of_ended_track_ids.append(track.track_id)
             if self.frame_id - track.end_frame > self.max_time_lost:
                 track.mark_removed()
+                list_of_ended_track_ids.append(track.track_id)
                 removed_stracks.append(track)
 
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]

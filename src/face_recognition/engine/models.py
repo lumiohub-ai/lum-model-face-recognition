@@ -179,8 +179,9 @@ class FaceEngine:
             # Skip invalid tracks early
             if (not self.count_line_passing(track_id) or 
                 track_id not in self.track_crops_frame):
-                self.args.logger.critical(f"Track ID {track_id} failed line passing check or has no crops.")
+                self.args.logger.debug(f"Track ID {track_id} failed line passing check or has no crops.")
                 continue
+
                 
             # Face recognition processing
             face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
