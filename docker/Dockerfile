@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
 
 WORKDIR /usr/src/vision-app
 
@@ -12,8 +12,10 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-dev \
     python3-dev \
     python3-pip \
-    python3-numpy \
     git \
+    curl \
+    nano \
+    netcat \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,35 +24,19 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python && \
     ln -sf /usr/bin/pip3 /usr/bin/pip
 
 # Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY ../requirements.txt .
+RUN pip install meson ninja
+RUN pip install --no-cache-dir pycairo
+RUN pip install -r requirements.txt
 
 # Install PyTorch with GPU support
-RUN pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
+RUN pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu122
 
 # Copy the rest of the application
 COPY . .
 
 # Expose the port the app runs on
 EXPOSE 5003
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=Asia/Tashkent
-
-# Install utilities and tzdata without prompts
-RUN apt-get update && \
-    apt-get install -y \
-        tzdata \
-        curl \
-        nano \
-        netcat && \
-    ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && \
-    echo $TZ > /etc/timezone && \
-    dpkg-reconfigure -f noninteractive tzdata && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN date
 
 # Command to run the application
 # CMD ["python", "examples/test.py"]

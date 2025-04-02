@@ -14,6 +14,7 @@ myenv/
 
 
 *.txt
+*.npz
 *.json
 
 *.engine

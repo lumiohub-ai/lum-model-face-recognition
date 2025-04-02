@@ -1,9 +1,9 @@
 # Use your existing image as base
-FROM vision-app:v2
+FROM face-recognition:latest
 
 # Set timezone configuration environment
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=Asia/Tashkent
+ENV TZ=Asia/Seoul
 
 # Install utilities and configure tzdata without prompts
 RUN apt-get update && \

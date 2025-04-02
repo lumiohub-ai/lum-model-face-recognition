@@ -13,6 +13,9 @@ import cv2
 from shapely.geometry import LineString
 
 from sklearn.metrics.pairwise import cosine_similarity
+from datetime import datetime
+import pytz
+timezone = pytz.timezone("Asia/Seoul")
 
 
 class FaceEngine:
