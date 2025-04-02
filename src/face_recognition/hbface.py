@@ -8,16 +8,6 @@ from datetime import datetime
 import cv2
 import yaml
 from numpy.typing import NDArray
-
-# Set RTSP environment variable for OpenCV
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
-# Add current directory to path
-sys.path.append(os.curdir)
-
-# Import local modules
-from numpy.typing import NDArray
-
 # Set RTSP environment variable for OpenCV
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
@@ -50,6 +40,7 @@ class HBFace:
         self.engines: List[FaceEngine] = []
         self.visualize = Visualization()
         self.logger = ColorLogger()
+        self.entry_logger = EntryLogger()
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
 
         if multi_camera:
@@ -78,7 +69,6 @@ class HBFace:
             args.roi = roi_all[i] if roi_all and i < len(roi_all) else None
             args.line_points = line_points_all[i] if line_points_all and i < len(line_points_all) else None
             args.logger = self.logger
-            args.entry_logger = self.entry_logger
             args.visualize = self.visualize
             args.cam_type = cam_type
 
@@ -101,6 +91,7 @@ class HBFace:
                 self.video_writers.append(None)
 
         self._show_config(self.engines[0].args)
+        self._show_config(self.engines[1].args)
 
     def _setup_single_camera(self, cam_type, video_path, config_path, **kwargs):
         self.cam_type = cam_type or "Camera"
@@ -109,10 +100,7 @@ class HBFace:
         args.line_points = kwargs.get('line_points')
         args.cam_type = self.cam_type
         args.logger = self.logger
-        args.entry_logger = EntryLogger()
         args.visualize = self.visualize
-
-        self.entry_logger = args.entry_logger
 
         stream = StreamHandler(args.video_path)
         self.streams = [stream]
@@ -231,9 +219,8 @@ class HBFace:
             annotated_frame = engine.process_detections(frame, frame_num)
             recognized_persons = engine.recognize_tracks(detections, last_frame=last_frame)
 
-            entry_logger = self.entry_logger if hasattr(self, 'entry_logger') else engine.args.entry_logger
             for name, track_id in recognized_persons.items():
-                entry_logger.log_person_entry(name, cam_type, track_id)
+                self.entry_logger.log_person_entry(name, cam_type, track_id)
 
             if engine.args.line_points is not None:
                 cv2.line(annotated_frame, engine.args.line_points[0],
@@ -249,7 +236,7 @@ class HBFace:
                 2
             )
 
-            entry_logger.visualize_entries(annotated_frame)
+            self.entry_logger.visualize_entries(annotated_frame)
             annotated_frames.append(annotated_frame)
 
         return annotated_frames
