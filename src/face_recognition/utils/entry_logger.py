@@ -1,5 +1,6 @@
 from datetime import datetime
 from collections import deque
+import pytz
 import cv2
 from gql import Client
 from gql.transport.requests import RequestsHTTPTransport
@@ -79,12 +80,10 @@ class EntryLogger:
 
         return auth_client
 
-    def log_person_entry(self, name, status, track_id):
+    def log_person_entry(self, name, status, track_id, appear_time):
         update = False
-
-        now =  datetime.now()
-        today_date = now.strftime("%Y-%m-%d")
-        today_time = now.strftime("%H:%M:%S")
+        today_date = appear_time.strftime("%Y-%m-%d")
+        today_time = appear_time.strftime("%H:%M:%S")
 
         if name not in self.person_status.keys():
             # IF new name appears add key to the dictionary and add the status
@@ -98,7 +97,7 @@ class EntryLogger:
                 update = True
 
         if update:
-            self.entry_time[name] = now
+            self.entry_time[name] = today_time
             call = f'Person: {name} has {status} at {today_time}, with track_id: {track_id}'
             self.recent_entries.append(call)
 

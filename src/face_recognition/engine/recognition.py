@@ -17,11 +17,6 @@ class FaceRecognition:
             .eval()
             .to(self.args.device)
         )
-        self.svm_classifier = joblib.load(self.args.svm_model_path)
-        with open(self.args.svm_label_path, 'rb') as f:
-            self.id_to_name = pickle.load(f)
-
-        self.args.logger.info(f"Loaded SVM classifier with {len(self.id_to_name)} classes")
 
         self.db_names, self.db_embs = self.load_embeddings()      
 

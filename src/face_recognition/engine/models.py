@@ -14,6 +14,7 @@ from shapely.geometry import LineString
 
 from sklearn.metrics.pairwise import cosine_similarity
 
+
 class FaceEngine:
     def __init__(self, args) -> None:
         self.args = args
@@ -28,6 +29,7 @@ class FaceEngine:
         self.track_road_history = {}
 
         self.all_tracks = set()
+        self.id_appear_time = {}
         self.passed_tracks = []
         
         self.name_to_track_id = {}
@@ -115,11 +117,12 @@ class FaceEngine:
             return im0
         
         for det in self.current_dets:
+            now = datetime.now(timezone)
             x1, y1, x2, y2, track_id, conf, _ = map(int, det)
             width, height = x2 - x1, y2 - y1
 
             self.all_tracks.add(track_id)
-            
+            self.id_appear_time.setdefault(track_id, now)
             # Extract face with padding
             padding = int(max(width, height) * self.args.padding_ratio)
             x1_padded = max(0, x1 - padding)
@@ -187,7 +190,8 @@ class FaceEngine:
                 
             # Consistent ID management - use existing ID or create new one
             consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
-            persons_logged[name] = track_id
+            persons_logged[name] = [track_id, self.id_appear_time[track_id]]
+
             self.id_mapping[track_id] = consistent_id
             
             # Handle evaluation if enabled

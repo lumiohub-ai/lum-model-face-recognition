@@ -41,7 +41,7 @@ class HBFace:
         cam_type: Optional[str] = None,
         cam_types: Optional[List[str]] = None,
         video_path: Optional[Union[str, List[str]]] = None,
-        multi_camera: bool = False,
+        multi_camera: bool = True,
         config_path: str = "src/face_recognition/cfg/config.yaml",
         **kwargs
     ) -> None:
@@ -232,8 +232,9 @@ class HBFace:
             recognized_persons = engine.recognize_tracks(detections, last_frame=last_frame)
 
             entry_logger = self.entry_logger if hasattr(self, 'entry_logger') else engine.args.entry_logger
-            for name, track_id in recognized_persons.items():
-                entry_logger.log_person_entry(name, cam_type, track_id)
+            for name, (track_id, appear_time) in recognized_persons.items():
+                entry_logger.log_person_entry(name, cam_type, track_id, appear_time)
+
 
             if engine.args.line_points is not None:
                 cv2.line(annotated_frame, engine.args.line_points[0],
