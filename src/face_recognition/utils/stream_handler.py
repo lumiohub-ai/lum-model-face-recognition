@@ -7,7 +7,9 @@ class StreamHandler:
     def __init__(self, src: Any) -> None:
         self.src = src
         self.is_video = self.is_video_file(src)
-        self.cap = cv2.VideoCapture(src)
+        self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+        if not self.cap.isOpened():
+            raise ValueError(f"Unable to open source: {src}")
         self.stopped = False
         self.lock = threading.Lock()
         self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame

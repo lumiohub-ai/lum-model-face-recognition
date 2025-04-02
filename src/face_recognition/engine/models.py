@@ -32,10 +32,8 @@ class FaceEngine:
         self.id_appear_time = {}
         self.passed_tracks = []
         
-        self.name_to_track_id = {}
         self.name_to_consistent_id = {}
 
-        self.sift = cv2.SIFT_create()
         self.dlib_detector = dlib.get_frontal_face_detector()
         self.dlib_predictor = dlib.shape_predictor(
             "models/shape_predictor_68_face_landmarks.dat")  # Download required
@@ -111,7 +109,7 @@ class FaceEngine:
         return aligned  
     
     def process_detections(self, frame, frame_num):
-        min_face_size = 50
+        min_face_size = 40
         im0 = frame.copy()
         if not self.current_dets:
             return im0
@@ -177,16 +175,19 @@ class FaceEngine:
             
             # Skip invalid tracks early
             if (not self.count_line_passing(track_id) or 
-                track_id not in self.track_crops_frame or 
-                not self.track_crops_frame[track_id]):
+                track_id not in self.track_crops_frame):
+                self.args.logger.critical(f"Track ID {track_id} failed line passing check or has no crops.")
                 continue
                 
             # Face recognition processing
             face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
-            name, _ = self.face_recognition.recognize_face(face_embeddings)
+            name, best_sim = self.face_recognition.recognize_face(face_embeddings)
             
             if name == "Unknown":
+                self.args.logger.critical(f"Unknown face detected with track ID {track_id} and similarity {best_sim:.2f}")
                 continue
+
+            self.args.logger.info(f"Recognized {name} with track ID {track_id} with best similarity {best_sim:.2f}")
                 
             # Consistent ID management - use existing ID or create new one
             consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
@@ -209,7 +210,6 @@ class FaceEngine:
                     })
                     
             # Store name mapping and clean up memory
-            self.name_to_track_id[track_id] = name
             del self.track_crops_frame[track_id]  
             
         return persons_logged
