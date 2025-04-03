@@ -395,6 +395,10 @@ class BYTETracker:
                 list_of_ended_track_ids.append(track.track_id)
                 removed_stracks.append(track)
 
+        # for track in self.tracked_stracks:
+        #     if track.state == TrackState.Removed:
+        #         list_of_ended_track_ids.append(track.track_id)
+
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
         self.tracked_stracks = self.joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = self.joint_stracks(self.tracked_stracks, refind_stracks)

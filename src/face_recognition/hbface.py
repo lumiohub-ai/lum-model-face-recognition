@@ -28,6 +28,7 @@ class CameraConfig:
 class HBFace:
     def __init__(
         self,
+        # TODO: merge cam_type and cam_types into a single argument
         cam_type: Optional[str] = None,
         cam_types: Optional[List[str]] = None,
         video_path: Optional[Union[str, List[str]]] = None,
@@ -40,7 +41,7 @@ class HBFace:
         self.engines: List[FaceEngine] = []
         self.visualize = Visualization()
         self.logger = ColorLogger()
-        self.entry_logger = EntryLogger()
+        self.entry_logger = EntryLogger(backend_url=kwargs.get('backend_url', 'http://backend:4000/graphql'))
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
 
         if multi_camera:
@@ -90,7 +91,7 @@ class HBFace:
                 self.video_writers.append(None)
 
         self._show_config(self.engines[0].args)
-        self._show_config(self.engines[1].args)
+        # self._show_config(self.engines[1].args)
 
     def _setup_single_camera(self, cam_type, video_path, config_path, **kwargs):
         self.cam_type = cam_type or "Camera"

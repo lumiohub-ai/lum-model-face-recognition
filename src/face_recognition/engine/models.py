@@ -137,7 +137,7 @@ class FaceEngine:
             center = (x1_padded + width // 2, y1_padded + height // 2)
             self.track_road_history.setdefault(track_id, []).append(center)
             
-            if width < min_face_size or height < min_face_size or not face.size :
+            if width < min_face_size or height < min_face_size or not face.size:
                 continue
                 
             # Process optional face alignment

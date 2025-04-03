@@ -1,6 +1,4 @@
-from datetime import datetime
 from collections import deque
-import pytz
 import cv2
 from gql import Client
 from gql.transport.requests import RequestsHTTPTransport
@@ -37,16 +35,17 @@ RECORD_DATA = gql('''
 ''')
 
 class EntryLogger:
-    def __init__(self):
+    def __init__(self, backend_url):
+        self.backend_url = backend_url
         self.entry_time = {}
-        self.recent_entries = deque(maxlen=5)
+        self.recent_entries = deque(maxlen=3)
         self.base_y = 30
         self.padding = 10
         self.person_status = {}
         self.auth_client = self.authorize_user()
 
     def authorize_user(self):
-        url = 'http://backend:4000/graphql'
+        url = self.backend_url
 
         client = Client(
             transport=RequestsHTTPTransport(
@@ -81,42 +80,37 @@ class EntryLogger:
         return auth_client
 
     def log_person_entry(self, name, status, track_id, appear_time):
-        update = False
+        updated = False
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
-
-        if name not in self.person_status.keys():
-            # IF new name appears add key to the dictionary and add the status
+        
+        # Check if the person's status is new or has changed
+        if self.person_status.get(name) != status:
             self.person_status[name] = status
-            update = True
-
-        else:
-            # Check whether status has updated or not
-            if self.person_status[name] != status:
-                self.person_status[name] = status
-                update = True
-
-        if update:
+            updated = True
+        
+        if updated:
+            # Update the entry time and log the event
             self.entry_time[name] = today_time
-            call = f'Person: {name} has {status} at {today_time}, with track_id: {track_id}'
-            self.recent_entries.append(call)
-
-            if status == 'IN':
-                call = 'clientIn'
-            else:
-                call = 'clientOut'
-
-            # API Call to send the data to the server
-            input_variable = {
+            log_message = f"Person: {name} has {status} at {today_time}, with track_id: {track_id}"
+            self.recent_entries.append(log_message)
+            
+            # Determine the action key based on status
+            client_action_key = "clientIn" if status.upper() == "IN" else "clientOut"
+            
+            # Prepare the payload for the API call
+            payload = {
                 "clientName": name,
-                f"{call}": str(today_time),
+                client_action_key: today_time,
                 "clientStatus": status,
-                "clientWorkingDate": str(today_date),
+                "clientWorkingDate": today_date,
             }
-
-            print(input_variable)
-
-            self.auth_client.execute(RECORD_DATA, variable_values={'input': input_variable})
+            
+            # Log the payload using the logging module
+            print("Logging entry for %s: %s", name, payload)
+            
+            # Execute the API call to send the data to the server
+            self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:
