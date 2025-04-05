@@ -22,6 +22,7 @@ padding_ratio: 0.2  # Padding ratio for face cropping
 align: True  # Enable face alignment
 method: "cosine"  # Distance metric for face similarity matching (cosine, euclidean, manhattan)
 layer: null # Feature extraction layer (layer0, layer16)
+min_face_size: 20 # Minimum face size for detection
 
 # Other settings
 show: True  # Show the output video with annotations

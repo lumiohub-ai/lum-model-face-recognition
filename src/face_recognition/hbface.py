@@ -28,8 +28,6 @@ class CameraConfig:
 class HBFace:
     def __init__(
         self,
-        # TODO: merge cam_type and cam_types into a single argument
-        cam_type: Optional[str] = None,
         cam_types: Optional[List[str]] = None,
         video_path: Optional[Union[str, List[str]]] = None,
         multi_camera: bool = True,
@@ -47,7 +45,9 @@ class HBFace:
         if multi_camera:
             self._setup_multi_camera(cam_types, video_path, config_path, **kwargs)
         else:
-            self._setup_single_camera(cam_type, video_path, config_path, **kwargs)
+            if isinstance(cam_types, str):
+                cam_types = cam_types[0]
+            self._setup_single_camera(cam_types, video_path, config_path, **kwargs)
 
     def _setup_multi_camera(self, cam_types, video_paths, config_path, **kwargs):
         if not cam_types or not isinstance(video_paths, list):

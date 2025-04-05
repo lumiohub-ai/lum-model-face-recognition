@@ -112,7 +112,7 @@ class FaceEngine:
         return aligned  
     
     def process_detections(self, frame, frame_num):
-        min_face_size = 40
+        min_face_size = self.args.min_face_size
         im0 = frame.copy()
         if not self.current_dets:
             return im0
@@ -175,7 +175,7 @@ class FaceEngine:
         
         for track_id in removed_tracks:
             self.passed_tracks.append(track_id)
-            
+
             # Skip invalid tracks early
             if (not self.count_line_passing(track_id) or 
                 track_id not in self.track_crops_frame):

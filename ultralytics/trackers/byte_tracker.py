@@ -298,7 +298,7 @@ class BYTETracker:
         lost_stracks = []
         removed_stracks = []
 
-        # added by mirsaid
+        # added by Mirsaid
         list_of_ended_track_ids = []
 
         scores = results.conf
