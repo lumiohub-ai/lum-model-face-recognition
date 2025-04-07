@@ -21,7 +21,7 @@ class HBFace:
         self.streams: List[StreamHandler] = []
         self.engines: List[FaceEngine] = []
         self.visualize = Visualization()
-        self.logger = ColorLogger()
+        self.logger = ColorLogger(log_file=kwargs.get('log_file', None))
         self.entry_logger = EntryLogger(backend_url=kwargs.get('backend_url', 'http://backend:4000/graphql'))
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.config_path = config_path

@@ -106,18 +106,22 @@ class FaceEngine:
         self.all_tracks.add(track_id)
         self.id_appear_time.setdefault(track_id, now)
 
+        face = frame[y1:y2, x1:x2]
         padding = int(max(width, height) * self.args.padding_ratio)
         x1_padded, y1_padded = max(0, x1 - padding), max(0, y1 - padding)
         x2_padded, y2_padded = min(frame.shape[1], x2 + padding), min(frame.shape[0], y2 + padding)
-        face = frame[y1_padded:y2_padded, x1_padded:x2_padded]
+        padded_face = frame[y1_padded:y2_padded, x1_padded:x2_padded]
 
-        if face.size == 0 or width < self.args.min_face_size or height < self.args.min_face_size:
+        if padded_face.size == 0 or width < self.args.min_face_size or height < self.args.min_face_size:
             return
         
+        if self.args.save_crops:
+            self.save_faces(frame_num, track_id, face)
+
         if self.args.align:
-            aligned_face = self.align_face(face)
+            aligned_face = self.align_face(padded_face)
         else:
-            aligned_face = face
+            aligned_face = padded_face
         
         if aligned_face is None:
             return
@@ -145,6 +149,8 @@ class FaceEngine:
     def _handle_track(self, track_id, persons_logged):
         """ Handle a single track and perform recognition. """
         if track_id in self.passed_tracks or not self.count_line_passing(track_id) or track_id not in self.track_crops_frame:
+            if self.args.debug:
+                self.args.logger.debug(f"Track {track_id} is not valid for recognition.")
             return
 
         self.passed_tracks.append(track_id)
@@ -156,6 +162,8 @@ class FaceEngine:
             self.save_crops(track_id, best_match_idx, frame_num)
 
         if best_sim < self.args.match_threshold:
+            if self.args.debug:
+                self.args.logger.debug(f"{name} with {track_id} cannot pass threshold with {best_sim}.")
             return
 
         consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
@@ -227,4 +235,15 @@ class FaceEngine:
             cv2.imwrite(crop_save_path, combined_img)
         else:
             cv2.imwrite(crop_save_path, crop_image)
-    
+
+    def save_faces(self, frame_num, track_id, face_crop):
+        """ Save the face crops to the specified directory. """
+        parent_dir = 'data_collection'
+        save_dir = os.path.join(parent_dir, str(self.args.cam_type), str(track_id))
+        os.makedirs(save_dir, exist_ok=True)
+
+        random_num = np.random.randint(0, 100000)
+        save_path = os.path.join(save_dir, f"{frame_num}_{random_num}.jpg")
+        
+        cv2.imwrite(save_path, face_crop)
+        

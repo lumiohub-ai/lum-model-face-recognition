@@ -23,6 +23,7 @@ myenv/
 *.cache
 *.dat
 *.csv
+*.log
 videos/
 runs/
 

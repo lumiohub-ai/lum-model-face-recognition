@@ -92,7 +92,7 @@ class EntryLogger:
         if updated:
             # Update the entry time and log the event
             self.entry_time[name] = today_time
-            log_message = f"Person: {name} has {status} at {today_time}, with track_id: {track_id}"
+            log_message = f"{name} -> {status} -> {today_time}, track_id: {track_id}"
             self.recent_entries.append(log_message)
             
             # Determine the action key based on status
@@ -105,9 +105,8 @@ class EntryLogger:
                 "clientStatus": status,
                 "clientWorkingDate": today_date,
             }
-            
-            # Log the payload using the logging module
-            print("Logging entry for %s: %s", name, payload)
+
+            print(log_message)
             
             # Execute the API call to send the data to the server
             self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
