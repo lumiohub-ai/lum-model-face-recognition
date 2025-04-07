@@ -223,17 +223,19 @@ class Evaluator:
 
         # Create face recognition system with evaluation enabled
         streamer = HBFace(
-            cam_type=["IN"], 
+            cam_types="IN", 
             video_path=video_path, 
             eval=True,
+            multi_camera=False,
             db_path=self.db_path, 
-            show=self.show,
+            show=True,
             imgsz=self.imgsz,
             match_threshold=self.match_threshold,
             detection_threshold=self.detection_threshold,
             roi=self.roi,
-            line_points=self.line_points,
-            padding_ratio=self.padding_ratio
+            #line_points=self.line_points,
+            padding_ratio=self.padding_ratio,
+            save_crops=True,
         )
                 
         # Process the video

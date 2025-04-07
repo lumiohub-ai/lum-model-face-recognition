@@ -3,222 +3,176 @@ import os
 sys.path.append(os.curdir)
 
 from src.face_recognition.engine import FaceRecognition
-
 import numpy as np
-
 import dlib
 from ultralytics import YOLO
 import cv2
-
 from shapely.geometry import LineString
-
-from sklearn.metrics.pairwise import cosine_similarity
 from datetime import datetime
 import pytz
-timezone = pytz.timezone("Asia/Seoul")
-
 
 class FaceEngine:
     def __init__(self, args) -> None:
         self.args = args
+        self.timezone = pytz.timezone(args.timezone)
+        self.initialize_detectors()
+        self.initialize_tracking()
 
+    def initialize_detectors(self):
+        """ Initialize the face detection and recognition models. """
         self.detector = YOLO(self.args.model_path)
+        self.face_recognition = FaceRecognition(self.args)
+        self.dlib_detector = dlib.get_frontal_face_detector()
+        self.dlib_predictor = dlib.shape_predictor("models/shape_predictor_68_face_landmarks.dat")
 
-        self.face_recognition = FaceRecognition(args)
-
-        # Initialize tracking variables
+    def initialize_tracking(self):
+        """ Initialize tracking variables. """
         self.track_crops_frame = {}
         self.track_boxes_frame = {}
         self.track_road_history = {}
-
         self.all_tracks = set()
         self.id_appear_time = {}
         self.passed_tracks = []
-        
         self.name_to_consistent_id = {}
-
-        self.dlib_detector = dlib.get_frontal_face_detector()
-        self.dlib_predictor = dlib.shape_predictor(
-            "models/shape_predictor_68_face_landmarks.dat")  # Download required
-
         self.id_mapping = {}
         self.mot_results = []
-
         self.current_dets = None
-
         self.visualize = self.args.visualize
         self.frames = {}
-    
-    def track(self, frame) -> None:
-        
+
+    def track(self, frame):
+        """ Perform tracking on the given frame. """
         detections = self.detector.track(
-                frame,
-                verbose=False,
-                conf=self.args.detection_threshold,
-                imgsz=self.args.imgsz,
-                tracker=self.args.tracker,
-                persist=True,
-            )
-        
+            frame,
+            verbose=False,
+            conf=self.args.detection_threshold,
+            imgsz=self.args.imgsz,
+            tracker=self.args.tracker,
+            persist=True,
+        )
         if detections[0].boxes.id is None:
-            return None
+            return None, None
         
-        self.current_dets = detections[0].boxes.data.cpu().tolist()
-        
-        return detections[0]
-        
+        current_dets = detections[0].boxes.data.cpu().tolist()
+        removed_tracks = detections[0].removed_tracks.tolist()
+
+        return current_dets, removed_tracks
+
     def align_face(self, image, desired_size=160):
-        # Convert to grayscale for Dlib (optional, improves performance)
+        """ Align the face in the image using dlib landmarks. """
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Detect faces in the cropped image
         rects = self.dlib_detector(gray, 1)
-        if len(rects) == 0:
-            # print("No faces detected by Dlib in cropped region")
+        if not rects:
             return None
-
-        # Get landmarks for the first detected face
+        
         shape = self.dlib_predictor(gray, rects[0])
+        
         landmarks = np.array([[shape.part(i).x, shape.part(i).y] for i in range(68)])
-
-        # Extract eye coordinates
-        left_eye = landmarks[36:42].mean(axis=0).astype(int)
-        right_eye = landmarks[42:48].mean(axis=0).astype(int)
-
-        # Calculate angle and center
-        dY = right_eye[1] - left_eye[1]
-        dX = right_eye[0] - left_eye[0]
-        angle = np.degrees(np.arctan2(dY, dX)) * -1  # Negative for correct rotation
-
-        # Center of the image
-        center = (image.shape[1] // 2, image.shape[0] // 2)
-
-        # Compute rotation matrix
-        M = cv2.getRotationMatrix2D(center, angle, scale=1.0)
-
-        # Align the image
+        left_eye, right_eye = landmarks[36:42].mean(axis=0).astype(int), landmarks[42:48].mean(axis=0).astype(int)
+        angle = np.degrees(np.arctan2(right_eye[1] - left_eye[1], right_eye[0] - left_eye[0])) * -1
+        
+        M = cv2.getRotationMatrix2D((image.shape[1] // 2, image.shape[0] // 2), angle, 1.0)
+        
         aligned = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
-
-        # Crop and resize to desired size, centering on eye midpoint
         eye_center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
-        x, y = eye_center[0] - desired_size // 2, eye_center[1] - desired_size // 2
-        x, y = max(0, x), max(0, y)
+        x, y = max(0, eye_center[0] - desired_size // 2), max(0, eye_center[1] - desired_size // 2)
         aligned = aligned[y:y + desired_size, x:x + desired_size]
-
-        # Ensure the crop is the correct size (if the crop goes out of bounds, resize the whole image)
+        
         if aligned.shape[0] != desired_size or aligned.shape[1] != desired_size:
             aligned = cv2.resize(aligned, (desired_size, desired_size))
 
-        return aligned  
-    
-    def process_detections(self, frame, frame_num):
-        min_face_size = self.args.min_face_size
+        return aligned
+
+    def process_detections(self, current_dets, frame, frame_num):
+        """ Process the detections and update the tracking information. """
         im0 = frame.copy()
-        if not self.current_dets:
+
+        if not current_dets:
             return im0
-        
-        for det in self.current_dets:
-            now = datetime.now(timezone)
-            x1, y1, x2, y2, track_id, conf, _ = map(int, det)
-            width, height = x2 - x1, y2 - y1
 
-            self.all_tracks.add(track_id)
-            self.id_appear_time.setdefault(track_id, now)
-            # Extract face with padding
-            padding = int(max(width, height) * self.args.padding_ratio)
-            x1_padded = max(0, x1 - padding)
-            y1_padded = max(0, y1 - padding)
-            x2_padded = min(frame.shape[1], x2 + padding)
-            y2_padded = min(frame.shape[0], y2 + padding)
-            
-            face = frame[y1_padded:y2_padded, x1_padded:x2_padded]
+        for det in current_dets:
+            self._handle_detection(det, frame, frame_num, im0)
 
-            # Track center point for history
-            center = (x1_padded + width // 2, y1_padded + height // 2)
-            self.track_road_history.setdefault(track_id, []).append(center)
-            
-            if width < min_face_size or height < min_face_size or not face.size:
-                continue
-                
-            # Process optional face alignment
-            aligned_face = face
-            if self.args.align:
-                aligned_result = self.align_face(face)
-                aligned_face = aligned_result
-
-            if aligned_face is None:
-                continue
-            
-            # Track management
-            self.track_crops_frame.setdefault(track_id, {})[frame_num] = aligned_face
-            self.track_boxes_frame.setdefault(track_id, {})[frame_num] = [x1_padded, y1_padded, width, height, conf]
-            
-            # Visualization
-            color = self.visualize.define_color(track_id)
-            cv2.rectangle(im0, (x1_padded, y1_padded), (x2_padded, y2_padded), color, 2)
-            cv2.putText(im0, f"id: {track_id}", (x1_padded, y1_padded), 
-                    self.visualize.font, self.visualize.font_scale, color, 2)
-        
-        # # Draw ROI if specified
-        # if self.args.roi is not None:
-        #     roi = self.args.roi
-        #     cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 255, 0), 2)
-        
         return im0
-            
-    def recognize_tracks(self, detections, last_frame=False) -> dict:
+
+    def _handle_detection(self, det, frame, frame_num, im0):
+        """ Process a single detection and update the tracking information. """
+        now = datetime.now(self.timezone)
+        
+        x1, y1, x2, y2, track_id, conf, _ = map(int, det)
+        width, height = x2 - x1, y2 - y1
+
+        self.all_tracks.add(track_id)
+        self.id_appear_time.setdefault(track_id, now)
+
+        padding = int(max(width, height) * self.args.padding_ratio)
+        x1_padded, y1_padded = max(0, x1 - padding), max(0, y1 - padding)
+        x2_padded, y2_padded = min(frame.shape[1], x2 + padding), min(frame.shape[0], y2 + padding)
+        face = frame[y1_padded:y2_padded, x1_padded:x2_padded]
+
+        if face.size == 0 or width < self.args.min_face_size or height < self.args.min_face_size:
+            return
+        
+        if self.args.align:
+            aligned_face = self.align_face(face)
+        else:
+            aligned_face = face
+        
+        if aligned_face is None:
+            return
+
+        center = (x1_padded + width // 2, y1_padded + height // 2)
+        self.track_road_history.setdefault(track_id, []).append(center)
+        self.track_crops_frame.setdefault(track_id, {})[frame_num] = aligned_face
+        self.track_boxes_frame.setdefault(track_id, {})[frame_num] = [x1_padded, y1_padded, width, height, conf]
+
+        color = self.visualize.define_color(track_id)
+        cv2.rectangle(im0, (x1_padded, y1_padded), (x2_padded, y2_padded), color, 2)
+        cv2.putText(im0, f"Id: {track_id}", (x1_padded, y1_padded), 
+                    self.visualize.font, self.visualize.font_scale, color, 2)
+
+    def recognize_tracks(self, removed_tracks, last_frame=False) -> dict:
+        """ Recognize faces in the tracked objects. """
         persons_logged = {}
-        
-        # Determine which tracks to process
-        removed_tracks = detections.removed_tracks.tolist() if not last_frame else list(self.all_tracks - set(self.passed_tracks))
-        removed_tracks = [track_id for track_id in removed_tracks if track_id not in self.passed_tracks]
-        
+        removed_tracks = removed_tracks if not last_frame else list(self.all_tracks - set(self.passed_tracks))
+
         for track_id in removed_tracks:
-            self.passed_tracks.append(track_id)
+            self._handle_track(track_id, persons_logged)
 
-            # Skip invalid tracks early
-            if (not self.count_line_passing(track_id) or 
-                track_id not in self.track_crops_frame):
-                self.args.logger.debug(f"Track ID {track_id} failed line passing check or has no crops.")
-                continue
+        return persons_logged
 
-                
-            # Face recognition processing
-            face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
-            name, best_sim = self.face_recognition.recognize_face(face_embeddings)
-            
-            if name == "Unknown":
-                self.args.logger.critical(f"Unknown face detected with track ID {track_id} and similarity {best_sim:.2f}")
-                continue
+    def _handle_track(self, track_id, persons_logged):
+        """ Handle a single track and perform recognition. """
+        if track_id in self.passed_tracks or not self.count_line_passing(track_id) or track_id not in self.track_crops_frame:
+            return
 
-            self.args.logger.info(f"Recognized {name} with track ID {track_id} with best similarity {best_sim:.2f}")
-                
-            # Consistent ID management - use existing ID or create new one
-            consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
-            persons_logged[name] = [track_id, self.id_appear_time[track_id]]
+        self.passed_tracks.append(track_id)
+        
+        face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
+        name, best_sim, best_match_idx, frame_num = self.face_recognition.recognize_face(face_embeddings)
 
-            self.id_mapping[track_id] = consistent_id
-            
-            # Handle evaluation if enabled
-            if self.args.eval:
+        if self.args.save_crops:
+            self.save_crops(track_id, best_match_idx, frame_num)
+
+        if best_sim < self.args.match_threshold:
+            return
+
+        consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
+        persons_logged[name] = [track_id, self.id_appear_time[track_id]]
+        self.id_mapping[track_id] = consistent_id
+
+        if self.args.eval:
                 for frame_num, box in self.track_boxes_frame[track_id].items():
                     self.mot_results.append({
-                        'frame': frame_num,
-                        'id': consistent_id,
-                        'x': box[0],
-                        'y': box[1],
-                        'w': box[2],
-                        'h': box[3],
-                        'conf': box[4],
-                        'name': name
+                        'frame': frame_num, 'id': consistent_id,
+                        'x': box[0], 'y': box[1], 'w': box[2], 'h': box[3],
+                        'conf': box[4], 'name': name
                     })
-                    
-            # Store name mapping and clean up memory
-            del self.track_crops_frame[track_id]  
-            
-        return persons_logged
+    
     
     def is_within_roi(self, box1, box2):
+        """Check if the bounding boxes intersect."""
         if box2 is None:
             return True # because user does not want to roi check
         
@@ -235,6 +189,7 @@ class FaceEngine:
         return xA < xB and yA < yB  # Returns True if boxes intersect, else False
 
     def count_line_passing(self, track_id) -> bool:
+        """Check if the track has passed the counting line."""
         # Early returns for cases where counting isn't needed or possible
         if self.args.line_points is None:
             return True  # User doesn't require line passing check
@@ -250,6 +205,26 @@ class FaceEngine:
         default_line = LineString(self.args.line_points)
         
         return track_line.intersects(default_line)
+    
+    def save_crops(self, track_id, best_match_idx, frame_num) -> None:
+        """
+        Save the cropped image along with the ground truth image from the database concatenated horizontally.
+        """
+        crop_image = list(self.track_crops_frame[track_id].values())[frame_num]
+        save_dir = os.path.join(self.args.crops_path, str(self.args.cam_type), str(os.path.basename(self.args.video_path)))
         
+        os.makedirs(save_dir, exist_ok=True)
         
+        name = self.face_recognition.db_names[best_match_idx]
+        crop_save_path = os.path.join(save_dir, f"{name}_{track_id}.jpg")
         
+        if name in self.face_recognition.db_names:
+            db_face_image = self.face_recognition.db_images[best_match_idx]
+
+            db_face_image = cv2.resize(db_face_image, (crop_image.shape[1], crop_image.shape[0]))
+            combined_img = cv2.hconcat([crop_image, db_face_image])
+
+            cv2.imwrite(crop_save_path, combined_img)
+        else:
+            cv2.imwrite(crop_save_path, crop_image)
+    

@@ -16,7 +16,7 @@ class FaceRecognition:
             .to(self.args.device)
         )
 
-        self.db_names, self.db_embs = self.load_embeddings()      
+        self.db_names, self.db_embs, self.db_images = self.load_embeddings()      
 
     def compute_embeddings(self, faces):
         resized_faces = [cv2.resize(face, (160, 160)) for face in faces]
@@ -28,6 +28,24 @@ class FaceRecognition:
             embeddings = self.resnet(face_tensors).cpu().numpy()
     
         return embeddings
+    
+    def get_face_images(self):
+        face_images = []
+        face_names = []
+
+        for file in os.listdir(self.args.db_path):
+            if file.lower().endswith((".png", ".jpg", ".jpeg")):
+                face_path = os.path.join(self.args.db_path, file)
+                face_image = cv2.imread(face_path)
+
+                if face_image is None:
+                    continue
+                
+                name = file.split(".")[0]
+                face_images.append(face_image)
+                face_names.append(name)
+        
+        return face_images, face_names
 
     def load_embeddings(self):
         name_to_embeddings = {}
@@ -39,25 +57,15 @@ class FaceRecognition:
             name_to_embeddings = data["embeddings"].item()
             db_names = list(name_to_embeddings.keys())
             db_embs = np.array(list(name_to_embeddings.values()))
+
             self.args.logger.info(f"Loaded {len(db_names)} cached embeddings from {cache_file}")
-            
-            return db_names, db_embs
+
+            face_images, face_names = self.get_face_images()
+
+            return db_names, db_embs, face_images
         
-        face_images = []
-        face_names = []
+        face_images, face_names = self.get_face_images()
 
-        for file in os.listdir(self.args.db_path):
-            if file.lower().endswith((".png", ".jpg", ".jpeg")):
-                face_path = os.path.join(self.args.db_path, file)
-                face_image = cv2.imread(face_path)
-
-                if face_image is None:
-                    continue
-
-                face_images.append(face_image)
-                name = file.split(".")[0]
-                face_names.append(name)
-                
         # Compute embeddings if no cache exists
         face_embs = self.compute_embeddings(face_images)
         for name, face_emb in zip(face_names, face_embs):
@@ -70,24 +78,33 @@ class FaceRecognition:
         np.savez(cache_file, embeddings=name_to_embeddings)
         self.args.logger.info(f"Saved {len(db_names)} embeddings to {cache_file}")
 
-        return db_names, db_embs
+        return db_names, db_embs, face_images
     
-    def recognize_face(self, face_embs):  
-        similarities = cosine_similarity(face_embs, self.db_embs)
-             
-        # Get the indices of maximum similarity for each face
+    def recognize_face(self, face_embs):
+        similarities = self.compute_similarities(face_embs)
+        best_match_idx, best_similarity = self.get_best_match(similarities)
+        matched_name = self.db_names[best_match_idx].split('_')[0]
+        matched_frame_num = self.get_matched_frame_number(similarities, best_match_idx)
+
+        return matched_name, best_similarity, best_match_idx, matched_frame_num
+
+
+    def compute_similarities(self, face_embs):
+        return cosine_similarity(face_embs, self.db_embs)
+
+    def get_best_match(self, similarities):
         max_sim_indices = np.argmax(similarities, axis=1)
         max_sim_values = np.max(similarities, axis=1)
-        max_sim_names = [self.db_names[idx] for idx in max_sim_indices]
+        best_idx = np.argmax(max_sim_values)
+        best_similarity = max_sim_values[best_idx]
+        best_match_db_idx = max_sim_indices[best_idx]
 
-        # Sorted by similarity
-        sorted_indices = np.argsort(-max_sim_values)
-        sorted_similarities = max_sim_values[sorted_indices]
-        sorted_names = [max_sim_names[idx] for idx in sorted_indices]
-        
-        return sorted_names[0].split('_')[0] if len(sorted_names) > 0 \
-            and max_sim_values[sorted_indices[0]] > self.args.match_threshold else "Unknown", sorted_similarities[0]
+        return best_match_db_idx, best_similarity
 
+    def get_matched_frame_number(self, similarities, best_match_idx):
+        frame_num_matched = np.argmax(similarities, axis=0)
+        return frame_num_matched[best_match_idx]
+ 
     def check_new_faces(self):
         for file in os.listdir(self.args.db_path):
             if file.lower().endswith((".png", ".jpg", ".jpeg")):

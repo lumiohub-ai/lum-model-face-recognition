@@ -22,11 +22,13 @@ padding_ratio: 0.2  # Padding ratio for face cropping
 align: True  # Enable face alignment
 method: "cosine"  # Distance metric for face similarity matching (cosine, euclidean, manhattan)
 layer: null # Feature extraction layer (layer0, layer16)
-min_face_size: 20 # Minimum face size for detection
+min_face_size: 30 # Minimum face size for detection
 
 # Other settings
 show: True  # Show the output video with annotations
 save_video: True  # Save the output video with annotations
+save_crops: False  # Save cropped face images for debugging
+crops_path: "crops"  # Path to save cropped face images
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
@@ -34,3 +36,6 @@ eval: False  # Enable evaluation mode
 # ROI settings
 roi: null  # Enable region of interest (ROI) mode
 line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
+
+# Timezone settings
+timezone: "Asia/Seoul"  # Timezone for tracking times
