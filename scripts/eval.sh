@@ -3,11 +3,11 @@
 # Usage: ./eval.sh [options]
 
 # Set default values
-ALG_NAME="alg-13"
+ALG_NAME="fps-calculation"
 BENCHMARK="ilhan"
-VIDEOS="videoa1-3 videoa1-4 videoa1-5"
+VIDEOS="videoa1-1 videoa1-2 videoa1-3 videoa1-4 videoa1-5"
 VIDEO_DIR="client/pred_videos"
-DB_PATH="data/ilhan2"
+DB_PATH="data/ilhan-aligned-aug"
 OUTPUT_DIR="results/"
 MATCH_THRESHOLD=0.7
 DETECTION_THRESHOLD=0.5

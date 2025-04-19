@@ -1,8 +1,8 @@
 import sys
 import os
-from typing import List, Optional, Tuple, Union, Any
-from dataclasses import dataclass
+from typing import List, Optional, Union, Any
 from datetime import datetime
+import time
 
 import cv2
 import yaml
@@ -125,6 +125,8 @@ class HBFace:
                     stream.start()
 
             frame_nums = [0] * len(self.streams)
+            total_frames = 0 
+            start_time = time.time()
 
             while True:
                 frames = []
@@ -133,10 +135,10 @@ class HBFace:
                     if not ret:
                         return
                     frame_nums[i] += 1
+                    total_frames += 1
                     frames.append(frame)
 
                 annotated_frames = self.process_frames(frames, frame_nums)
-
 
                 self.save_frames(annotated_frames)
                 self.display_frames(annotated_frames)
@@ -148,6 +150,11 @@ class HBFace:
             self.logger.info("Interrupted by user.")
 
         finally:
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            avg_fps = total_frames / elapsed_time if elapsed_time > 0 else 0 
+            self.logger.info(f"\nAverage FPS: {avg_fps:.2f}")
+
             self._cleanup()
 
     def process_frames(self, frames: List[NDArray], frame_nums: List[int]) -> List[NDArray]:
