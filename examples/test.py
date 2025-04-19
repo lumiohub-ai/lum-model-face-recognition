@@ -5,7 +5,7 @@ sys.path.append(os.curdir)
 from src.face_recognition.hbface import HBFace
 
 # RTSP streams for IN and OUT cameras
-in_camera = ''
+in_camera = 'rtsp://admin:bHfthUmGVXxtuXTu@192.168.217.152:554'
 
 
 # Initialize HBFace for multi-camera setup
@@ -21,9 +21,11 @@ face_engine_multi = HBFace(
     padding_ratio=0.15,
     db_path='data/hb-kor-aligned-aug',
     save_crops=True,
-    log_file='logs/ilhan_in_test.log',
-    backend_url='',
-    
+    log_file='logs/hb_in_test.log',
+    backend_url='http://192.168.217.15:5002/graphql',
+    device='cuda:1',
+    debug=True,
+    streamlit_show=True,
 )
 
 # Run the face recognition system

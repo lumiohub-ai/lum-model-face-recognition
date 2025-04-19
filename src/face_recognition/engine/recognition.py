@@ -59,6 +59,7 @@ class FaceRecognition:
             db_embs = np.array(list(name_to_embeddings.values()))
 
             self.args.logger.info(f"Loaded {len(db_names)} cached embeddings from {cache_file}")
+            self.args.logger.info(f"With shape: {db_embs.shape}")
 
             face_images, face_names = self.get_face_images()
 
@@ -77,6 +78,7 @@ class FaceRecognition:
         # Save computed embeddings to cache
         np.savez(cache_file, embeddings=name_to_embeddings)
         self.args.logger.info(f"Saved {len(db_names)} embeddings to {cache_file}")
+        self.args.logger.info(f"With shape: {db_embs.shape}")
 
         return db_names, db_embs, face_images
     

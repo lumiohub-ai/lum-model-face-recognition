@@ -57,8 +57,20 @@ class HBFace:
         args.logger = self.logger
         args.visualize = self.visualize
         args.cam_type = cam_type
-        args.roi = args.roi[index] if index is not None else args.roi
-        args.line_points = args.line_points[index] if index is not None else args.line_points
+        
+        # Fix for ROI handling - check if roi exists and is a list/tuple before indexing
+        if hasattr(args, 'roi') and args.roi is not None:
+            if index is not None and isinstance(args.roi, (list, tuple)) and len(args.roi) > index:
+                args.roi = args.roi[index]
+        else:
+            args.roi = None
+        
+        # Fix for line_points handling - similar check
+        if hasattr(args, 'line_points') and args.line_points is not None:
+            if index is not None and isinstance(args.line_points, (list, tuple)) and len(args.line_points) > index:
+                args.line_points = args.line_points[index]
+        else:
+            args.line_points = None
 
         stream = StreamHandler(vid_path)
         self.streams.append(stream)
@@ -136,7 +148,7 @@ class HBFace:
             self.logger.info("Interrupted by user.")
 
         finally:
-            self.cleanup()
+            self._cleanup()
 
     def process_frames(self, frames: List[NDArray], frame_nums: List[int]) -> List[NDArray]:
         """ Process frames from multiple cameras. """
@@ -161,6 +173,8 @@ class HBFace:
         if engine.args.line_points:
             cv2.line(frame_annotated, engine.args.line_points[0], engine.args.line_points[1], (0, 255, 0), 2)
 
+        self.entry_logger.visualize_entries(frame_annotated)
+
         return frame_annotated
 
     def display_frames(self, frames: List[NDArray]) -> None:
@@ -176,7 +190,7 @@ class HBFace:
                 if self.video_writers[i]:
                     self.video_writers[i].write(frame)
 
-    def cleanup(self) -> None:
+    def _cleanup(self) -> None:
         """ Cleanup resources. """
         for stream in self.streams:
             stream.stop()

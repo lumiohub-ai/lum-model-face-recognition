@@ -200,7 +200,7 @@ class InceptionResnetV1(nn.Module):
         dropout_prob {float} -- Dropout probability. (default: {0.6})
     """
     def __init__(self, pretrained=None, classify=False, num_classes=None, dropout_prob=0.6, device=None,
-                 layer='layer5'
+                 layer=None
                  ):
         super().__init__()
 
