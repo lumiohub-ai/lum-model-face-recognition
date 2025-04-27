@@ -150,7 +150,7 @@ class FaceEngine:
         """ Handle a single track and perform recognition. """
         if track_id in self.passed_tracks or not self.count_line_passing(track_id) or track_id not in self.track_crops_frame:
             if self.args.debug:
-                self.args.logger.debug(f"Track {track_id} is not valid for recognition.")
+                print(f"Track {track_id} is not valid for recognition.")
             return
 
         self.passed_tracks.append(track_id)
@@ -158,13 +158,13 @@ class FaceEngine:
         face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
         name, best_sim, best_match_idx, frame_num = self.face_recognition.recognize_face(face_embeddings)
 
-        if self.args.save_crops:
-            self.save_crops(track_id, best_match_idx, frame_num)
-
         if best_sim < self.args.match_threshold:
             if self.args.debug:
-                self.args.logger.debug(f"{name} with {track_id} cannot pass threshold with {best_sim}.")
+                print(f"{name} with {track_id} cannot pass threshold with {best_sim}.")
             return
+
+        if self.args.save_crops:
+            self.save_crops(track_id, best_match_idx, frame_num)
 
         consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
         persons_logged[name] = [track_id, self.id_appear_time[track_id]]
