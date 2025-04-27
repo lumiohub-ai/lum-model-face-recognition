@@ -149,19 +149,21 @@ class FaceEngine:
     def _handle_track(self, track_id, persons_logged):
         """ Handle a single track and perform recognition. """
         if track_id in self.passed_tracks or not self.count_line_passing(track_id) or track_id not in self.track_crops_frame:
-            if self.args.debug:
-                print(f"Track {track_id} is not valid for recognition.")
             return
 
         self.passed_tracks.append(track_id)
         
         face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
-        name, _, best_match_idx, frame_num, recognized = self.face_recognition.recognize_face(face_embeddings, track_id)
+        recognition_info = self.face_recognition.recognize_face(face_embeddings)
+        
+        name = recognition_info['name']
+        sim = recognition_info['similarity']
 
         if self.args.save_crops:
-            self.save_crops(track_id, best_match_idx, frame_num, recognized)
+            self.save_crops(track_id, recognition_info)
 
-        if not recognized:
+        if not recognition_info['recognized']:
+            print(f"{name} with {track_id} cannot pass threshold with {sim}.")
             return
 
         consistent_id = self.name_to_consistent_id.setdefault(name, track_id)
@@ -212,21 +214,21 @@ class FaceEngine:
         
         return track_line.intersects(default_line)
     
-    def save_crops(self, track_id, best_match_idx, frame_num, recognized) -> None:
+    def save_crops(self, track_id, info) -> None:
         """
         Save the cropped image along with the ground truth image from the database concatenated horizontally.
         """
-        crop_image = list(self.track_crops_frame[track_id].values())[frame_num]
-        folder_rec = 'recognized' if recognized else 'not_recognized'
+        crop_image = list(self.track_crops_frame[track_id].values())[info['matched_frame_num']]
+        folder_rec = 'recognized' if info['recognized'] else 'not_recognized'
         save_dir = os.path.join(self.args.crops_path, folder_rec)
         
         os.makedirs(save_dir, exist_ok=True)
         
-        name = self.face_recognition.db_names[best_match_idx]
+        name = self.face_recognition.db_names[info['best_match_idx']]
         crop_save_path = os.path.join(save_dir, f"{name}_ {str(self.args.cam_type)}_{track_id}.jpg")
         
         if name in self.face_recognition.db_names:
-            db_face_image = self.face_recognition.db_images[best_match_idx]
+            db_face_image = self.face_recognition.db_images[info['best_match_idx']]
 
             db_face_image = cv2.resize(db_face_image, (crop_image.shape[1], crop_image.shape[0]))
             combined_img = cv2.hconcat([crop_image, db_face_image])

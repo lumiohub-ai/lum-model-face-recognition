@@ -82,20 +82,25 @@ class FaceRecognition:
 
         return db_names, db_embs, face_images
     
-    def recognize_face(self, face_embs, track_id):
+    def recognize_face(self, face_embs):
         similarities = self.compute_similarities(face_embs)
         best_match_idx, best_similarity = self.get_best_match(similarities)
         matched_name = self.db_names[best_match_idx].split('_')[0]
         matched_frame_num = self.get_matched_frame_number(similarities, best_match_idx)
 
         recognized = False
-        if best_similarity < self.args.match_threshold:
+        if best_similarity >= self.args.match_threshold:
             recognized = True
-            if self.args.debug:
-                print(f"{matched_name} with {track_id} cannot pass threshold with {best_similarity}.")
 
-        return matched_name, best_similarity, best_match_idx, matched_frame_num, recognized
+        recognition_info = {
+            'name': matched_name,
+            'similarity': best_similarity,
+            'matched_frame_num': matched_frame_num,
+            'recognized': recognized,
+            'best_match_idx': best_match_idx,
+        }
 
+        return recognition_info
 
     def compute_similarities(self, face_embs):
         return cosine_similarity(face_embs, self.db_embs)
