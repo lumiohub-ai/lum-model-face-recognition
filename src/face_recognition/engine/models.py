@@ -154,6 +154,8 @@ class FaceEngine:
         self.passed_tracks.append(track_id)
         
         face_embeddings = self.face_recognition.compute_embeddings(self.track_crops_frame[track_id].values())
+        if len(face_embeddings) == 0:
+            return 
         recognition_info = self.face_recognition.recognize_face(face_embeddings)
         
         name = recognition_info['name']

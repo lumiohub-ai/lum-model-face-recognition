@@ -17,9 +17,9 @@ svm_model_path: "models/svm_model.joblib"  # Path to the SVM model for face reco
 svm_label_path: "models/svm_labels.pkl"  # Path to the SVM labels for face recognition
 
 # Face recognition settings
-match_threshold: 0.6  # Threshold for face similarity matching
+match_threshold: 0.5  # Threshold for face similarity matching
 padding_ratio: 0.2  # Padding ratio for face cropping
-align: True  # Enable face alignment
+align: False  # Enable face alignment
 method: "cosine"  # Distance metric for face similarity matching (cosine, euclidean, manhattan)
 layer: null # Feature extraction layer (layer0, layer16)
 min_face_size: 30 # Minimum face size for detection

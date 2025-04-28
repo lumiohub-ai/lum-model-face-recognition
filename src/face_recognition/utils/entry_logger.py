@@ -42,7 +42,7 @@ class EntryLogger:
         self.base_y = 30
         self.padding = 10
         self.person_status = {}
-        self.auth_client = self.authorize_user()
+        # self.auth_client = self.authorize_user()
 
     def authorize_user(self):
         url = self.backend_url
@@ -109,7 +109,7 @@ class EntryLogger:
             print(log_message)
             
             # Execute the API call to send the data to the server
-            self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
+            # self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:

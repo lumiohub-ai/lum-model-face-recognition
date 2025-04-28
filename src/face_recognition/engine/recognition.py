@@ -7,6 +7,9 @@ import numpy as np
 from facenet_pytorch import InceptionResnetV1
 from sklearn.metrics.pairwise import cosine_similarity
 
+from insightface.app import FaceAnalysis
+
+
 class FaceRecognition:
     def __init__(self, args) -> None:
         self.args = args
@@ -16,18 +19,34 @@ class FaceRecognition:
             .to(self.args.device)
         )
 
+        self.model = FaceAnalysis(name='buffalo_l')
+        self.model.prepare(ctx_id=0)
+
         self.db_names, self.db_embs, self.db_images = self.load_embeddings()      
 
     def compute_embeddings(self, faces):
-        resized_faces = [cv2.resize(face, (160, 160)) for face in faces]
-        rgb_faces = [cv2.cvtColor(face, cv2.COLOR_BGR2RGB) for face in resized_faces]
+        # InsightFace expects BGR images (which is the default for OpenCV)
+        # so we don't need to convert to RGB like we did with FaceNet
         
-        face_tensors = torch.tensor(np.array(rgb_faces)).permute(0, 3, 1, 2).float().to(self.args.device) / 255.0
+        embeddings = []
         
-        with torch.no_grad():
-            embeddings = self.resnet(face_tensors).cpu().numpy()
-    
-        return embeddings
+        for face in faces:
+            # Process with InsightFace
+            # The model.get() function expects the full image and finds faces automatically,
+            # but since we already have cropped faces, we'll use a different approach
+            
+            # InsightFace Buffalo model works better with specific input size
+            # Use the model directly to get embedding
+            face_info = self.model.get(face)
+            
+            if len(face_info) > 0:
+                # Get the embedding from the first (and should be only) detected face
+                embedding = face_info[0].embedding
+                embedding = embedding / np.linalg.norm(embedding)
+                embeddings.append(embedding)
+
+        return np.array(embeddings)
+        
     
     def get_face_images(self):
         face_images = []
@@ -83,6 +102,7 @@ class FaceRecognition:
         return db_names, db_embs, face_images
     
     def recognize_face(self, face_embs):
+    
         similarities = self.compute_similarities(face_embs)
         best_match_idx, best_similarity = self.get_best_match(similarities)
         matched_name = self.db_names[best_match_idx].split('_')[0]

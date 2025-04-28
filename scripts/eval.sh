@@ -5,14 +5,14 @@
 # Set default values
 ALG_NAME="fps-calculation"
 BENCHMARK="ilhan"
-VIDEOS="videoa1-1 videoa1-2 videoa1-3 videoa1-4 videoa1-5"
+VIDEOS="videoa1-4 videoa1-5"
 VIDEO_DIR="client/pred_videos"
-DB_PATH="data/ilhan-aligned-aug"
+DB_PATH="data/ilhan-org"
 OUTPUT_DIR="results/"
-MATCH_THRESHOLD=0.7
+MATCH_THRESHOLD=0.3
 DETECTION_THRESHOLD=0.5
 IMG_SIZE=1280
-PADDING_RATIO=0.2
+PADDING_RATIO=0.5
 SHOW_FLAG=""  # Empty by default, will add --show if needed
 
 # Build the command with only recognized arguments
