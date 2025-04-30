@@ -233,7 +233,7 @@ class Evaluator:
             match_threshold=self.match_threshold,
             detection_threshold=self.detection_threshold,
             roi=self.roi,
-            # line_points=self.line_points,
+            line_points=self.line_points,
             padding_ratio=self.padding_ratio,
             save_crops=True,
             min_face_size=50,

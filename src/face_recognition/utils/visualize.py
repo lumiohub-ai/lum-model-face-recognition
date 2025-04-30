@@ -39,10 +39,15 @@ class Visualization():
     
     @staticmethod
     def concat_frames(frame1: np.ndarray, frame2: np.ndarray, mode: str = "horizontal") -> np.ndarray:
+        # Resize frames to window size whcih is 720x1920
+        frame1 = cv2.resize(frame1, (1280, 720))
+        frame2 = cv2.resize(frame2, (1280, 720))
+
         if mode == "horizontal":
             if frame1.shape[0] != frame2.shape[0]:
                 frame2 = cv2.resize(frame2, (int(frame2.shape[1] * (frame1.shape[0] / frame2.shape[0])), frame1.shape[0]))
             return cv2.hconcat([frame1, frame2])
+        
         elif mode == "vertical":
             if frame1.shape[1] != frame2.shape[1]:
                 frame2 = cv2.resize(frame2, (frame1.shape[1], int(frame2.shape[0] * (frame1.shape[1] / frame2.shape[1]))))

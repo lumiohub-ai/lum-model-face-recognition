@@ -1,108 +1,25 @@
 import os
-
-import torch
 import cv2
+import pickle
 import numpy as np
-
-from facenet_pytorch import InceptionResnetV1
 from sklearn.metrics.pairwise import cosine_similarity
-
-from insightface.app import FaceAnalysis
 
 
 class FaceRecognition:
     def __init__(self, args) -> None:
         self.args = args
-        self.resnet = (
-            InceptionResnetV1(pretrained="vggface2", classify=False, layer=self.args.layer)
-            .eval()
-            .to(self.args.device)
-        )
-
-        self.model = FaceAnalysis(name='buffalo_l')
-        self.model.prepare(ctx_id=0)
-
-        self.db_names, self.db_embs, self.db_images = self.load_embeddings()      
-
-    def compute_embeddings(self, faces):
-        # InsightFace expects BGR images (which is the default for OpenCV)
-        # so we don't need to convert to RGB like we did with FaceNet
-        
-        embeddings = []
-        
-        for face in faces:
-            # Process with InsightFace
-            # The model.get() function expects the full image and finds faces automatically,
-            # but since we already have cropped faces, we'll use a different approach
-            
-            # InsightFace Buffalo model works better with specific input size
-            # Use the model directly to get embedding
-            face_info = self.model.get(face)
-            
-            if len(face_info) > 0:
-                # Get the embedding from the first (and should be only) detected face
-                embedding = face_info[0].embedding
-                embedding = embedding / np.linalg.norm(embedding)
-                embeddings.append(embedding)
-
-        return np.array(embeddings)
-        
-    
-    def get_face_images(self):
-        face_images = []
-        face_names = []
-
-        for file in os.listdir(self.args.db_path):
-            if file.lower().endswith((".png", ".jpg", ".jpeg")):
-                face_path = os.path.join(self.args.db_path, file)
-                face_image = cv2.imread(face_path)
-
-                if face_image is None:
-                    continue
-                
-                name = file.split(".")[0]
-                face_images.append(face_image)
-                face_names.append(name)
-        
-        return face_images, face_names
+        self.db_names, self.db_embs = self.load_embeddings()      
 
     def load_embeddings(self):
-        name_to_embeddings = {}
-        cache_file = os.path.join(self.args.db_path, "embeddings.npz")
-        
-        # If cache exists, load and return embeddings
-        if os.path.exists(cache_file):
-            data = np.load(cache_file, allow_pickle=True)
-            name_to_embeddings = data["embeddings"].item()
-            db_names = list(name_to_embeddings.keys())
-            db_embs = np.array(list(name_to_embeddings.values()))
+        with open(self.args.db_path, 'rb') as f:
+            data = pickle.load(f)
 
-            self.args.logger.info(f"Loaded {len(db_names)} cached embeddings from {cache_file}")
-            self.args.logger.info(f"With shape: {db_embs.shape}")
+        db_embs = data['embeddings']
+        db_names = data['names']
 
-            face_images, face_names = self.get_face_images()
-
-            return db_names, db_embs, face_images
-        
-        face_images, face_names = self.get_face_images()
-
-        # Compute embeddings if no cache exists
-        face_embs = self.compute_embeddings(face_images)
-        for name, face_emb in zip(face_names, face_embs):
-            name_to_embeddings[name] = face_emb
-
-        db_names = list(name_to_embeddings.keys())
-        db_embs = np.array(list(name_to_embeddings.values()))
-
-        # Save computed embeddings to cache
-        np.savez(cache_file, embeddings=name_to_embeddings)
-        self.args.logger.info(f"Saved {len(db_names)} embeddings to {cache_file}")
-        self.args.logger.info(f"With shape: {db_embs.shape}")
-
-        return db_names, db_embs, face_images
+        return db_names, db_embs
     
-    def recognize_face(self, face_embs):
-    
+    def recognize_face(self, face_embs):   
         similarities = self.compute_similarities(face_embs)
         best_match_idx, best_similarity = self.get_best_match(similarities)
         matched_name = self.db_names[best_match_idx].split('_')[0]

@@ -11,6 +11,10 @@ from numpy.typing import NDArray
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 sys.path.append(os.curdir)
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+
 from src.face_recognition.engine import FaceEngine
 from src.face_recognition.utils import Visualization, StreamHandler, EntryLogger, ColorLogger
 
@@ -150,12 +154,11 @@ class HBFace:
             self.logger.info("Interrupted by user.")
 
         finally:
+            self._cleanup()
             end_time = time.time()
             elapsed_time = end_time - start_time
             avg_fps = total_frames / elapsed_time if elapsed_time > 0 else 0 
             self.logger.info(f"\nAverage FPS: {avg_fps:.2f}")
-
-            self._cleanup()
 
     def process_frames(self, frames: List[NDArray], frame_nums: List[int]) -> List[NDArray]:
         """ Process frames from multiple cameras. """
@@ -166,14 +169,16 @@ class HBFace:
         roi = engine.args.roi if engine.args.roi else None
         frame_cropped = frame[roi[1]:roi[3], roi[0]:roi[2]] if roi else frame
 
-        current_dets, removed_tracks = engine.track(frame_cropped)
+        active_tracks, removed_tracks = engine.track(frame_cropped)
+        frame_annotated = engine.visualize_tracks(frame_cropped)
 
-        if current_dets:
-            frame_annotated = engine.process_detections(current_dets, frame_cropped, frame_num)
-            recognized = engine.recognize_tracks(removed_tracks, frame_num == self.streams[0].last_frame)
+        if active_tracks:
+            engine.process_active_tracks(active_tracks, frame_num)
+            persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
             
-            for name, (track_id, appear_time) in recognized.items():
+            for name, (track_id, appear_time) in persons_recognized.items():
                 self.entry_logger.log_person_entry(name, engine.args.cam_type, track_id, appear_time)
+        
         else:
             frame_annotated = frame_cropped
 
@@ -199,11 +204,19 @@ class HBFace:
 
     def _cleanup(self) -> None:
         """ Cleanup resources. """
+        for engine in self.engines:
+            persons_recognized = engine.recognize_removed_tracks([], last_frame=True)
+            # Log any final recognized persons
+            for name, (track_id, appear_time) in persons_recognized.items():
+                self.entry_logger.log_person_entry(name, engine.args.cam_type, track_id, appear_time)
+
+
         for stream in self.streams:
             stream.stop()
         for writer in self.video_writers:
             if writer:
                 writer.release()
+
         cv2.destroyAllWindows()
 
         self.logger.info("Cleanup complete.")

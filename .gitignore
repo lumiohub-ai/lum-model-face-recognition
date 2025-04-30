@@ -40,3 +40,5 @@ hb-videos/
 /models
 # But do NOT ignore the specific folder "facenet_pytorch/models"
 !/facenet_pytorch/models
+
+data/embeddings/

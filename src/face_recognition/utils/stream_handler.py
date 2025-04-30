@@ -1,15 +1,13 @@
-from typing import Any, Tuple
+import cv2
 import threading
 import queue
-import cv2
+from typing import Any, Tuple
 
 class StreamHandler:
     def __init__(self, src: Any) -> None:
         self.src = src
         self.is_video = self.is_video_file(src)
-        self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
-        if not self.cap.isOpened():
-            raise ValueError(f"Unable to open source: {src}")
+        self.cap = cv2.VideoCapture(src)
         self.stopped = False
         self.lock = threading.Lock()
         self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame
@@ -65,7 +63,7 @@ class StreamHandler:
         if self.thread is not None:
             self.thread.join()
         self.cap.release()
-        cv2.destroyAllWindows()
+        # cv2.destroyAllWindows()
 
     def __enter__(self) -> "StreamHandler":
         return self.start()
