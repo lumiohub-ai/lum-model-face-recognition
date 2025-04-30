@@ -6,23 +6,8 @@ db_path: "data/ilhan-aligned"  # Path to the folder containing face images for r
 video_path: "videos/output_10.mkv"
 output_video_path: "data/output.mp4"  # Path to save the output video with annotations
 
-# Model configuration
-model_path: "models/yolov8m-face.pt"  # Path to the face detection model
-detection_threshold: 0.5  # Confidence threshold for face detection
-imgsz: 1280  # Image size for inference (higher values improve accuracy but increase processing time)
-tracker: "bytetrack.yaml"  # Path to the tracker configuration file
-
-# SVM settings
-svm_model_path: "models/svm_model.joblib"  # Path to the SVM model for face recognition
-svm_label_path: "models/svm_labels.pkl"  # Path to the SVM labels for face recognition
-
 # Face recognition settings
 match_threshold: 0.5  # Threshold for face similarity matching
-padding_ratio: 0.2  # Padding ratio for face cropping
-align: False  # Enable face alignment
-method: "cosine"  # Distance metric for face similarity matching (cosine, euclidean, manhattan)
-layer: null # Feature extraction layer (layer0, layer16)
-min_face_size: 30 # Minimum face size for detection
 
 # Other settings
 show: True  # Show the output video with annotations
