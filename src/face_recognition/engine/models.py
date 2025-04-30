@@ -127,7 +127,7 @@ class FaceEngine:
                 continue
 
             if not self._count_line_passing(track_id):
-                print(f"Track {track_id} with {name} has not passed the counting line.")
+                self.args.logger.debug(f"Track {track_id} with {name} has not passed the counting line.")
                 continue  
 
             persons_logged[name] = [track_id, self.id_appear_time[track_id]]

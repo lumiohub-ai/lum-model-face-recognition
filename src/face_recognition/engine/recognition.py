@@ -54,13 +54,4 @@ class FaceRecognition:
     def get_matched_frame_number(self, similarities, best_match_idx):
         frame_num_matched = np.argmax(similarities, axis=0)
         return frame_num_matched[best_match_idx]
- 
-    def check_new_faces(self):
-        for file in os.listdir(self.args.db_path):
-            if file.lower().endswith((".png", ".jpg", ".jpeg")):
-                name = file.split(".")[0].split("_")[0]
-
-                if name not in self.db_names:
-                    self.db_names.append(self.compute_embeddings(
-                       [cv2.imread(os.path.join(self.db_path, file))]))
 

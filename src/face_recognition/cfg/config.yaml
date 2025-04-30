@@ -25,3 +25,4 @@ line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
 # Timezone settings
 timezone: "Asia/Seoul"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
+log_file: "logs/debug.log"  # Path to save the debug log file

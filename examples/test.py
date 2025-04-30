@@ -17,6 +17,8 @@ face_engine_multi = HBFace(
     show=True,
     match_threshold=0.3,
     db_path='data/embeddings/ilhan.pkl',
+    debug=False,
+    log_file='logs/ilhan.log',
     )
 
 # Run the face recognition system
