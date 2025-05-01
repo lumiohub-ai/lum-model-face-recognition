@@ -42,7 +42,7 @@ class EntryLogger:
         self.base_y = 30
         self.padding = 10
         self.person_status = {}
-        # self.auth_client = self.authorize_user()
+        self.auth_client = self.authorize_user()
 
     def authorize_user(self):
         url = self.backend_url
@@ -94,7 +94,7 @@ class EntryLogger:
             "clientWorkingDate": today_date,
         }
 
-        # self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
+        self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:
