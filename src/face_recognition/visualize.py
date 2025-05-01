@@ -46,14 +46,14 @@ class Visualization():
         if mode == "horizontal":
             if frame1.shape[0] != frame2.shape[0]:
                 frame2 = cv2.resize(frame2, (int(frame2.shape[1] * (frame1.shape[0] / frame2.shape[0])), frame1.shape[0]))
-            return cv2.hconcat([frame1, frame2])
+            concated_frame =cv2.hconcat([frame1, frame2])
         
         elif mode == "vertical":
             if frame1.shape[1] != frame2.shape[1]:
                 frame2 = cv2.resize(frame2, (frame1.shape[1], int(frame2.shape[0] * (frame1.shape[1] / frame2.shape[1]))))
-            return cv2.vconcat([frame1, frame2])
-        else:
-            raise ValueError("Unsupported mode. Choose 'horizontal' or 'vertical'.")
+            concated_frame = cv2.vconcat([frame1, frame2])
+        
+        return cv2.resize(concated_frame, (1920, 720))  # Resize to window size
 
 
 class ShapeDrawer:

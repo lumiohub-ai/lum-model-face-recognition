@@ -2,12 +2,12 @@
 device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-db_path: "data/ilhan-aligned"  # Path to the folder containing face images for recognition
-video_path: "videos/output_10.mkv"
-output_video_path: "data/output.mp4"  # Path to save the output video with annotations
+db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format
+in_camera: "RTSP LINK"
+out_camera: "RTSP LINK"  # Path to save the output video with annotations
 
 # Face recognition settings
-match_threshold: 0.5  # Threshold for face similarity matching
+match_threshold: 0.3  # Threshold for face similarity matching
 
 # Other settings
 show: True  # Show the output video with annotations

@@ -85,10 +85,7 @@ git git@github.com:humblebeeintel/face-recognition.git && \
 Install for **DEVELOPMENT** environment:
 
 ```sh
-pip install -r requirements.txt
-
-# Clone needed repository for evaluating the model
-git clone https://github.com/humblebeeintel/TrackEval
+bash scripts/setup.sh
 ```
 
 ### 4. 📥 Download databases and models
@@ -108,29 +105,30 @@ git clone https://github.com/humblebeeintel/TrackEval
 device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-db_path: "data/hb-kor"  # Path to the folder containing face images for recognition
+db_path: "data/ilhan-aligned"  # Path to the folder containing face images for recognition
 video_path: "videos/output_10.mkv"
 output_video_path: "data/output.mp4"  # Path to save the output video with annotations
 
-# Model configuration
-model_path: "models/yolov8m-face.pt"  # Path to the face detection model
-detection_threshold: 0.5  # Confidence threshold for face detection
-imgsz: 1280  # Image size for inference (higher values improve accuracy but increase processing time)
-tracker: "bytetrack.yaml"  # Path to the tracker configuration file
-
 # Face recognition settings
-match_threshold: 0.6  # Threshold for face similarity matching
+match_threshold: 0.5  # Threshold for face similarity matching
 
 # Other settings
 show: True  # Show the output video with annotations
-save_output: True  # Save the output video with annotations
+save_video: True  # Save the output video with annotations
+save_crops: False  # Save cropped face images for debugging
+crops_path: "crops"  # Path to save cropped face images
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
 
 # ROI settings
 roi: null  # Enable region of interest (ROI) mode
-line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])                     
+line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
+
+# Timezone settings
+timezone: "Asia/Seoul"  # Timezone for tracking times
+debug: True  # Enable debug mode for detailed logging
+log_file: "logs/debug.log"  # Path to save the debug log file                    
 ```
 
 ## 🚸 Usage/Examples
@@ -147,36 +145,26 @@ python examples/test.py
 import sys
 import os
 sys.path.append(os.curdir)
-from datetime import datetime
 from src.face_recognition.hbface import HBFace
 
 # RTSP streams for IN and OUT cameras
-in_camera = ''
-out_camera = ''
-
-print("Starting face recognition...")
-print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+in_camera = 'RTSP LINK' 
+out_camera = 'RTSP LINK'
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
     cam_types=["IN", "OUT"],
     video_path=[in_camera, out_camera],
-    roi=[(383, 53, 1015, 709), (639, 1, 1276, 717)],
-    line_points=[[(0, 273), (631, 264)], [(1, 2), (636, 712)]],
+    # roi=[(383, 53, 1015, 709), (639, 1, 1276, 717)], 
+    # line_points=[[(1, 264), (473, 297)], [(0, 325), (704, 348)]],
     multi_camera=True,
-    show=False,  # Disable display, just process and save
-    match_threshold=0.6,
-    detection_threshold=0.5,
-    imgsz=1280,
-    padding_ratio=0.2,
-    db_path='data/hb-uzb',
+    show=True,  # Disable display, just process and save
+    match_threshold=0.3,
+    db_path='data/embeddings/hb-kor-camera.pkl',
 )
 
 # Run the face recognition system
 face_engine_multi.run()
-
-print("Face recognition completed.")
-print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 ```
 

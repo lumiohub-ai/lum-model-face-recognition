@@ -1,7 +1,7 @@
-import sys
 import os
+import sys
 sys.path.append(os.curdir)
-from src.face_recognition.evaluation.evaluate_system import Evaluator
+from tests.evaluate_system import Evaluator
 import argparse
 
 parser = argparse.ArgumentParser(description='Evaluate face recognition system')

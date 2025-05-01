@@ -1,8 +1,6 @@
 import sys
 import os
 import contextlib
-from pathlib import Path
-import cv2
 import numpy as np
 import pytz
 from datetime import datetime
@@ -13,7 +11,7 @@ from shapely.geometry import LineString
 sys.path.append(os.curdir)
 sys.path.append(os.path.join(os.getcwd(), 'yolo_tracking'))
 
-from src.face_recognition.engine import FaceRecognition
+from .recognition import FaceRecognition
 from yolo_tracking.boxmot import DeepOCSORT
 from insightface.app import FaceAnalysis
 
@@ -30,12 +28,12 @@ class FaceEngine:
                 self.model = FaceAnalysis(name='buffalo_l')
                 self.model.prepare(ctx_id=0)
 
-                self.tracker = DeepOCSORT(
-                    device='cuda:0',
-                    custom_features=True,
-                )
+        self.tracker = DeepOCSORT(
+            device='cuda:0',
+            custom_features=True,
+        )
 
-                self.face_recognition = FaceRecognition(self.args)
+        self.face_recognition = FaceRecognition(self.args)
 
     def _initialize_tracking(self) -> None:
         self.track_emb_frame_history: Dict[int, Dict[int, np.ndarray]] = {}
@@ -55,6 +53,7 @@ class FaceEngine:
         features = []
 
         if len(faces) == 0:
+            # self.tracker.update(np.empty((0, 6)), frame, np.empty([0, 512]))
             return [], []
 
         for face in faces:
@@ -92,11 +91,12 @@ class FaceEngine:
                 self.track_boxes_frame.setdefault(track_id, {})[frame_num] = [
                     box[0], box[1], box[2] - box[0], box[3] - box[1], track.conf
                 ]
+                
             else:
                 continue 
-                               
-            self.track_emb_frame_history.setdefault(track_id, {})[frame_num] = emb
 
+            self.track_emb_frame_history.setdefault(track_id, {})[frame_num] = emb
+                           
     def recognize_removed_tracks(self, removed_tracks: List[int], last_frame: bool = False) -> Dict[str, List]:
         persons_logged = {}
         

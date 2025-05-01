@@ -3,12 +3,14 @@ import sys
 import cv2
 import yaml
 from loguru import logger
-
 from datetime import datetime
 from typing import List, Optional, Union, Any
 
-from src.face_recognition.engine import FaceEngine
-from src.face_recognition.utils import Visualization, StreamHandler, EntryLogger
+# Local imports
+from .engine import FaceEngine
+from .visualize import Visualization
+from .stream_handler import StreamHandler
+from .entry_logger import EntryLogger
 
 
 class FaceSetup:

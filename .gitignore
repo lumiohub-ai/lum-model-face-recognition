@@ -42,3 +42,4 @@ hb-videos/
 !/facenet_pytorch/models
 
 data/embeddings/
+src/face_recognition.egg-info/

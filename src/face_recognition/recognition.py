@@ -1,5 +1,3 @@
-import os
-import cv2
 import pickle
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -17,9 +15,11 @@ class FaceRecognition:
         db_embs = data['embeddings']
         db_names = data['names']
 
+        self.args.logger.info(f"Loaded {len(db_embs)} embeddings from {self.args.db_path}")
+
         return db_names, db_embs
     
-    def recognize_face(self, face_embs):   
+    def recognize_face(self, face_embs):
         similarities = self.compute_similarities(face_embs)
         best_match_idx, best_similarity = self.get_best_match(similarities)
         matched_name = self.db_names[best_match_idx].split('_')[0]

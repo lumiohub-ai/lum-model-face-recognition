@@ -1,5 +1,3 @@
-import sys
-import os
 import warnings
 from typing import List, Optional, Union
 import time
@@ -8,17 +6,16 @@ from numpy.typing import NDArray
 from loguru import logger
 
 # Local imports
-from src.face_recognition.engine import FaceEngine
+from .engine import FaceEngine
 from .system_setup import FaceSetup
 
-sys.path.append(os.curdir)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 # Main class that merges configuration and processing
 class HBFace:
     def __init__(self, cam_types: Optional[List[str]] = None, video_path: Optional[Union[str, List[str]]] = None,
-                 multi_camera: bool = True, config_path: str = "src/face_recognition/cfg/config.yaml", **kwargs) -> None:
+                 multi_camera: bool = True, config_path: str = "configs/config.yaml", **kwargs) -> None:
         """Initialize the face recognition system with optional camera types and video paths."""
         # Initialize configuration
         self.config = FaceSetup(cam_types, video_path, multi_camera, config_path, **kwargs)

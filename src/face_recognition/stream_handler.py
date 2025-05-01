@@ -7,6 +7,7 @@ class StreamHandler:
     def __init__(self, src: Any) -> None:
         self.src = src
         self.is_video = self.is_video_file(src)
+        
         self.cap = cv2.VideoCapture(src)
         self.stopped = False
         self.lock = threading.Lock()

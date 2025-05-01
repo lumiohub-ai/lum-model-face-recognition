@@ -7,9 +7,9 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 import matplotlib.pyplot as plt
+import logging
 
-from hbface import HBFace
-from utils import ColorLogger
+from face_recognition import HBFace
 
 class Evaluator:
     """Class for evaluating face recognition and tracking performance."""
@@ -19,10 +19,11 @@ class Evaluator:
                  video_dir: str = "client/pred_videos",
                  results_dir: str = "results",
                  tracking_data_dir: str = "TrackEval/data/trackers/mot_challenge",
-                db_path: str = "data/hb-kor",
+                 db_path: str = "data/images/hb-kor",
                  **kwargs
                  ):
-        self.logger = ColorLogger()
+        
+        self.logger = logging.getLogger(__name__)
         self.alg_name = alg_name
         self.benchmark = benchmark
         self.video_dir = video_dir
@@ -31,7 +32,7 @@ class Evaluator:
         self.db_path = db_path
 
         self.imgsz = kwargs.get("imgsz", 1280)
-        self.match_threshold = kwargs.get("match_threshold", 0.7)
+        self.match_threshold = kwargs.get("match_threshold", 0.3)
         self.detection_threshold = kwargs.get("detection_threshold", 0.5)
         self.roi = kwargs.get("roi", (302, 82, 986, 976))
         self.line_points = kwargs.get("line_points", [(129, 241), (1799, 267)])

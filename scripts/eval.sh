@@ -7,7 +7,7 @@ ALG_NAME="fps-calculation"
 BENCHMARK="ilhan"
 VIDEOS="videoa1-1 videoa1-2 videoa1-3 videoa1-4 videoa1-5"
 VIDEO_DIR="client/pred_videos"
-DB_PATH="notebooks/face_data_ilhan.pkl"
+DB_PATH="data/embeddings/ilhan.pkl"
 OUTPUT_DIR="results/"
 MATCH_THRESHOLD=0.3
 DETECTION_THRESHOLD=0.5
@@ -16,7 +16,7 @@ PADDING_RATIO=0.5
 SHOW_FLAG=""  # Empty by default, will add --show if needed
 
 # Build the command with only recognized arguments
-PYTHON_CMD="python3 examples/eval.py \
+PYTHON_CMD="python3 tests/eval.py \
 --alg_name \"$ALG_NAME\" \
 --benchmark \"$BENCHMARK\" \
 --videos $VIDEOS \
