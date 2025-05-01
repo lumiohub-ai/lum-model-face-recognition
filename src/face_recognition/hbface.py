@@ -94,7 +94,12 @@ class HBFace:
             
             # Log recognized persons
             for name, (track_id, appear_time) in persons_recognized.items():
-                self.entry_logger.log_person_entry(name, engine.args.cam_type, track_id, appear_time)
+                status = engine.args.cam_type
+                
+                log_message = f"{name} -> {status} -> {appear_time.strftime('%H:%M:%S')}, track_id: {track_id}"
+                logger.info(log_message)
+
+                self.entry_logger.log_person_entry(name, status, appear_time)
         
         else:
             frame_annotated = frame_cropped
@@ -127,7 +132,10 @@ class HBFace:
             persons_recognized = engine.recognize_removed_tracks([], last_frame=True)
             # Log any final recognized persons
             for name, (track_id, appear_time) in persons_recognized.items():
-                self.entry_logger.log_person_entry(name, engine.args.cam_type, track_id, appear_time)
+                status = engine.args.cam_type
+                log_message = f"{name} -> {status} -> {appear_time.strftime('%H:%M:%S')}, track_id: {track_id}"
+                logger.info(log_message)
+                self.entry_logger.log_person_entry(name, status, appear_time)
 
     def _cleanup(self) -> None:
         """Cleanup resources and finalize the face recognition system."""

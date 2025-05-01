@@ -53,7 +53,7 @@ class FaceEngine:
         features = []
 
         if len(faces) == 0:
-            # self.tracker.update(np.empty((0, 6)), frame, np.empty([0, 512]))
+            self.tracker.update(np.empty((0, 6)), frame, np.empty([0, 512]))
             return [], []
 
         for face in faces:
@@ -81,7 +81,9 @@ class FaceEngine:
             emb, track_id = track.emb, track.id
 
             self.all_tracks.add(track_id)
-            self.id_appear_time.setdefault(track_id, now)
+
+            if track_id not in self.id_appear_time:
+                self.id_appear_time.setdefault(track_id, now)
 
             if track.history_observations and len(track.history_observations) > 2:
                 box = track.history_observations[-1]

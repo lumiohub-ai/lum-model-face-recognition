@@ -1,8 +1,8 @@
 from face_recognition import HBFace
 
 # RTSP streams for IN and OUT cameras
-in_camera = 'rtsp://admin:bHfthUmGVXxtuXTu@192.168.217.152:554' 
-out_camera = 'rtsp://admin:hbai2024@192.168.217.150:554'
+in_camera = 'hb-videos/in.mp4' 
+out_camera = 'hb-videos/out.mp4'
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(

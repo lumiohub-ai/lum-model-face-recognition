@@ -79,37 +79,22 @@ class EntryLogger:
 
         return auth_client
 
-    def log_person_entry(self, name, status, track_id, appear_time):
-        updated = False
+    def log_person_entry(self, name, status, appear_time):
+        self.person_status[name] = status
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
-        
-        # Check if the person's status is new or has changed
-        if self.person_status.get(name) != status:
-            self.person_status[name] = status
-            updated = True
-        
-        if updated:
-            # Update the entry time and log the event
-            self.entry_time[name] = today_time
-            log_message = f"{name} -> {status} -> {today_time}, track_id: {track_id}"
-            self.recent_entries.append(log_message)
-            
-            # Determine the action key based on status
-            client_action_key = "clientIn" if status.upper() == "IN" else "clientOut"
-            
-            # Prepare the payload for the API call
-            payload = {
-                "clientName": name,
-                client_action_key: today_time,
-                "clientStatus": status,
-                "clientWorkingDate": today_date,
-            }
 
-            print(log_message)
-            
-            # Execute the API call to send the data to the server
-            # self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
+        client_action_key = "clientIn" if status.upper() == "IN" else "clientOut"
+    
+        # Prepare the payload for the API call
+        payload = {
+            "clientName": name,
+            client_action_key: today_time,
+            "clientStatus": status,
+            "clientWorkingDate": today_date,
+        }
+
+        # self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:
