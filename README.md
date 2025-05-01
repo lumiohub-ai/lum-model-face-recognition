@@ -92,13 +92,13 @@ bash scripts/setup.sh
 
 1. Download models from here: [LINK](https://drive.google.com/drive/folders/140jyB_uM2PF9-CBVtQCR4hFJJ4Ql0TFs?usp=sharing)
 
-2. Download database from here: [LINK](https://drive.google.com/drive/folders/1kntepMW_Pr2ws-xxGcKbV4kKd4DNY9Yu?usp=sharing)
+2. Download database from here: [LINK](https://drive.google.com/drive/folders/1A6s3MBQvj1PXJDmGKSL4R0ZR6Sc-iicw?usp=sharing)
 
 3. Place put them in the main directory of the repository 
 
 ## ⚙️ Configuration
 
-[**`src/face_recognition/cfg/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/src/face_recognition/cfg/config.yaml):
+[**`configs/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/src/face_recognition/cfg/config.yaml):
 
 ```yaml
 # Device settings
@@ -142,21 +142,16 @@ python examples/test.py
 **For arguments passed to the class, reference the config.yaml file where all parameters can be configured.**
 
 ```python
-import sys
-import os
-sys.path.append(os.curdir)
-from src.face_recognition.hbface import HBFace
+from face_recognition import HBFace
 
 # RTSP streams for IN and OUT cameras
-in_camera = 'RTSP LINK' 
-out_camera = 'RTSP LINK'
+in_camera = 'hb-videos/in.mp4' 
+out_camera = 'hb-videos/out.mp4'
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
     cam_types=["IN", "OUT"],
     video_path=[in_camera, out_camera],
-    # roi=[(383, 53, 1015, 709), (639, 1, 1276, 717)], 
-    # line_points=[[(1, 264), (473, 297)], [(0, 325), (704, 348)]],
     multi_camera=True,
     show=True,  # Disable display, just process and save
     match_threshold=0.3,
@@ -165,7 +160,6 @@ face_engine_multi = HBFace(
 
 # Run the face recognition system
 face_engine_multi.run()
-
 ```
 
 ---
@@ -274,7 +268,7 @@ model_path: "models/yolov8m-face.engine"  # Updated path to TensorRT engine
 #### 4. Run the application normally
 
 ```
-python src/face_recognition/main.py
+python examples/test.py
 ```
 
 ---
