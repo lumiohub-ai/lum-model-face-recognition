@@ -7,9 +7,8 @@ pillow==10.4.0
 PyYAML==6.0.2
 requests==2.32.3
 matplotlib==3.10.0
-ultralytics-thop==2.0.14
 psutil==6.1.1
 shapely==2.0.7
 gql==3.5.1
 requests_toolbelt==1.0.0
-dlib==19.24.6 # might require manual setup
+insightface==0.7.3
