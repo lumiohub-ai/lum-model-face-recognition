@@ -50,7 +50,8 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Now install your package in editable mode
-RUN pip install -e .
+RUN pip install -e yolo_tracking && \
+    pip install -e .
 
 # Expose port (if needed)
 EXPOSE 5003

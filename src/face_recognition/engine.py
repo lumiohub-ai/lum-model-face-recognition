@@ -7,12 +7,8 @@ from datetime import datetime
 from typing import List, Dict, Set, Tuple, Optional, Any
 from shapely.geometry import LineString
 
-# Add necessary paths
-sys.path.append(os.curdir)
-sys.path.append(os.path.join(os.getcwd(), 'yolo_tracking'))
-
 from .recognition import FaceRecognition
-from yolo_tracking.boxmot import DeepOCSORT
+from boxmot import DeepOCSORT
 from insightface.app import FaceAnalysis
 
 class FaceEngine:
