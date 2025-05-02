@@ -43,3 +43,11 @@ hb-videos/
 
 data/embeddings/
 src/face_recognition.egg-info/
+
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+*.zip
