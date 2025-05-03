@@ -107,14 +107,15 @@ class EntryLogger:
         self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
 
         # ANSI color codes
+        BOLD = "\033[1m"
         BLUE = "\033[94m"
         YELLOW = "\033[93m"
         RESET = "\033[0m"
 
         if status.upper() == "IN":
-            print(f"{BLUE}[STATUS] {name} {status.upper()} at {today_time}{RESET}")
+            print(f"{BOLD}{BLUE}[STATUS] {name} {status.upper()} at {today_time}{RESET}")
         else:
-            print(f"{YELLOW}[INFO] {name} {status.upper()} at {today_time}{RESET}")
+            print(f"{BOLD}{YELLOW}[INFO] {name} {status.upper()} at {today_time}{RESET}")
 
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
 
