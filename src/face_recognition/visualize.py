@@ -19,11 +19,6 @@ class Visualization():
     def generate_random_color() -> Tuple[int, int, int]:
         return tuple(random.randint(0, 255) for _ in range(3))
     
-    @staticmethod
-    def display(frame: np.ndarray, window_name: str = "Frame") -> bool:
-        cv2.imshow(window_name, frame)
-        return cv2.waitKey(1) & 0xFF == ord("q")
-    
     def draw_region(self,
                     image: np.ndarray,
                     reg_pts: List[Tuple[int, int]], 

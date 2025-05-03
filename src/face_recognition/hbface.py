@@ -117,7 +117,12 @@ class HBFace:
         """Display processed frames if configured to show output."""
         if self.engines[0].args.show:
             combined_frame = self.visualize.concat_frames(*frames) if len(frames) > 1 else frames[0]
-            self.visualize.display(combined_frame, window_name="Camera Feed")
+            
+            if self.engines[0].args.show:
+                cv2.imshow("Face Recognition", combined_frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    logger.info("ESC key pressed, exiting")
+                    return
     
     def _save_frames(self, frames: List[NDArray]) -> None:
         """Save processed frames to video files if enabled."""
@@ -149,6 +154,7 @@ class HBFace:
             if writer:
                 writer.release()
 
-        cv2.destroyAllWindows()
+        if self.engines[0].args.show:
+            cv2.destroyAllWindows()
         
         logger.info("Cleanup complete")
