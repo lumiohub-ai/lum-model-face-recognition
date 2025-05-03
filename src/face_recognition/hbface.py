@@ -59,10 +59,6 @@ class HBFace:
                 self._save_frames(annotated_frames)
                 self._display_frames(annotated_frames)
 
-                if cv2.waitKey(1) == 27:  # ESC key
-                    logger.info("ESC key pressed, exiting")
-                    break
-
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
 
