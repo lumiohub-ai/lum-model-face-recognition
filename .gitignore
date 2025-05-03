@@ -11,9 +11,6 @@ myenv/
 *.MP4
 *.tif
 *.zip
-
-
-*.txt
 *.npz
 *.json
 
