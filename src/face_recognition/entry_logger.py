@@ -80,13 +80,23 @@ class EntryLogger:
         return auth_client
 
     def log_person_entry(self, name, status, appear_time):
+        previous_status = self.person_status.get(name)
+
+        # If status is the same as before, do nothing
+        if previous_status == status:
+            return
+
+        # Update the cached status
         self.person_status[name] = status
+
+        # Format the appearance time
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
 
+        # Choose correct API field
         client_action_key = "clientIn" if status.upper() == "IN" else "clientOut"
-    
-        # Prepare the payload for the API call
+
+        # Prepare payload
         payload = {
             "clientName": name,
             client_action_key: today_time,
@@ -95,6 +105,18 @@ class EntryLogger:
         }
 
         self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
+
+        # ANSI color codes
+        BLUE = "\033[94m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+
+        if status.upper() == "IN":
+            print(f"{BLUE}[STATUS] {name} {status.upper()} at {today_time}{RESET}")
+        else:
+            print(f"{YELLOW}[INFO] {name} {status.upper()} at {today_time}{RESET}")
+
+        self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
 
     def visualize_entries(self, frame, max_text_width=0):
         for entry in self.recent_entries:

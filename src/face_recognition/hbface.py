@@ -97,7 +97,7 @@ class HBFace:
                 status = engine.args.cam_type
                 
                 log_message = f"{name} -> {status} -> {appear_time.strftime('%H:%M:%S')}, track_id: {track_id}"
-                logger.info(log_message)
+                logger.debug(log_message)
 
                 self.entry_logger.log_person_entry(name, status, appear_time)
         
