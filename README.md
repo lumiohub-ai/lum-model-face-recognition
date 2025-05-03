@@ -107,18 +107,15 @@ source myenv/bin/activate
 device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-db_path: "data/ilhan-aligned"  # Path to the folder containing face images for recognition
-video_path: "videos/output_10.mkv"
-output_video_path: "data/output.mp4"  # Path to save the output video with annotations
+db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format
+video_path: "data/videos/sample.mp4"  # Path to the input video file or RTSP stream
 
 # Face recognition settings
-match_threshold: 0.5  # Threshold for face similarity matching
+match_threshold: 0.3  # Threshold for face similarity matching
 
 # Other settings
 show: True  # Show the output video with annotations
 save_video: True  # Save the output video with annotations
-save_crops: False  # Save cropped face images for debugging
-crops_path: "crops"  # Path to save cropped face images
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
@@ -130,7 +127,7 @@ line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
 # Timezone settings
 timezone: "Asia/Seoul"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
-log_file: "logs/debug.log"  # Path to save the debug log file                    
+log_file: "logs/debug.log"  # Path to save the debug log file               
 ```
 
 ## 🚸 Usage/Examples

@@ -3,8 +3,7 @@ device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
 db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format
-in_camera: "RTSP LINK"
-out_camera: "RTSP LINK"  # Path to save the output video with annotations
+video_path: "data/videos/sample.mp4"  # Path to the input video file or RTSP stream
 
 # Face recognition settings
 match_threshold: 0.3  # Threshold for face similarity matching
@@ -12,8 +11,6 @@ match_threshold: 0.3  # Threshold for face similarity matching
 # Other settings
 show: True  # Show the output video with annotations
 save_video: True  # Save the output video with annotations
-save_crops: False  # Save cropped face images for debugging
-crops_path: "crops"  # Path to save cropped face images
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
