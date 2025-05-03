@@ -86,6 +86,8 @@ Install for **DEVELOPMENT** environment:
 
 ```sh
 bash scripts/setup.sh
+
+source myenv/bin/activate
 ```
 
 ### 4. 📥 Download databases and models
