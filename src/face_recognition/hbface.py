@@ -89,12 +89,8 @@ class HBFace:
             persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
             
             # Log recognized persons
-            for name, (track_id, appear_time) in persons_recognized.items():
+            for name, (_, appear_time) in persons_recognized.items():
                 status = engine.args.cam_type
-                
-                log_message = f"{name} -> {status} -> {appear_time.strftime('%H:%M:%S')}, track_id: {track_id}"
-                logger.debug(log_message)
-
                 self.entry_logger.log_person_entry(name, status, appear_time)
         
         else:
@@ -118,7 +114,6 @@ class HBFace:
                 cv2.imshow("Face Recognition", combined_frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     logger.info("ESC key pressed, exiting")
-                    return
     
     def _save_frames(self, frames: List[NDArray]) -> None:
         """Save processed frames to video files if enabled."""
@@ -132,10 +127,8 @@ class HBFace:
         for engine in self.engines:
             persons_recognized = engine.recognize_removed_tracks([], last_frame=True)
             # Log any final recognized persons
-            for name, (track_id, appear_time) in persons_recognized.items():
+            for name, (_, appear_time) in persons_recognized.items():
                 status = engine.args.cam_type
-                log_message = f"{name} -> {status} -> {appear_time.strftime('%H:%M:%S')}, track_id: {track_id}"
-                logger.info(log_message)
                 self.entry_logger.log_person_entry(name, status, appear_time)
 
     def _cleanup(self) -> None:

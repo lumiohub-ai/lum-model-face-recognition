@@ -13,6 +13,7 @@ face_engine_multi = HBFace(
     multi_camera=True,
     show=False,  # Disable display, just process and save
     log_file='logs/ilhan.log',
+    db_path='data/embeddings/ilhan.pkl',
     debug=True)
 
 

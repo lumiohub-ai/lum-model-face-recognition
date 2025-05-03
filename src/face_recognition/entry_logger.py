@@ -113,9 +113,9 @@ class EntryLogger:
         RESET = "\033[0m"
 
         if status.upper() == "IN":
-            print(f"{BOLD}{BLUE}[STATUS] {name} {status.upper()} at {today_time}{RESET}")
+            print(f"{BOLD}{BLUE}STATUS   | {name} {status.upper()} at {today_time}{RESET}")
         else:
-            print(f"{BOLD}{YELLOW}[STATUS ] {name} {status.upper()} at {today_time}{RESET}")
+            print(f"{BOLD}{YELLOW}STATUS   | {name} {status.upper()} at {today_time}{RESET}")
 
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
 

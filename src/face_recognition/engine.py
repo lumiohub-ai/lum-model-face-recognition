@@ -98,7 +98,7 @@ class FaceEngine:
     def recognize_removed_tracks(self, removed_tracks: List[int], last_frame: bool = False) -> Dict[str, List]:
         persons_logged = {}
         
-        tracks_to_process = list(self.all_tracks - set(self.passed_tracks)) if last_frame else removed_tracks
+        tracks_to_process = sorted(list(self.all_tracks - set(self.passed_tracks))) if last_frame else removed_tracks
 
         for track_id in tracks_to_process:
             if track_id in self.passed_tracks:
@@ -129,6 +129,7 @@ class FaceEngine:
                 continue  
 
             persons_logged[name] = [track_id, self.id_appear_time[track_id]]
+            self.args.logger.debug(f"Track {track_id} with {name} has recognized with {sim}.")
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
