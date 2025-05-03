@@ -55,6 +55,3 @@ RUN pip install -e yolo_tracking && \
 
 # Expose port (if needed)
 EXPOSE 5003
-
-# Default command to run the app
-CMD ["python", "examples/test.py"]
