@@ -229,15 +229,11 @@ class Evaluator:
             eval=True,
             multi_camera=False,
             db_path=self.db_path, 
-            show=True,
-            imgsz=self.imgsz,
+            show=False,
             match_threshold=self.match_threshold,
-            detection_threshold=self.detection_threshold,
             roi=self.roi,
             line_points=self.line_points,
-            padding_ratio=self.padding_ratio,
-            save_crops=True,
-            min_face_size=50,
+            debug=False,
         )
                 
         # Process the video
