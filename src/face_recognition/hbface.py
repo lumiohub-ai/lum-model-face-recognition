@@ -4,6 +4,8 @@ import time
 import cv2
 from numpy.typing import NDArray
 from loguru import logger
+import datetime
+import pytz  # For timezone support
 
 # Local imports
 from .engine import FaceEngine
@@ -26,6 +28,9 @@ class HBFace:
         self.visualize = self.config.visualize
         self.entry_logger = self.config.entry_logger
         self.video_writers = self.config.video_writers
+        
+        # Get timezone from config, default to UTC if not specified
+        self.timezone = getattr(self.config, 'timezone', 'UTC')
     
     def setup_cameras(self, cam_types: Optional[List[str]], video_paths: Optional[Union[str, List[str]]], **kwargs) -> None:
         """Set up camera streams based on configuration."""
@@ -102,9 +107,27 @@ class HBFace:
 
         # Add visualization of recognized entries
         self.entry_logger.visualize_entries(frame_annotated)
+        
+        # Add timestamp to the frame
+        self._add_timestamp(frame_annotated)
 
         return frame_annotated
-
+        
+    def _add_timestamp(self, frame: NDArray) -> None:
+        """Add timestamp to the frame."""
+        try:
+            # Get current time in the configured timezone
+            tz = pytz.timezone(self.engines[0].args.timezone)
+            current_time = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+            
+            # Add timestamp to the top-left corner
+            text = f"{current_time}"
+            cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                      0.7, (0, 255, 0), 2, cv2.LINE_AA)
+            
+        except Exception as e:
+            logger.error(f"Error adding timestamp: {e}")
+    
     def _display_frames(self, frames: List[NDArray]) -> None:
         """Display processed frames if configured to show output."""
         if self.engines[0].args.show:
