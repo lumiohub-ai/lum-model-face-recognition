@@ -3,6 +3,8 @@ import cv2
 from gql import Client
 from gql.transport.requests import RequestsHTTPTransport
 from gql import gql
+import pandas as pd
+import os
 
 LOGIN = gql('''
     mutation Login($input: LoginInput!) {
@@ -35,13 +37,16 @@ RECORD_DATA = gql('''
 ''')
 
 class EntryLogger:
-    def __init__(self, backend_url):
+    def __init__(self, backend_url, max_entries=3):
         self.backend_url = backend_url
         self.entry_time = {}
-        self.recent_entries = deque(maxlen=3)
+        self.recent_entries = deque(maxlen=max_entries)
         self.base_y = 30
         self.padding = 10
+
         self.person_status = {}
+        self.saving_status_info = []
+
         self.auth_client = self.authorize_user()
 
     def authorize_user(self):
@@ -117,6 +122,13 @@ class EntryLogger:
         else:
             print(f"{BOLD}{YELLOW}STATUS   | {name} {status.upper()} at {today_time}{RESET}")
 
+        self.saving_status_info.append({
+            'name': name,
+            'status': status,
+            'time': today_time,
+            'date': today_date,
+        })
+
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
 
     def visualize_entries(self, frame, max_text_width=0):
@@ -142,5 +154,18 @@ class EntryLogger:
                 (0, 255, 0),
                 2,
             )
+    
+    def save_status_info(self, video_name='status_info'):
+        os.makedirs('logs', exist_ok=True)
+
+        # Convert saving_status_info to DataFrame and save to CSV
+        df = pd.DataFrame(self.saving_status_info)
+        df.to_csv(f'logs/{video_name}.csv', index=False)
+
+        text = f"Status information saved to logs/{video_name}.csv"
+
+        return text
+        
+        
 
 

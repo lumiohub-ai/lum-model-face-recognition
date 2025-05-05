@@ -168,5 +168,6 @@ class HBFace:
 
         if self.engines[0].args.show:
             cv2.destroyAllWindows()
-        
-        logger.info("Cleanup complete")
+
+        text = self.entry_logger.save_status_info()
+        logger.info(f"{text}")
