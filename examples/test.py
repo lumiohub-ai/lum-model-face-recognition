@@ -10,8 +10,8 @@ face_engine_multi = HBFace(
     video_path=[in_camera, out_camera],
     multi_camera=True,
     show=True,  # Disable display, just process and save
-    match_threshold=0.01,
-    db_path='data/embeddings/hb-kor.pkl',
+    match_threshold=0.3,
+    db_path='data/embeddings/ilhan.pkl',
 )
 
 # Run the face recognition system
