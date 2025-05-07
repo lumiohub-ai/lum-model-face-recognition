@@ -48,3 +48,5 @@ dist/
 *.whl
 *.tar.gz
 *.zip
+
+*.txt
