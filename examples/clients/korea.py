@@ -16,8 +16,6 @@ face_engine_multi = HBFace(
     log_file='logs/korea.log',
     db_path='data/embeddings/hb-kor-camera.pkl',
     debug=True,
-    status_cooldown=180,  # 3 minutes cooldown between status changes
-    enforce_direction=True,  # Only recognize people if movement direction matches camera type
 )
 
 # Run the face recognition system

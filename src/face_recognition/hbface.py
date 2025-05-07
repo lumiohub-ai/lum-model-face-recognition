@@ -90,7 +90,7 @@ class HBFace:
 
         if active_tracks:
             # Process active tracks and recognize faces in removed tracks
-            engine.process_active_tracks(active_tracks, frame_num)
+            engine.process_active_tracks(active_tracks, frame_cropped, frame_num)
             persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
             
             # Log recognized persons
