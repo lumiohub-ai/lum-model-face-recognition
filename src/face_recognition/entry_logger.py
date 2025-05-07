@@ -9,7 +9,7 @@ class EntryLogger:
     def __init__(self, 
                 args,
                 max_entries=3):
-
+        self.args = args
         self.host = args.host
         self.name = args.name
         self.user = args.user
@@ -47,7 +47,7 @@ class EntryLogger:
         result = self.cursor.fetchone()
 
         if not result:
-            print(f"User with ID {user_id} not found in the database")
+            self.args.logger.warning(f'User with ID {user_id} not found in the database')
             return
         
         username = result[0]
