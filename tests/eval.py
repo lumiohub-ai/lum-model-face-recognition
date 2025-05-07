@@ -14,9 +14,6 @@ parser.add_argument('--db_path', type=str, default='data/ilhan2', help='Path to 
 
 parser.add_argument('--output', type=bool, default='results/', help='Output path for results')
 parser.add_argument('--match_threshold', type=float, default=0.7, help='Face matching threshold')
-parser.add_argument('--detection_threshold', type=float, default=0.5, help='Face detection threshold')
-parser.add_argument('--imgsz', type=int, default=1280, help='Image size')
-parser.add_argument('--padding_ratio', type=float, default=0.2, help='Padding ratio')
 parser.add_argument('--show', action='store_true', default=True, help='Show video stream')
 
 args = parser.parse_args()
@@ -27,9 +24,6 @@ evaluator = Evaluator(
         video_dir=args.video_dir,
         db_path=args.db_path,
         match_threshold=args.match_threshold,
-        detection_threshold=args.detection_threshold,
-        imgsz=args.imgsz,
-        padding_ratio=args.padding_ratio,
         show=False,
 )
 

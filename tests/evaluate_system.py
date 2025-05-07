@@ -31,13 +31,10 @@ class Evaluator:
         self.tracking_data_dir = tracking_data_dir
         self.db_path = db_path
 
-        self.imgsz = kwargs.get("imgsz", 1280)
         self.match_threshold = kwargs.get("match_threshold", 0.3)
-        self.detection_threshold = kwargs.get("detection_threshold", 0.5)
         self.roi = kwargs.get("roi", (302, 82, 986, 976))
         self.line_points = kwargs.get("line_points", [(129, 241), (1799, 267)])
         self.show = kwargs.get("show", False)
-        self.padding_ratio = kwargs.get("padding_ratio", 0.2)
 
         # Create results directory if it doesn't exist
         os.makedirs(os.path.join(results_dir, "algs"), exist_ok=True)
@@ -229,11 +226,11 @@ class Evaluator:
             eval=True,
             multi_camera=False,
             db_path=self.db_path, 
-            show=False,
+            show=True,
             match_threshold=self.match_threshold,
             roi=self.roi,
             line_points=self.line_points,
-            debug=False,
+            debug=True,
         )
                 
         # Process the video
