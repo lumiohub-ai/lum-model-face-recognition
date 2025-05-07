@@ -11,10 +11,10 @@ face_engine_multi = HBFace(
     # roi=[(858, 41, 1660, 903), (527, 62, 1316, 864)], 
     # line_points=[[(724, 497), (1206, 830)], [(525, 1069), (1522, 1065)]],
     multi_camera=True,
-    show=True,  # Disable display, just process and save
+    show=False,  # Disable display, just process and save
     match_threshold=0.3,
     log_file='logs/korea.log',
-    db_path='data/embeddings/hb-kor-camera.pkl',
+    db_path='data/embeddings/hb-kor-latest.pkl',
     debug=True,
 )
 
