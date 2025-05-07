@@ -8,7 +8,7 @@ from typing import List, Dict, Set, Tuple, Optional, Any
 from shapely.geometry import LineString
 
 from .recognition import FaceRecognition
-from boxmot import BoTSORT
+from boxmot import DeepOCSORT
 from insightface.app import FaceAnalysis
 
 class FaceEngine:
@@ -24,10 +24,9 @@ class FaceEngine:
                 self.model = FaceAnalysis(name='buffalo_l')
                 self.model.prepare(ctx_id=0)
 
-        self.tracker = BoTSORT(
+        self.tracker = DeepOCSORT(
             device='cuda:0',
             custom_features=True,
-            track_buffer=1,
         )
 
         self.face_recognition = FaceRecognition(self.args)
@@ -56,11 +55,6 @@ class FaceEngine:
             features.append(emb)
 
             x1, y1, x2, y2 = face.bbox.astype(int)
-            w = x2 - x1
-            h = y2 - y1
-
-            if h < 100:
-                continue
 
             conf = face.det_score
             boxes.append([x1, y1, x2, y2, conf, 0])  # class id 0 for faces
@@ -74,9 +68,9 @@ class FaceEngine:
         boxes, features = np.array(boxes), np.array(features)
         self.tracker.update(boxes, frame, features)
 
-        removed_tracks = [track.id for track in self.tracker.removed_stracks]
+        # removed_tracks = [track.id for track in self.tracker.removed_stracks]
 
-        return self.tracker.active_tracks, removed_tracks
+        return self.tracker.active_tracks, self.tracker.removed_tracks
     
     def visualize_tracks(self, frame: np.ndarray) -> np.ndarray:
         visualization_frame = frame.copy()
@@ -86,7 +80,7 @@ class FaceEngine:
     def process_active_tracks(self, tracks: List, frame: np.ndarray, frame_num: int) -> None:
         for track in tracks:
             now = datetime.now(self.timezone)
-            emb, track_id = track.curr_feat, track.id
+            emb, track_id = track.emb, track.id
 
             self.all_tracks.add(track_id)
 
@@ -162,7 +156,7 @@ class FaceEngine:
         counting_line = LineString(self.args.line_points)
         
         return track_line.intersects(counting_line)
-   
+    
     def _record_evaluation_results(self, track_id: int, name: str) -> None:
         for frame_num, box in self.track_boxes_frame[track_id].items():
             self.mot_results.append({
