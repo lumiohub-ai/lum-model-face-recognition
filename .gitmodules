@@ -1,9 +1,6 @@
-[submodule "TrackEval"]
-	path = TrackEval
+[submodule "modules/TrackEval"]
+	path = modules/TrackEval
 	url = https://github.com/humblebeeintel/TrackEval
-[submodule "yolo_tracking"]
-	path = yolo_tracking
-	url = https://github.com/humblebeeintel/yolo_tracking
 [submodule "modules/yolo_tracking"]
 	path = modules/yolo_tracking
 	url = https://github.com/humblebeeintel/yolo_tracking

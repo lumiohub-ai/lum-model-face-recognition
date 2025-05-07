@@ -47,7 +47,7 @@ class EntryLogger:
         self.person_status = {}
         self.saving_status_info = []
 
-        self.auth_client = self.authorize_user()
+        # self.auth_client = self.authorize_user()
 
     def authorize_user(self):
         url = self.backend_url
@@ -109,7 +109,7 @@ class EntryLogger:
             "clientWorkingDate": today_date,
         }
 
-        self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
+        # self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
 
         # ANSI color codes
         BOLD = "\033[1m"
