@@ -138,14 +138,8 @@ class FaceEngine:
 
             if not self._count_line_passing(track_id):
                 self.args.logger.debug(f"Track {track_id} with {name} has not passed the counting line.")
-                continue  
-
-            # Determine movement direction if possible
-            direction = self._determine_movement_direction(track_id)
-            if direction and direction != self.args.cam_type:
-                self.args.logger.debug(f"Track {track_id} with {name} detected in {self.args.cam_type} camera but moving {direction} direction.")
                 continue
-            
+
             persons_logged[name] = [track_id, self.id_appear_time[track_id]]
             self.args.logger.debug(f"Track {track_id} with {name} has recognized with {sim}.")
 
@@ -168,34 +162,7 @@ class FaceEngine:
         counting_line = LineString(self.args.line_points)
         
         return track_line.intersects(counting_line)
-    
-    def _determine_movement_direction(self, track_id: int) -> Optional[str]:
-        """Determine the movement direction based on track history."""
-        road_points = self.track_road_history.get(track_id, [])
-        
-        if len(road_points) < 5:  # Need enough points to determine direction reliably
-            return None
-        
-        # Get first and last points to determine direction
-        first_point = road_points[0]
-        last_point = road_points[-1]
-        
-        # Calculate movement on x-axis
-        dx = last_point[0] - first_point[0]
-        # Calculate movement on y-axis
-        dy = last_point[1] - first_point[1]
-        
-        # Determine dominant direction based on largest movement
-        if abs(dx) > abs(dy):
-            # Horizontal movement is dominant
-            direction = "OUT" if dx > 0 else "IN"
-        else:
-            # Vertical movement is dominant
-            direction = "OUT" if dy > 0 else "IN"
-            
-        # Can customize this based on your specific camera setup
-        return direction
-    
+   
     def _record_evaluation_results(self, track_id: int, name: str) -> None:
         for frame_num, box in self.track_boxes_frame[track_id].items():
             self.mot_results.append({

@@ -32,10 +32,6 @@ class HBFace:
         # Get timezone from config, default to UTC if not specified
         self.timezone = getattr(self.config, 'timezone', 'UTC')
     
-    def setup_cameras(self, cam_types: Optional[List[str]], video_paths: Optional[Union[str, List[str]]], **kwargs) -> None:
-        """Set up camera streams based on configuration."""
-        self.config.setup_cameras(cam_types, video_paths, **kwargs)
-    
     def run(self) -> None:
         """Run the face recognition system and process video streams."""
         try:
@@ -170,4 +166,5 @@ class HBFace:
             cv2.destroyAllWindows()
 
         text = self.entry_logger.save_status_info()
+        self.entry_logger.close_db_connection()
         logger.info(f"{text}")

@@ -23,7 +23,6 @@ class FaceSetup:
         self.streams: List[StreamHandler] = []
         self.engines: List[FaceEngine] = []
         self.visualize = Visualization()
-        self.entry_logger = EntryLogger(backend_url=kwargs.get('backend_url', 'http://backend:4000/graphql'))
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.config_path = config_path
         
@@ -31,14 +30,18 @@ class FaceSetup:
         self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True))
         
         # Setup camera streams
-        self.setup_cameras(cam_types, video_path, **kwargs)
+        args = self.setup_cameras(cam_types, video_path, **kwargs)
+
+        self.entry_logger = EntryLogger(args=args)
     
     def setup_cameras(self, cam_types: Optional[List[str]], video_paths: Optional[Union[str, List[str]]], **kwargs) -> None:
         """Set up camera streams based on configuration."""
         if self.multi_camera:
-            self._setup_multi_camera(cam_types, video_paths, **kwargs)
+            args = self._setup_multi_camera(cam_types, video_paths, **kwargs)
         else:
-            self._setup_single_camera(cam_types, video_paths, **kwargs)
+            args = self._setup_single_camera(cam_types, video_paths, **kwargs)
+
+        return args
 
     def _setup_multi_camera(self, cam_types: Optional[List[str]], video_paths: Optional[List[str]], **kwargs) -> None:
         """Configure multiple camera streams."""
@@ -50,12 +53,16 @@ class FaceSetup:
         for i, (cam_type, vid_path) in enumerate(zip(cam_types, video_paths)):
             args = self._load_config(video_path=vid_path, cam_type=cam_type, **kwargs)
             self._initialize_camera(args, vid_path, cam_type, timestamp, i)
+        
+        return args
 
     def _setup_single_camera(self, cam_type: Optional[str], video_path: Optional[str], **kwargs) -> None:
         """Configure a single camera stream."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args = self._load_config(video_path=video_path, cam_type=cam_type, **kwargs)
         self._initialize_camera(args, video_path, cam_type, timestamp)
+
+        return args
 
     def _initialize_camera(self, args: Any, vid_path: str, cam_type: str, timestamp: str, index: Optional[int] = None) -> None:
         """Initialize a camera with configuration and prepare video writer if needed."""
