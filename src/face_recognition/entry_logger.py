@@ -1,88 +1,70 @@
 from collections import deque
 import cv2
-from gql import Client
-from gql.transport.requests import RequestsHTTPTransport
-from gql import gql
 import pandas as pd
 import os
-
-LOGIN = gql('''
-    mutation Login($input: LoginInput!) {
-        login(input: $input) {
-            _id
-            memberType
-            memberStatus
-            memberAuthType
-            memberPhone
-            memberNick
-            createdAt
-            updatedAt
-            accessToken
-        }
-    }
-''')
-
-RECORD_DATA = gql('''
-    mutation CreateClientDate($input: DateInput!) {
-    createClientDate(input: $input) {
-        _id
-        clientName
-        clientIn
-        clientOut
-        clientWorkingDate
-        clientStatus
-        clientId
-    }
-}
-''')
+import json
+import psycopg2
 
 class EntryLogger:
-    def __init__(self, backend_url, max_entries=3):
-        self.backend_url = backend_url
-        self.entry_time = {}
-        self.recent_entries = deque(maxlen=max_entries)
-        self.base_y = 30
-        self.padding = 10
+    def __init__(self, 
+                args,
+                max_entries=3):
 
+        self.host = args.host
+        self.name = args.name
+        self.user = args.user
+        self.password = args.password
+        self.port = args.port
+        self.path_to_db_config = args.path_to_db_config
+
+        self.conn, self.cursor = self.connect_to_db()
+        
+        with open(args.path_to_db_config, 'r') as f:
+            self.name_to_id = json.load(f)
+
+        self.recent_entries = deque(maxlen=max_entries)
         self.person_status = {}
         self.saving_status_info = []
+    
+    def connect_to_db(self):
 
-        self.auth_client = self.authorize_user()
-
-    def authorize_user(self):
-        url = self.backend_url
-
-        client = Client(
-            transport=RequestsHTTPTransport(
-                url=url,
-                use_json=True,
-            ),
-            fetch_schema_from_transport=True,
+        conn = psycopg2.connect(
+            host=self.host,
+            database=self.name,
+            user=self.user,
+            password=self.password,
+            port=self.port
         )
 
-        login_variables = {
-            "input": {
-                "memberNick": "Admin", 
-                "memberPassword": "123456"
-            }
-        }
+        cursor = conn.cursor()
 
-        loginResponse = client.execute(LOGIN, variable_values=login_variables)
+        return conn, cursor
+    
+    def log_into_db(self, name, status, appear_time):
+        user_id = next((int(i['id']) for i in self.name_to_id if i['name'] == name), None)
+        
+        self.cursor.execute("SELECT username FROM users WHERE id = %s", (user_id,))
+        result = self.cursor.fetchone()
 
-        access_token = loginResponse['login']['accessToken']
+        if not result:
+            print(f"User with ID {user_id} not found in the database")
+            return
+        
+        username = result[0]
+        status = status.strip().lower()
 
-        auth_transport = RequestsHTTPTransport(
-            url=url,
-            headers={'Authorization': f'Bearer {access_token}'},
-            use_json=True,
-        )
+        if status == 'in':
+            self.cursor.execute("""
+                INSERT INTO dates (id, username, userIn, clientStatus, deleted)
+                VALUES (%s, %s, %s, %s, FALSE)
+            """, (user_id, username, appear_time, status))
+        elif status == "out":
+            self.cursor.execute("""
+                INSERT INTO dates (id, username, userOut, clientStatus, deleted)
+                VALUES (%s, %s, %s, %s, FALSE)
+            """, (user_id, username, appear_time, status))
 
-        auth_client = Client(
-            transport=auth_transport,
-            fetch_schema_from_transport=True,
-        )
-
-        return auth_client
+        self.conn.commit()
 
     def log_person_entry(self, name, status, appear_time):
         previous_status = self.person_status.get(name)
@@ -98,18 +80,7 @@ class EntryLogger:
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
 
-        # Choose correct API field
-        client_action_key = "clientIn" if status.upper() == "IN" else "clientOut"
-
-        # Prepare payload
-        payload = {
-            "clientName": name,
-            client_action_key: today_time,
-            "clientStatus": status,
-            "clientWorkingDate": today_date,
-        }
-
-        self.auth_client.execute(RECORD_DATA, variable_values={'input': payload})
+        self.log_into_db(name, status, appear_time)
 
         # ANSI color codes
         BOLD = "\033[1m"
@@ -132,6 +103,9 @@ class EntryLogger:
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
 
     def visualize_entries(self, frame, max_text_width=0):
+        self.padding = 10
+        self.base_y = 30
+
         for entry in self.recent_entries:
             text_size = cv2.getTextSize(entry, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
             max_text_width = max(max_text_width, text_size[0])
@@ -165,7 +139,10 @@ class EntryLogger:
         text = f"Status information saved to logs/{video_name}.csv"
 
         return text
-        
+    
+    def close_db_connection(self):
+        self.cursor.close()
+        self.conn.close()
         
 
 
