@@ -3,68 +3,44 @@ import cv2
 import pandas as pd
 import os
 import json
-import psycopg2
+import requests
 
 class EntryLogger:
     def __init__(self, 
                 args,
                 max_entries=3):
         self.args = args
-        self.host = args.host
-        self.name = args.name
-        self.user = args.user
-        self.password = args.password
-        self.port = args.port
-        self.path_to_db_config = args.path_to_db_config
-
-        self.conn, self.cursor = self.connect_to_db()
-        
         with open(args.path_to_db_config, 'r') as f:
             self.name_to_id = json.load(f)
+        
+        self.api_url = "http://smart-office.humblebee.ai:5001/api/history/create"
+        self.headers = {"Content-Type": "application/json"}
 
         self.recent_entries = deque(maxlen=max_entries)
         self.person_status = {}
         self.saving_status_info = []
-    
-    def connect_to_db(self):
 
-        conn = psycopg2.connect(
-            host=self.host,
-            database=self.name,
-            user=self.user,
-            password=self.password,
-            port=self.port
-        )
-
-        cursor = conn.cursor()
-
-        return conn, cursor
-    
-    def log_into_db(self, name, status, appear_time):
+    def send_data_to_api(self, name, status):
         user_id = next((int(i['id']) for i in self.name_to_id if i['name'] == name), None)
-        
-        self.cursor.execute("SELECT username FROM users WHERE id = %s", (user_id,))
-        result = self.cursor.fetchone()
 
-        if not result:
+        if user_id is None:
             self.args.logger.warning(f'User with ID {user_id} not found in the database')
             return
         
-        username = result[0]
-        status = status.strip().lower()
+        payload = {
+            "user_id": user_id,
+            "detection_type": status.lower()
+        }
 
-        if status == 'in':
-            self.cursor.execute("""
-                INSERT INTO dates (id, username, userIn, clientStatus, deleted)
-                VALUES (%s, %s, %s, %s, FALSE)
-            """, (user_id, username, appear_time, status))
-        elif status == "out":
-            self.cursor.execute("""
-                INSERT INTO dates (id, username, userOut, clientStatus, deleted)
-                VALUES (%s, %s, %s, %s, FALSE)
-            """, (user_id, username, appear_time, status))
+        response = requests.post(self.api_url, json=payload, headers=self.headers)
+        response.raise_for_status()  # Raise an error for bad status codes
+        
+        data = response.json()
+        if response.status_code == 201:
+            self.args.logger.info(f"Success: {data['message']}")
+        else:
+            self.args.logger.warning(f"Error: {data.get('error', 'Unknown error')}")
 
-        self.conn.commit()
 
     def log_person_entry(self, name, status, appear_time):
         previous_status = self.person_status.get(name)
@@ -80,7 +56,7 @@ class EntryLogger:
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
 
-        self.log_into_db(name, status, appear_time)
+        self.send_data_to_api(name, status)
 
         # ANSI color codes
         BOLD = "\033[1m"
