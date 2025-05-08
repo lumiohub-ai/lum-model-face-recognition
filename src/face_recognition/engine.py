@@ -6,6 +6,7 @@ import pytz
 from datetime import datetime
 from typing import List, Dict, Set, Tuple, Optional, Any
 from shapely.geometry import LineString
+import cv2
 
 from .recognition import FaceRecognition
 from boxmot import DeepOCSORT
@@ -17,6 +18,12 @@ class FaceEngine:
         self.timezone = pytz.timezone(args.timezone)
         self._initialize_models()
         self._initialize_tracking()
+        self._setup_data_collection_folder()
+
+    def _setup_data_collection_folder(self) -> None:
+        self.data_collection_path = os.path.join(os.getcwd(), 'data_collection')
+        if not os.path.exists(self.data_collection_path):
+            os.makedirs(self.data_collection_path)
 
     def _initialize_models(self) -> None:
         with open(os.devnull, 'w') as fnull:
@@ -90,7 +97,7 @@ class FaceEngine:
             if track.history_observations and len(track.history_observations) > 2:
                 box = track.history_observations[-1]
                 x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
-                # face_crop = frame[y1:y2, x1:x2]
+                face_crop = frame[int(y1):int(y2), int(x1):int(x2)]
 
                 center = (int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2))
 
@@ -98,7 +105,7 @@ class FaceEngine:
                 self.track_boxes_frame.setdefault(track_id, {})[frame_num] = [
                   x1, y1, x2, y2, track.conf, 0
                 ]
-                # self.track_crop_history.setdefault(track_id, {})[frame_num] = face_crop
+                self.track_crop_history.setdefault(track_id, {})[frame_num] = face_crop
                 
             else:
                 continue 
@@ -136,11 +143,44 @@ class FaceEngine:
 
             persons_logged[name] = [track_id, self.id_appear_time[track_id]]
             self.args.logger.debug(f"Track {track_id} with {name} has recognized with {sim}.")
+            
+            # Save the face crop to data_collection folder
+            self._save_face_crop(track_id, recognition_info)
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
 
         return persons_logged
+    
+    def _save_face_crop(self, track_id, recognition_info) -> None:
+        """Save a face crop of the recognized person to the data_collection folder."""
+        if track_id not in self.track_crop_history or not self.track_crop_history[track_id]:
+            self.args.logger.debug(f"No face crops available for track {track_id}")
+            return
+        
+        # Get available frame numbers for this track
+        available_frames = list(self.track_crop_history[track_id].keys())
+        if not available_frames:
+            self.args.logger.debug(f"Empty face crop history for track {track_id}")
+            return
+        
+        # Try to get the matched frame, or use another available frame
+        matched_frame_num = recognition_info.get('matched_frame_num')
+        if matched_frame_num in available_frames:
+            frame_num = matched_frame_num
+        else:
+            # Use the middle frame as fallback
+            frame_num = available_frames[len(available_frames) // 2]
+        
+        face_crop = self.track_crop_history[track_id][frame_num]
+        
+        # Create filename with track_id, name and timestamp
+        timestamp = self.id_appear_time[track_id].strftime('%Y%m%d_%H%M%S')
+        filename = f"{recognition_info['name']}_{track_id}_{timestamp}_{recognition_info['similarity']:.2f}.jpg"
+        
+        # Save the image
+        save_path = os.path.join(self.data_collection_path, filename)
+        cv2.imwrite(save_path, face_crop)
     
     def _count_line_passing(self, track_id: int) -> bool:
         if self.args.line_points is None:
