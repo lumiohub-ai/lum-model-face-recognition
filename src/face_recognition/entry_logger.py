@@ -33,7 +33,6 @@ class EntryLogger:
         }
 
         response = requests.post(self.api_url, json=payload, headers=self.headers)
-        response.raise_for_status()  # Raise an error for bad status codes
         
         data = response.json()
         if response.status_code == 201:
