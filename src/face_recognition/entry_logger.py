@@ -115,10 +115,5 @@ class EntryLogger:
         text = f"Status information saved to logs/{video_name}.csv"
 
         return text
-    
-    def close_db_connection(self):
-        self.cursor.close()
-        self.conn.close()
-        
 
 

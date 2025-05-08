@@ -63,14 +63,9 @@ class ShapeDrawer:
         return self.shapes
 
 # Example usage
-image_path = "/home/hbvision/Desktop/face-recognition/frame_in.jpg"  # Replace with your image path
+image_path = "/home/hbvision/mirsaid/face-recognition/cropped_frame_OUT.jpg"  # Replace with your image path
 image = cv2.imread(image_path)
-orig_width, orig_height = image.shape[1], image.shape[0]
-image_resized = cv2.resize(image, (1280, 720), image)  # Resize for better visibility
-drawer = ShapeDrawer(image_resized)
+drawer = ShapeDrawer(image)
 shapes = drawer.run()
-
-# Convert shapes to original image size
-shapes = [[(int(x * orig_width / 1280), int(y * orig_height / 720)) for x, y in shape] for shape in shapes]
 
 print("Collected Shapes:", shapes)

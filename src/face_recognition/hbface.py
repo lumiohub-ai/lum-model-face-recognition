@@ -166,5 +166,4 @@ class HBFace:
             cv2.destroyAllWindows()
 
         text = self.entry_logger.save_status_info()
-        self.entry_logger.close_db_connection()
         logger.info(f"{text}")

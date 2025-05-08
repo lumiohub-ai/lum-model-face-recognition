@@ -25,9 +25,4 @@ debug: True  # Enable debug mode for detailed logging
 log_file: "logs/debug.log"  # Path to save the debug log file
 
 # Database settings
-host: "127.0.0.1"
-name: "smart-office"
-user: "postgres"
-password: "hbvision"
-port: 5432
 path_to_db_config: "data/id/ilhan.json"
