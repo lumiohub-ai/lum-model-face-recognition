@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install -y \
     python3-opencv \
     # Add tzdata and configure it non-interactively
     tzdata \
+    libpq-dev \
+    gcc \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create a virtual environment
@@ -50,7 +52,8 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Now install your package in editable mode
-RUN pip install -e yolo_tracking && \
+RUN pip install -e modules/yolo_tracking && \
+    pip install -e modules/insightface && \
     pip install -e .
 
 # Expose port (if needed)
