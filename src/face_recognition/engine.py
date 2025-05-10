@@ -149,6 +149,11 @@ class FaceEngine:
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
+            
+            del self.track_emb_frame_history[track_id]
+            del self.track_boxes_frame[track_id]
+            del self.track_crop_history[track_id]
+            del self.id_appear_time[track_id]
 
         return persons_logged
     
