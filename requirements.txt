@@ -21,3 +21,4 @@ filterpy==1.4.5
 onnxruntime-gpu==1.21.0
 psycopg2-binary==2.9.10
 psycopg2==2.9.10
+dotenv==0.9.9
