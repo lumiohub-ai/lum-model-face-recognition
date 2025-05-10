@@ -116,30 +116,27 @@ class FaceEngine:
         persons_logged = {}
         
         tracks_to_process = sorted(list(self.all_tracks - set(self.passed_tracks))) if last_frame else removed_tracks
+        # Track must not be in passed_tracks
+        tracks_to_process = [track_id for track_id in tracks_to_process if track_id not in self.passed_tracks]
 
         for track_id in tracks_to_process:
-            if track_id in self.passed_tracks:
-                continue
-
             self.passed_tracks.append(track_id)
 
             track_id_embeddings = self.track_emb_frame_history.get(track_id, {})
-            if not track_id_embeddings:
+            if not track_id_embeddings or not self._count_line_passing(track_id):
+                self._delete_cache(track_id)
+                # self.args.logger.debug(f"Track {track_id} has no embeddings or has not passed the counting line.")
                 continue
                 
             track_id_embeddings = np.array(list(track_id_embeddings.values()))
             recognition_info = self.face_recognition.recognize_face(track_id_embeddings)
 
+            if not recognition_info['recognized']:
+                self._delete_cache(track_id)
+                continue
+
             name = recognition_info['name']
             sim = recognition_info['similarity']
-
-            if not recognition_info['recognized']:
-                self.args.logger.debug(f"{name} with {track_id} cannot pass threshold with {sim}.")
-                continue
-
-            if not self._count_line_passing(track_id):
-                self.args.logger.debug(f"Track {track_id} with {name} has not passed the counting line.")
-                continue
 
             persons_logged[name] = [track_id, self.id_appear_time[track_id]]
             self.args.logger.debug(f"Track {track_id} with {name} has recognized with {sim}.")
@@ -149,16 +146,31 @@ class FaceEngine:
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
-            
-            del self.track_emb_frame_history[track_id]
-            del self.track_boxes_frame[track_id]
-            del self.track_crop_history[track_id]
-            del self.id_appear_time[track_id]
+
+            self._delete_cache(track_id)           
 
         return persons_logged
     
+    def _delete_cache(self, track_id) -> None:
+        """Delete the cache of embeddings and boxes."""
+        try:
+            for d in [
+                    self.track_emb_frame_history,
+                    self.track_boxes_frame,
+                    self.track_crop_history,
+                    self.track_road_history,
+                    self.id_appear_time,
+                ]:
+                    del d[track_id]
+        except KeyError:
+            self.args.logger.debug(f"Track {track_id} not found in cache.")
+        
     def _save_face_crop(self, track_id, recognition_info) -> None:
         """Save a face crop of the recognized person to the data_collection folder."""
+
+        gt_path = f'data/images/ilhan-aligned/{recognition_info["name"]}.jpg'
+        gt_face = cv2.imread(gt_path)
+
         if track_id not in self.track_crop_history or not self.track_crop_history[track_id]:
             self.args.logger.debug(f"No face crops available for track {track_id}")
             return
@@ -178,6 +190,11 @@ class FaceEngine:
             frame_num = available_frames[len(available_frames) // 2]
         
         face_crop = self.track_crop_history[track_id][frame_num]
+
+        gt_face = cv2.resize(gt_face, (112, 112))
+        face_crop = cv2.resize(face_crop, (112, 112))
+
+        merged_face = np.hstack((gt_face, face_crop))
         
         # Create filename with track_id, name and timestamp
         timestamp = self.id_appear_time[track_id].strftime('%Y%m%d_%H%M%S')
@@ -185,7 +202,7 @@ class FaceEngine:
         
         # Save the image
         save_path = os.path.join(self.data_collection_path, filename)
-        cv2.imwrite(save_path, face_crop)
+        cv2.imwrite(save_path, merged_face)
     
     def _count_line_passing(self, track_id: int) -> bool:
         if self.args.line_points is None:

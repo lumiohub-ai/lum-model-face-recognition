@@ -37,6 +37,9 @@ class FaceRecognition:
             'best_match_idx': best_match_idx,
         }
 
+        if not recognized:
+            self.args.logger.debug(f"Face not recognized: {matched_name} with similarity {best_similarity:.2f}")
+
         return recognition_info
 
     def compute_similarities(self, face_embs):
