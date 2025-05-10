@@ -50,3 +50,5 @@ dist/
 *.zip
 
 *.txt
+
+.env

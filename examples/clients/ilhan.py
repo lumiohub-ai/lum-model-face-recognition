@@ -1,8 +1,12 @@
 from face_recognition import HBFace
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # RTSP streams for IN and OUT cameras
-in_camera = 'rtsp://admin:qwerty12.@192.168.1.68/Streaming/Channels/101'
-out_camera ='rtsp://admin:qwerty12.@192.168.1.69/Streaming/Channels/101'
+in_camera = os.getenv("ILHAN_IN")
+out_camera = os.getenv("ILHAN_OUT")
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
