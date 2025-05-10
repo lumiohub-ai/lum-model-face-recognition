@@ -103,7 +103,7 @@ class Evaluator:
                 r.write(recognition_format_text + '\n')
     
     def evaluate_recognition(self, video_name: str) -> Tuple[float, float, float]:
-        id_to_name_path = f'annotations/id_to_name_{video_name}.json'
+        id_to_name_path = f'annotations/{video_name}.json'
         pred_path = f'{self.results_dir}/{video_name}_recognition_{self.alg_name}-{self.benchmark}.txt'
 
         # Check all files exist
@@ -230,7 +230,7 @@ class Evaluator:
             match_threshold=self.match_threshold,
             roi=self.roi,
             line_points=self.line_points,
-            debug=True,
+            debug=False,
         )
                 
         # Process the video
@@ -286,7 +286,7 @@ class Evaluator:
     def run_evaluation(self, video_names: List[str]) -> Dict:
         # Create video paths dictionary
         video_paths = {
-            video: os.path.join(self.video_dir, f"{video}_eval.mp4")
+            video: os.path.join(self.video_dir, f"{video}.mp4")
             for video in video_names
         }
         
@@ -299,17 +299,17 @@ class Evaluator:
             self.process_video(video_name, video_path)
         
         # Evaluate tracking performance
-        tracking_results = self.evaluate_mot()
+        # tracking_results = self.evaluate_mot()
         
-        # Merge tracking results with recognition results
-        for video_name, track_res in tracking_results.items():
-            if video_name in self.results:
-                self.results[video_name].update({
-                    "DetA": track_res.get("DetA", 0),
-                    "DetRe": track_res.get("DetRe", 0),
-                    "DetPr": track_res.get("DetPr", 0),
-                    "LocA": track_res.get("LocA", 0)
-                })
+        # # Merge tracking results with recognition results
+        # for video_name, track_res in tracking_results.items():
+        #     if video_name in self.results:
+        #         self.results[video_name].update({
+        #             "DetA": track_res.get("DetA", 0),
+        #             "DetRe": track_res.get("DetRe", 0),
+        #             "DetPr": track_res.get("DetPr", 0),
+        #             "LocA": track_res.get("LocA", 0)
+        #         })
         
         # Save final results
         self.save_results()

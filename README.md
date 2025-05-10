@@ -6,15 +6,15 @@
 
 ## 📋 Table of Contents
 
-- [✨ Features](#features)
-- [🛠 Installation](#installation)
+- [✨ Features](#-features)
+- [🛠 Installation](#-installation)
   - [Prerequisites](#prerequisites)
   - [Download Repository](#download-or-clone-the-repository)
   - [Package Installation](#install-the-package)
-- [⚙️ Configuration](docs/configurations.md)
-- [🚸 Usage/Examples](#usageexamples)
-- [📊 Evaluation](docs/evaluation.md)
-- [🖥️ NVIDIA Jetson Nano setup](docs/jetson_nano.md)
+- [⚙️ Configuration](#️-configuration)
+- [🚸 Usage/Examples](#-usageexamples)
+- [📊 Evaluation](#-evaluation)
+- [🖥️ NVIDIA Jetson Nano setup](#️-nvidia-jetson-nano-setup)
 - [📚 Documentation](#-documentation)
 - [📑 Research References](#--research-references)
 
@@ -168,48 +168,37 @@ To properly evaluate the face recognition system's performance and identify area
 
 ### 1. Video Labeling and Ground Truth
 
-1. Use Label Studio to label video tracking data
-2. Download annotations in `json-mini` format
-3. Prepare an ID-to-name mapping dictionary:
+1. Prepare an ID-to-name mapping dictionary:
 
-```python
-id_to_name = {
-    1: 'Azamat',
-    2: 'Oybek',
-    3: 'Maruf',
-    4: 'Bahodir',
-    5: 'Sarvar',
-    6: 'MuhammadAmin',
-    7: 'Batkhuu',
-    8: 'Mirsaid',
-}
-```
+ ```json { "1": "Azamat", "2": "Oybek", "3": "Maruf", "4": "Bahodir", "5": "Sarvar", "6": "MuhammadAmin", "7": "Batkhuu", "8": "Mirsaid" } ```
 
-### 2. Converting Annotations to MOT Format
-
-Run the conversion script to transform Label Studio annotations to MOT format:
-
-```bash
-python src/face-recognition/evaluation/json_mini_converter.py \
-    -j path/to/annotations.json \
-    -v path/to/video/directory \
-    --label_studio_fps 25 \
-    --output_txt_path output_mot_10.txt \
-    --verify True
-```
-
-Arguments:
-* `-j, --json_path`: Path to JSON annotations (required)
-* `-v, --video_dir`: Path to directory containing video files
-* `--label_studio_fps`: Label Studio FPS (default: 25)
-* `--output_txt_path`: Path to output txt file (default: 'output_mot_10.txt')
-* `--verify`: Verify the output video (default: True)
+2. Rename it same with video name and save it ```annotations``` directory.
 
 ### 3. Run Evaluation
 
+```bash
+python3 tests/eval.py \
+  --alg_name "fps-calculation" \
+  --benchmark "ilhan" \
+  --videos videoa1-1 videoa1-2 videoa1-3 videoa1-4 videoa1-5 \
+  --video_dir "data/tests/ilhan_videos" \
+  --db_path "data/embeddings/ilhan.pkl" \
+  --output "results/" \
+  --match_threshold 0.3 \
+  --show
 ```
-python src/face_recognition/evaluation/evaluate_system.py
-```
+
+| Argument            | Description                                                           |
+| ------------------- | --------------------------------------------------------------------- |
+| `--alg_name`        | Name of the algorithm used for evaluation (e.g., `"fps-calculation"`) |
+| `--benchmark`       | Name of the benchmark dataset or group (e.g., `"ilhan"`)              |
+| `--videos`          | List of video names in ```video_dir``` (space-separated)                                 |
+| `--video_dir`       | Path to the directory containing videos files                          |
+| `--db_path`         | Path to the `.pkl` file with saved embeddings                         |
+| `--output`          | Directory to save evaluation results                                  |
+| `--match_threshold` | Similarity threshold to match faces (default is `0.3`)                |
+| `--show` (optional) | Add this flag to visualize matching results during evaluation         |
+
 
 #### Required Parameters
 
