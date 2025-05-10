@@ -1,3 +1,4 @@
+import os
 import warnings
 from typing import List, Optional, Union
 import time
@@ -12,6 +13,7 @@ from .engine import FaceEngine
 from .system_setup import FaceSetup
 
 warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 
 # Main class that merges configuration and processing
@@ -133,9 +135,25 @@ class HBFace:
                 cv2.imshow("Face Recognition", combined_frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     logger.info("ESC key pressed, exiting")
+
+    def _check_time_interval(self) -> bool:
+        """Program must save the frames from
+        7 AM to 9 AM and 5 PM to 7 PM every day with Uzbekistan time.
+        """
+        tz = pytz.timezone('Asia/Tashkent')
+        current_time = datetime.datetime.now(tz)
+        start_morning = current_time.replace(hour=7, minute=0, second=0, microsecond=0)
+        end_morning = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+        start_evening = current_time.replace(hour=17, minute=0, second=0, microsecond=0)
+        end_evening = current_time.replace(hour=19, minute=0, second=0, microsecond=0)
+
+        return (start_morning <= current_time <= end_morning) or (start_evening <= current_time <= end_evening)
     
     def _save_frames(self, frames: List[NDArray]) -> None:
         """Save processed frames to video files if enabled."""
+        if not self._check_time_interval():
+            return
+        
         if self.engines[0].args.save_video:      
             for i, frame in enumerate(frames):
                 if self.video_writers[i]:
