@@ -3,6 +3,7 @@
 myenv/
 *.jpg
 *.png
+*.jpeg
 *.mov
 *.mp4
 *.avi
