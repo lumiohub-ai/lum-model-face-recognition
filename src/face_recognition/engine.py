@@ -67,10 +67,9 @@ class FaceEngine:
             boxes.append([x1, y1, x2, y2, conf, 0])  # class id 0 for faces
         
         if len(boxes) == 0:
-            boxes = np.array([[1, 1, 10, 10, 1, 0]])  # Dummy box
-            features = np.ones((1, 512))  # Dummy feature
-
-            self.tracker.update(boxes, frame, features)
+            # If no faces are detected, we can still update the tracker with dummy values
+            self.tracker.update(np.empty((0, 6)), frame, np.empty((0, 512)))
+            return [], []
 
         boxes, features = np.array(boxes), np.array(features)
         self.tracker.update(boxes, frame, features)
