@@ -1,8 +1,8 @@
 from face_recognition import HBFace
 
 # RTSP streams for IN and OUT cameras
-in_camera = 'data/tests/ilhan_videos/videoa1-1_eval.mp4' 
-out_camera = 'data/tests/ilhan_videos/videoa1-2_eval.mp4'
+in_camera = 'data/tests/ilhan/videoa1-1.mp4' 
+out_camera = 'data/tests/ilhan/videoa1-2.mp4'
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(

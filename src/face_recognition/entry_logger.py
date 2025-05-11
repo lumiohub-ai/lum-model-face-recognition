@@ -10,15 +10,36 @@ class EntryLogger:
                 args,
                 max_entries=3):
         self.args = args
-        with open(args.path_to_db_config, 'r') as f:
-            self.name_to_id = json.load(f)
         
-        self.api_url = "http://smart-office.humblebee.ai:5001/api/history/create"
+        self.create_user_api_url = "http://localhost:5001/api/history/create"
+        self.get_all_users_api_url = "http://localhost:5001/api/users"
+
         self.headers = {"Content-Type": "application/json"}
 
         self.recent_entries = deque(maxlen=max_entries)
         self.person_status = {}
         self.saving_status_info = []
+
+        self.name_to_id = self.get_all_users()
+    
+    def get_all_users(self):
+        response = requests.get(self.get_all_users_api_url)
+        if response.status_code == 200:
+            users = response.json()
+            user_dict = {user['username']: user['id'] for user in users}
+            self.args.logger.info(f"Loaded {len(users)} users from the database")
+
+            name_to_id = [{'name': name, 'id': user_id} for name, user_id in user_dict.items()]
+
+            return name_to_id
+        
+        elif response.status_code == 404:
+            self.args.logger.warning("No users found in the database")
+            return []
+        
+        else:
+            self.args.critical(f"Error fetching users: {response.status_code} - {response.text}")
+            raise Exception(f"Error fetching users: {response.status_code} - {response.text}")
 
     def send_data_to_api(self, name, status):
         user_id = next((int(i['id']) for i in self.name_to_id if i['name'] == name), None)
@@ -31,8 +52,8 @@ class EntryLogger:
             "user_id": user_id,
             "detection_type": status.lower()
         }
-
-        response = requests.post(self.api_url, json=payload, headers=self.headers)
+        
+        response = requests.post(self.create_user_api_url, json=payload, headers=self.headers)
         
         data = response.json()
         if response.status_code == 201:

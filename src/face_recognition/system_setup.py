@@ -96,9 +96,9 @@ class FaceSetup:
             width, height = roi[2] - roi[0], roi[3] - roi[1]
 
         if args.save_video:
-            os.makedirs("saved_videos", exist_ok=True)
+            os.makedirs("data/saved_videos", exist_ok=True)
             camera_id = f"{cam_type}_{index if index is not None else ''}"
-            video_filename = f"saved_videos/{camera_id}_{timestamp}.avi"
+            video_filename = f"data/saved_videos/{camera_id}_{timestamp}.avi"
             writer = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'XVID'), 20, (width, height))
             self.video_writers.append(writer)
         else:

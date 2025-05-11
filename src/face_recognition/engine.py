@@ -21,7 +21,7 @@ class FaceEngine:
         self._setup_data_collection_folder()
 
     def _setup_data_collection_folder(self) -> None:
-        self.data_collection_path = os.path.join(os.getcwd(), 'data_collection')
+        self.data_collection_path = os.path.join(os.getcwd(), 'data/collection')
         if not os.path.exists(self.data_collection_path):
             os.makedirs(self.data_collection_path)
 
@@ -129,6 +129,7 @@ class FaceEngine:
                 
             track_id_embeddings = np.array(list(track_id_embeddings.values()))
             recognition_info = self.face_recognition.recognize_face(track_id_embeddings)
+            self._save_face_crop(track_id, recognition_info)
 
             if not recognition_info['recognized']:
                 self._delete_cache(track_id)
@@ -138,10 +139,7 @@ class FaceEngine:
             sim = recognition_info['similarity']
 
             persons_logged[name] = [track_id, self.id_appear_time[track_id]]
-            self.args.logger.debug(f"Track {track_id} with {name} has recognized with {sim}.")
-            
-            # Save the face crop to data_collection folder
-            self._save_face_crop(track_id, recognition_info)
+            self.args.logger.debug(f"Track {track_id} with {name} has recognized with {sim:.2f}.")
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
@@ -162,46 +160,25 @@ class FaceEngine:
                 ]:
                     del d[track_id]
         except KeyError:
-            self.args.logger.debug(f"Track {track_id} not found in cache.")
+            pass
         
     def _save_face_crop(self, track_id, recognition_info) -> None:
         """Save a face crop of the recognized person to the data_collection folder."""
-
-        gt_path = f'data/images/ilhan-aligned/{recognition_info["name"]}.jpg'
-        gt_face = cv2.imread(gt_path)
-
-        if track_id not in self.track_crop_history or not self.track_crop_history[track_id]:
-            self.args.logger.debug(f"No face crops available for track {track_id}")
-            return
+        parent_path = 'recognized' if recognition_info['recognized'] else 'unrecognized'
+        if not os.path.exists(os.path.join(self.data_collection_path, parent_path)):
+            os.makedirs(os.path.join(self.data_collection_path, parent_path))
         
-        # Get available frame numbers for this track
-        available_frames = list(self.track_crop_history[track_id].keys())
-        if not available_frames:
-            self.args.logger.debug(f"Empty face crop history for track {track_id}")
-            return
-        
-        # Try to get the matched frame, or use another available frame
-        matched_frame_num = recognition_info.get('matched_frame_num')
-        if matched_frame_num in available_frames:
-            frame_num = matched_frame_num
+        sim = recognition_info['similarity']
+
+        face_crops_for_track = list(self.track_crop_history.get(track_id, {}).values())
+        matched_frame_crop = face_crops_for_track[recognition_info['matched_frame_num']]
+
+        if matched_frame_crop is not None:
+            file_name = f"{recognition_info['name']}_{track_id}_{sim:.2f}.jpg"
+            file_path = os.path.join(self.data_collection_path, parent_path, file_name)
+            cv2.imwrite(file_path, matched_frame_crop)
         else:
-            # Use the middle frame as fallback
-            frame_num = available_frames[len(available_frames) // 2]
-        
-        face_crop = self.track_crop_history[track_id][frame_num]
-
-        gt_face = cv2.resize(gt_face, (112, 112))
-        face_crop = cv2.resize(face_crop, (112, 112))
-
-        merged_face = np.hstack((gt_face, face_crop))
-        
-        # Create filename with track_id, name and timestamp
-        timestamp = self.id_appear_time[track_id].strftime('%Y%m%d_%H%M%S')
-        filename = f"{recognition_info['name']}_{track_id}_{timestamp}_{recognition_info['similarity']:.2f}.jpg"
-        
-        # Save the image
-        save_path = os.path.join(self.data_collection_path, filename)
-        cv2.imwrite(save_path, merged_face)
+            pass
     
     def _count_line_passing(self, track_id: int) -> bool:
         if self.args.line_points is None:
