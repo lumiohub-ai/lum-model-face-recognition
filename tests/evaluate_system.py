@@ -103,7 +103,7 @@ class Evaluator:
                 r.write(recognition_format_text + '\n')
     
     def evaluate_recognition(self, video_name: str) -> Tuple[float, float, float]:
-        id_to_name_path = f'annotations/{video_name}.json'
+        id_to_name_path = f'data/annotations/{video_name}.json'
         pred_path = f'{self.results_dir}/{video_name}_recognition_{self.alg_name}-{self.benchmark}.txt'
 
         # Check all files exist
