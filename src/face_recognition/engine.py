@@ -9,8 +9,8 @@ from shapely.geometry import LineString
 import cv2
 
 from .recognition import FaceRecognition
-from boxmot import DeepOCSORT
-from insightface.app import FaceAnalysis
+from boxmot import DeepOCSORT # type: ignore
+from insightface.app import FaceAnalysis # type: ignore
 
 class FaceEngine:
     def __init__(self, args) -> None:
