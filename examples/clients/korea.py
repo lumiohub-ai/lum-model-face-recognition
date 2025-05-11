@@ -17,7 +17,7 @@ face_engine_multi = HBFace(
     multi_camera=True,
     show=False,  # Disable display, just process and save
     match_threshold=0.3,
-    log_file='logs/korea.log',
+    log_file='data/logs/korea.log',
     db_path='data/embeddings/hb-kor-latest.pkl',
     debug=True,
 )

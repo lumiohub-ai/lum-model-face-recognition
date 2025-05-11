@@ -6,6 +6,9 @@ def draw_rectangle_interactive(image_path):
     Prints the bounding box coordinates in x1 y1 x2 y2 format.
     """
     image = cv2.imread(image_path)
+    orig_w, orig_h = image.shape[1], image.shape[0]
+    image = cv2.resize(image, (1280, 720))
+
     if image is None:
         print("Error: Could not read the image.")
         return
@@ -23,6 +26,12 @@ def draw_rectangle_interactive(image_path):
             x2, y2 = bbox[1]
             cv2.rectangle(clone, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.imshow("Draw Bounding Box", clone)
+            # Convert to original image coordinates
+            x1 = int(x1 * (orig_w / 1280))
+            y1 = int(y1 * (orig_h / 720))
+            x2 = int(x2 * (orig_w / 1280))
+            y2 = int(y2 * (orig_h / 720))
+
             print(f"Bounding Box: {x1} {y1} {x2} {y2}")
     
     cv2.imshow("Draw Bounding Box", image)
@@ -37,7 +46,7 @@ def draw_rectangle_interactive(image_path):
     cv2.destroyAllWindows()
 
 # Example usage
-image_path = "/home/hbvision/Desktop/face-recognition/frame_in.jpg"  # Replace with your image path
+image_path = "frame_IN.jpg"  # Replace with your image pat
 draw_rectangle_interactive(image_path)
 
 

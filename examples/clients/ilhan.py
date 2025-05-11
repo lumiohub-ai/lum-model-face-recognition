@@ -11,12 +11,12 @@ out_camera = os.getenv("ILHAN_OUT")
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
     cam_types=["IN","OUT"],
-    roi=[(994, 110, 1914, 962), (820, 87, 1703, 945)],
-    line_points = [[(4, 340), (919, 315)],[(10, 246), (873, 275)]],
+    roi=[(788, 8, 2556, 1426), (30, 18, 1740, 1418)],
+    # line_points = [None, [(312, 126), (1705, 424)]],
     video_path=[in_camera, out_camera],
     multi_camera=True,
     show=False,  # Disable display, just process and save
-    log_file='logs/ilhan.log',
+    log_file='data/logs/ilhan.log',
     db_path='data/embeddings/ilhan.pkl',
     debug=True)
 
