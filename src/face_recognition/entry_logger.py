@@ -59,7 +59,7 @@ class EntryLogger:
             return [], [], []
         
         else:
-            self.args.critical(f"Error fetching users: {response.status_code} - {response.text}")
+            self.args.logger.critical(f"Error fetching users: {response.status_code} - {response.text}")
             raise Exception(f"Error fetching users: {response.status_code} - {response.text}")
 
     def send_data_to_api(self, name, status):
