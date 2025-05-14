@@ -45,7 +45,8 @@ class HBFace:
                 if not stream.is_video:
                     stream.start()
 
-                self.engines[i].update_database(new_users, deleted_users)
+                if self.engines[i].args.production:
+                    self.engines[i].update_database(new_users, deleted_users)
 
             frame_nums = [0] * len(self.streams)
             total_frames = 0 
@@ -106,7 +107,7 @@ class HBFace:
 
         # Draw counting line if configured
         if engine.args.line_points:
-            cv2.line(frame_annotated, engine.args.line_points[0], engine.args.line_points[1], (0, 255, 0), 2)
+            cv2.line(frame_annotated, engine.args.line_points[0], engine.args.line_points[1], (0, 255, 0), 3)
 
         # Add visualization of recognized entries
         self.entry_logger.visualize_entries(frame_annotated)

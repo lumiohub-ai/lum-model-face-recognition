@@ -19,6 +19,7 @@ face_engine_multi = HBFace(
     match_threshold=0.3,
     log_file='data/logs/korea.log',
     db_path='data/embeddings/hb-kor-latest.pkl',
+    production=False,
     debug=True,
 )
 

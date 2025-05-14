@@ -97,7 +97,9 @@ class EntryLogger:
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
 
-        # self.send_data_to_api(name, status)
+        if self.args.production:
+            # Send data to the API
+            self.send_data_to_api(name, status)
 
         # ANSI color codes
         BOLD = "\033[1m"

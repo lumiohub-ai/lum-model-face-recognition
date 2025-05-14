@@ -129,20 +129,9 @@ class FaceEngine:
             boxes.append([x1, y1, x2, y2, conf, 0])  # class id 0 for faces
         
         if len(boxes) == 0:
-            # Generate randomly boxes inside the frame
-            h, w = frame.shape[:2]
-            x1 = np.random.randint(0, w - 50)
-            y1 = np.random.randint(0, h - 50)
-            x2 = x1 + np.random.randint(50, 100)
-            y2 = y1 + np.random.randint(50, 100)
-            conf = 1
-            boxes.append([x1, y1, x2, y2, conf, 0])
-            features = np.ones((1, 512))
-            boxes = np.array(boxes)
-            self.tracker.update(boxes, frame, features)
-
-            return [], []
-
+            self.tracker.update(np.empty((0, 6)), frame, np.empty((0, 512)))
+            return self.tracker.active_tracks, self.tracker.removed_tracks
+        
         boxes, features = np.array(boxes), np.array(features)
         self.tracker.update(boxes, frame, features)
 
@@ -200,6 +189,11 @@ class FaceEngine:
             track_id_embeddings = np.array(list(track_id_embeddings.values()))
             recognition_info = self.face_recognition.recognize_face(track_id_embeddings)
 
+            name = recognition_info['name']
+            sim = recognition_info['similarity']
+
+            self.args.logger.debug(f"{self.args.cam_type} -> {track_id} -> {name} -> {sim:.2f}.")
+
             try:
                 self._save_face_crop(track_id, recognition_info)
             except Exception as e:
@@ -209,11 +203,8 @@ class FaceEngine:
                 self._delete_cache(track_id)
                 continue
 
-            name = recognition_info['name']
-            sim = recognition_info['similarity']
 
             persons_logged[name] = [track_id, self.id_appear_time[track_id]]
-            self.args.logger.debug(f"Track {track_id} with {name} has recognized with {sim:.2f}.")
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
