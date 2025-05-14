@@ -64,11 +64,11 @@ class FaceEngine:
             emb = alpha * emb + (1 - alpha) * emb
             emb /= np.linalg.norm(emb)
         else:
-            print("No faces detected in the image.")
+            emb = None
         
         return emb
     
-    def get_image(self, url):
+    def get_emb(self, url):
         prefix = "https://storage.googleapis.com/"
         if url.startswith(prefix):
             image_path = url[len(prefix):]
@@ -80,7 +80,12 @@ class FaceEngine:
             img_array = np.frombuffer(img_bytes, np.uint8)
             image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-            return image
+            embedding = self.compute_embeddings(image)
+
+            if embedding is not None:
+                return embedding
+            else:
+                return None
         else:
             return None
     
@@ -88,12 +93,11 @@ class FaceEngine:
         """Update the face recognition database with new users and delete old ones."""
         for user in new_users:
             # Convert GCS URL to local path
-            image = self.get_image(user['image_path'])
+            embedding = self.get_emb(user['image_path'])
 
-            if image is None:
+            if embedding is None:
+                self.args.logger.warning(f"{user['name']} has no face in the image.")
                 continue
-
-            embedding = self.compute_embeddings(image)
             
             self.face_recognition.db_names.append(user['name'])
             self.face_recognition.db_embs = np.append(self.face_recognition.db_embs, [embedding], axis=0)
