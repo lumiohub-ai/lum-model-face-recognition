@@ -83,12 +83,17 @@ class FaceSetup:
             args.line_points = None
 
         # Initialize stream and engine
-        stream = StreamHandler(vid_path)
-        self.streams.append(stream)
-        self.engines.append(FaceEngine(args=args))
+        stream_handler = StreamHandler(vid_path)
+        engine = FaceEngine(args=args)
+
+        args.db_names = engine.face_recognition.db_names
+        args.fps = stream_handler.fps
+
+        self.streams.append(stream_handler)
+        self.engines.append(engine)
 
         # Configure video output if enabled
-        frame = stream.frame
+        frame = stream_handler.frame
         width, height = frame.shape[1], frame.shape[0]
 
         if args.roi:
@@ -131,8 +136,11 @@ class FaceSetup:
     def _show_config(self, args: Any) -> None:
         """Display the configuration settings."""
         logger.info("\n=== Configuration Settings ===")
+        needed_keys = ['cam_type', 'video_path', 'match_threshold', 'db_path', 'roi', 'line_points', 'show', 
+                       'record_always', 'eval']
         for key, value in args.__dict__.items():
-            logger.info(f"{key}: {value}")
+            if key in needed_keys:
+                logger.info(f"{key}: {value}")
         logger.info("===========================\n")
     
     def _setup_logger(self, log_file: Optional[str] = None, debug: bool = False) -> None:

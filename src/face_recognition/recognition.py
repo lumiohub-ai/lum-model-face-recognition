@@ -14,10 +14,20 @@ class FaceRecognition:
 
         db_embs = data['embeddings']
         db_names = data['names']
+        db_names = [name.split('_')[0] for name in db_names]
 
         self.args.logger.info(f"Loaded {len(db_embs)} embeddings from {self.args.db_path}")
 
         return db_names, db_embs
+    
+    def update_pkl(self):
+        data = {
+            'embeddings': self.db_embs,
+            'names': self.db_names
+        }
+        with open(self.args.db_path, 'wb') as f:
+            pickle.dump(data, f)
+        self.args.logger.info(f"Updated {self.args.db_path} with {len(self.db_embs)} embeddings")
     
     def recognize_face(self, face_embs):
         similarities = self.compute_similarities(face_embs)

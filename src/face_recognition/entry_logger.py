@@ -20,22 +20,43 @@ class EntryLogger:
         self.person_status = {}
         self.saving_status_info = []
 
-        self.name_to_id = self.get_all_users()
-    
+        self.current_users = args.db_names
+
+        self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
+        
     def get_all_users(self):
         response = requests.get(self.get_all_users_api_url)
+
+        new_users = []
+        deleted_users = []
+
         if response.status_code == 200:
             users = response.json()
+            
             user_dict = {user['username']: user['id'] for user in users}
-            self.args.logger.info(f"Loaded {len(users)} users from the database")
+            path_dict = {user['id']: user['image_path'] for user in users}
 
             name_to_id = [{'name': name, 'id': user_id} for name, user_id in user_dict.items()]
+            id_to_path = [{'id': user_id, 'path': path} for user_id, path in path_dict.items()]
 
-            return name_to_id
+            for user in name_to_id:
+                if user['name'] not in self.current_users:
+                    new_users.append(
+                        {
+                            'name': user['name'],
+                            'image_path': next((item['path'] for item in id_to_path if item['id'] == user['id']), None)
+                        }
+                    )
+                
+            for user in self.current_users:
+                if user not in user_dict.keys():
+                    deleted_users.append(user)
+
+            return new_users, deleted_users, name_to_id
         
         elif response.status_code == 404:
             self.args.logger.warning("No users found in the database")
-            return []
+            return [], [], []
         
         else:
             self.args.critical(f"Error fetching users: {response.status_code} - {response.text}")
@@ -76,7 +97,7 @@ class EntryLogger:
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
 
-        self.send_data_to_api(name, status)
+        # self.send_data_to_api(name, status)
 
         # ANSI color codes
         BOLD = "\033[1m"

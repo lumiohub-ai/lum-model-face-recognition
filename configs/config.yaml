@@ -24,5 +24,7 @@ timezone: "Asia/Seoul"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
 log_file: "data/logs/debug.log"  # Path to save the debug log file
 
-# Database settings
-path_to_db_config: "data/id/ilhan.json"
+
+record_always: True  # Always record the video
+txt_path: "results/results.txt"  # Path to save the recorded video
+

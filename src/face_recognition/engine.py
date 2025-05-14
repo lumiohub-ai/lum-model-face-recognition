@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import List, Dict, Set, Tuple, Optional, Any
 from shapely.geometry import LineString
 import cv2
+import gcsfs
 
 from .recognition import FaceRecognition
 from boxmot import DeepOCSORT # type: ignore
@@ -16,6 +17,7 @@ class FaceEngine:
     def __init__(self, args) -> None:
         self.args = args
         self.timezone = pytz.timezone(args.timezone)
+        self.fs = gcsfs.GCSFileSystem(token=os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
         self._initialize_models()
         self._initialize_tracking()
         self._setup_data_collection_folder()
@@ -35,7 +37,6 @@ class FaceEngine:
             device='cuda:0',
             custom_features=True,
         )
-
         self.face_recognition = FaceRecognition(self.args)
 
     def _initialize_tracking(self) -> None:
@@ -43,6 +44,7 @@ class FaceEngine:
         self.track_boxes_frame: Dict[int, Dict[int, List[float]]] = {}
         self.track_road_history: Dict[int, List[Tuple[int, int]]] = {}
         self.track_crop_history = {}
+       
 
         self.all_tracks: Set[int] = set()
         self.id_appear_time: Dict[int, datetime] = {}
@@ -50,6 +52,66 @@ class FaceEngine:
 
         self.mot_results: List[Dict[str, Any]] = []
 
+    def compute_embeddings(self, image: np.ndarray, alpha=0.9) -> List[np.ndarray]:
+        """Compute face embeddings for a given image."""
+        faces = self.model.get(image)
+
+        if faces:
+            face = faces[0]
+            emb = face.embedding
+
+                # Apply alpha normalization
+            emb = alpha * emb + (1 - alpha) * emb
+            emb /= np.linalg.norm(emb)
+        else:
+            print("No faces detected in the image.")
+        
+        return emb
+    
+    def get_image(self, url):
+        prefix = "https://storage.googleapis.com/"
+        if url.startswith(prefix):
+            image_path = url[len(prefix):]
+
+            with self.fs.open(image_path, 'rb') as f:
+                img_bytes = f.read()
+
+            # Decode image from bytes to OpenCV image
+            img_array = np.frombuffer(img_bytes, np.uint8)
+            image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+            return image
+        else:
+            return None
+    
+    def update_database(self, new_users, deleted_users) -> None:
+        """Update the face recognition database with new users and delete old ones."""
+        for user in new_users:
+            # Convert GCS URL to local path
+            image = self.get_image(user['image_path'])
+
+            if image is None:
+                continue
+
+            embedding = self.compute_embeddings(image)
+            
+            self.face_recognition.db_names.append(user['name'])
+            self.face_recognition.db_embs = np.append(self.face_recognition.db_embs, [embedding], axis=0)
+
+            self.args.logger.info(f"Added {user['name']} to the database")
+
+        for name in deleted_users:
+            if name in self.face_recognition.db_names:
+                index = self.face_recognition.db_names.index(name)
+                self.face_recognition.db_names.pop(index)
+                self.face_recognition.db_embs = np.delete(self.face_recognition.db_embs, index, axis=0)
+            
+                self.args.logger.info(f"Deleted {name} from the database")
+
+        self.face_recognition.update_pkl()
+
+        return
+    
     def track(self, frame: np.ndarray) -> Tuple[List, List]:
         faces = self.model.get(frame)
 
@@ -67,14 +129,22 @@ class FaceEngine:
             boxes.append([x1, y1, x2, y2, conf, 0])  # class id 0 for faces
         
         if len(boxes) == 0:
-            # If no faces are detected, we can still update the tracker with dummy values
-            self.tracker.update(np.empty((0, 6)), frame, np.empty((0, 512)))
+            # Generate randomly boxes inside the frame
+            h, w = frame.shape[:2]
+            x1 = np.random.randint(0, w - 50)
+            y1 = np.random.randint(0, h - 50)
+            x2 = x1 + np.random.randint(50, 100)
+            y2 = y1 + np.random.randint(50, 100)
+            conf = 1
+            boxes.append([x1, y1, x2, y2, conf, 0])
+            features = np.ones((1, 512))
+            boxes = np.array(boxes)
+            self.tracker.update(boxes, frame, features)
+
             return [], []
 
         boxes, features = np.array(boxes), np.array(features)
         self.tracker.update(boxes, frame, features)
-
-        # removed_tracks = [track.id for track in self.tracker.removed_stracks]
 
         return self.tracker.active_tracks, self.tracker.removed_tracks
     
@@ -129,7 +199,11 @@ class FaceEngine:
                 
             track_id_embeddings = np.array(list(track_id_embeddings.values()))
             recognition_info = self.face_recognition.recognize_face(track_id_embeddings)
-            self._save_face_crop(track_id, recognition_info)
+
+            try:
+                self._save_face_crop(track_id, recognition_info)
+            except Exception as e:
+                pass
 
             if not recognition_info['recognized']:
                 self._delete_cache(track_id)
@@ -196,14 +270,34 @@ class FaceEngine:
         return track_line.intersects(counting_line)
     
     def _record_evaluation_results(self, track_id: int, name: str) -> None:
-        for frame_num, box in self.track_boxes_frame[track_id].items():
-            self.mot_results.append({
-                'frame': frame_num, 
-                'id': track_id,
-                'x': box[0], 
-                'y': box[1], 
-                'w': box[2], 
-                'h': box[3],
-                'conf': box[4], 
-                'name': name
-            })
+        if not self.args.eval:
+            return
+        
+        # Get first appeared frame number 
+        frame_num = list(self.track_emb_frame_history[track_id].keys())[0]
+
+        save_path = self.args.txt_path
+
+        if not os.path.exists(save_path):
+            with open(save_path, 'w') as f:
+                f.write("time,name,cam_type\n")
+    
+        with open(save_path, 'a') as f:
+            total_seconds = frame_num / self.args.fps
+            
+            minutes = int(total_seconds // 60)
+            seconds = int(total_seconds % 60)
+
+            seconds = frame_num % 60
+            time_str = f"{minutes}:{seconds:02d}"
+            f.write(f"{time_str},{name},{self.args.cam_type}\n")
+
+        
+
+        self.mot_results.append({
+            'name': name,
+            'cam_type': self.args.cam_type,
+            'time': self.id_appear_time[track_id].strftime('%Y-%m-%d %H:%M:%S'),
+        })
+
+                

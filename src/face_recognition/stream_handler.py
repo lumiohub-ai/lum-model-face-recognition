@@ -19,6 +19,7 @@ class StreamHandler:
         self.ret = ret
         self.frame = frame
         self.last_frame = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) + 1)
+        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
         self.thread = None  # Store reference to thread
 
     @staticmethod
