@@ -19,6 +19,7 @@ face_engine_multi = HBFace(
     log_file='data/logs/ilhan.log',
     db_path='data/embeddings/ilhan.pkl',
     production=True,
+    record_always=False,
     debug=True)
 
 

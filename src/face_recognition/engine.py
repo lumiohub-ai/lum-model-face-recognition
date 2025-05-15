@@ -69,24 +69,25 @@ class FaceEngine:
         return emb
     
     def get_emb(self, url):
-        prefix = "https://storage.googleapis.com/"
-        if url.startswith(prefix):
-            image_path = url[len(prefix):]
+        try:
+            prefix = "https://storage.googleapis.com/"
+            if url.startswith(prefix):
+                image_path = url[len(prefix):]
 
-            with self.fs.open(image_path, 'rb') as f:
-                img_bytes = f.read()
+                with self.fs.open(image_path, 'rb') as f:
+                    img_bytes = f.read()
 
-            # Decode image from bytes to OpenCV image
-            img_array = np.frombuffer(img_bytes, np.uint8)
-            image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                # Decode image from bytes to OpenCV image
+                img_array = np.frombuffer(img_bytes, np.uint8)
+                image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-            embedding = self.compute_embeddings(image)
+                embedding = self.compute_embeddings(image)
 
-            if embedding is not None:
-                return embedding
-            else:
-                return None
-        else:
+                if embedding is not None:
+                    return embedding
+                else:
+                    return None
+        except Exception as e:
             return None
     
     def update_database(self, new_users, deleted_users) -> None:
