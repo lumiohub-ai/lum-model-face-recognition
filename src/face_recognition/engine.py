@@ -145,6 +145,12 @@ class FaceEngine:
     def visualize_tracks(self, frame: np.ndarray) -> np.ndarray:
         visualization_frame = frame.copy()
         self.tracker.plot_results(visualization_frame, show_trajectories=True)
+
+        # Put cam_type on the top right corner
+        cam_type = self.args.cam_type
+        cv2.putText(visualization_frame, cam_type, (visualization_frame.shape[1] - 200, 50), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
         return visualization_frame
 
     def process_active_tracks(self, tracks: List, frame: np.ndarray, frame_num: int) -> None:

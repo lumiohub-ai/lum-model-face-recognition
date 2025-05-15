@@ -2,7 +2,7 @@ from face_recognition import HBFace
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # RTSP streams for IN and OUT cameras
 in_camera = os.getenv("ILHAN_IN")

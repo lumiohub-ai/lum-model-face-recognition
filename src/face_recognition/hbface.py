@@ -95,15 +95,13 @@ class HBFace:
         if active_tracks:
             # Process active tracks and recognize faces in removed tracks
             engine.process_active_tracks(active_tracks, frame_cropped, frame_num)
-            persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
-            
-            # Log recognized persons
-            for name, (_, appear_time) in persons_recognized.items():
-                status = engine.args.cam_type
-                self.entry_logger.log_person_entry(name, status, appear_time)
         
-        else:
-            frame_annotated = frame_cropped
+        persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
+            
+        # Log recognized persons
+        for name, (_, appear_time) in persons_recognized.items():
+            status = engine.args.cam_type
+            self.entry_logger.log_person_entry(name, status, appear_time)
 
         # Draw counting line if configured
         if engine.args.line_points:
