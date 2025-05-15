@@ -1,5 +1,5 @@
 # Device settings
-device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+gpu_id: 0  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
 db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format

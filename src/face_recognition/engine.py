@@ -31,7 +31,7 @@ class FaceEngine:
         with open(os.devnull, 'w') as fnull:
             with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
                 self.model = FaceAnalysis(name='buffalo_l')
-                self.model.prepare(ctx_id=0)
+                self.model.prepare(ctx_id=self.args.gpu_id)
 
         self.tracker = DeepOCSORT(
             device='cuda:0',
