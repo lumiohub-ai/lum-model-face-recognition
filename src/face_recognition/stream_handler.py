@@ -41,6 +41,7 @@ class StreamHandler:
 
     def _reconnect(self) -> bool:
         """Attempt to reconnect to the video source infinitely until successful"""
+        self.logger.warning(f"Reconnecting to stream: {self.src}")
         if self.cap is not None:
             self.cap.release()
         
