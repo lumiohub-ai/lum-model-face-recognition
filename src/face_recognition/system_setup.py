@@ -83,7 +83,7 @@ class FaceSetup:
             args.line_points = None
 
         # Initialize stream and engine
-        stream_handler = StreamHandler(vid_path)
+        stream_handler = StreamHandler(vid_path, args.logger)
         engine = FaceEngine(args=args)
 
         args.db_names = engine.face_recognition.db_names
