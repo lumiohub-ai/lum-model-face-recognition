@@ -20,6 +20,7 @@ face_engine_multi = HBFace(
     db_path='data/embeddings/ilhan.pkl',
     production=True,
     record_always=False,
+    match_threshold=0.5,
     debug=True)
 
 
