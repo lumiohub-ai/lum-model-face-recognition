@@ -47,7 +47,7 @@ class EntryLogger:
                             'image_path': next((item['path'] for item in id_to_path if item['id'] == user['id']), None)
                         }
                     )
-                
+    
             for user in self.current_users:
                 if user not in user_dict.keys():
                     deleted_users.append(user)

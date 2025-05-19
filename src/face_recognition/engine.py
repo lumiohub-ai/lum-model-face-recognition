@@ -1,4 +1,4 @@
-import sys
+import json
 import os
 import contextlib
 import numpy as np
@@ -68,26 +68,41 @@ class FaceEngine:
         
         return emb
     
-    def get_emb(self, url):
+    def get_emb(self, main_url):
+        # Url is the str in list of 
         try:
-            prefix = "https://storage.googleapis.com/"
-            if url.startswith(prefix):
-                image_path = url[len(prefix):]
+            url_list = json.loads(main_url)
 
-                with self.fs.open(image_path, 'rb') as f:
-                    img_bytes = f.read()
+            # Check whether url_list is a list or not
+            if not isinstance(url_list, list):
+                url_list = [main_url]
 
-                # Decode image from bytes to OpenCV image
-                img_array = np.frombuffer(img_bytes, np.uint8)
-                image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            embeddings = []
+            for url in url_list:
+                prefix = "https://storage.googleapis.com/"
+                if url.startswith(prefix):
+                    image_path = url[len(prefix):]
 
-                embedding = self.compute_embeddings(image)
+                    with self.fs.open(image_path, 'rb') as f:
+                        img_bytes = f.read()
 
-                if embedding is not None:
-                    return embedding
-                else:
-                    return None
+                    # Decode image from bytes to OpenCV image
+                    img_array = np.frombuffer(img_bytes, np.uint8)
+                    image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+                    embedding = self.compute_embeddings(image)
+
+                    if embedding is not None:
+                        embeddings.append(embedding)
+
+            if len(embeddings) <= 0:
+                self.args.logger.warning(f"No face found in the image for {url}")
+                return None
+            else:
+                return embeddings
+
         except Exception as e:
+            self.args.logger.warning(f"Error processing image: {e}")
             return None
     
     def update_database(self, new_users, deleted_users) -> None:
@@ -100,18 +115,21 @@ class FaceEngine:
                 self.args.logger.warning(f"{user['name']} has no face in the image.")
                 continue
             
-            self.face_recognition.db_names.append(user['name'])
-            self.face_recognition.db_embs = np.append(self.face_recognition.db_embs, [embedding], axis=0)
+            for emb in embedding:
+                self.face_recognition.db_names.append(user['name'])
+                self.face_recognition.db_embs = np.append(self.face_recognition.db_embs, [emb], axis=0)
 
-            self.args.logger.info(f"Added {user['name']} to the database")
+            self.args.logger.info(f"Added {user['name']} to the database with {len(embedding)} images.")
 
         for name in deleted_users:
+            # Now delete the user from the database even if user has two or more images
             if name in self.face_recognition.db_names:
                 index = self.face_recognition.db_names.index(name)
                 self.face_recognition.db_names.pop(index)
                 self.face_recognition.db_embs = np.delete(self.face_recognition.db_embs, index, axis=0)
-            
-                self.args.logger.info(f"Deleted {name} from the database")
+                self.args.logger.info(f"Deleted {name} from the database.")
+            else:
+                self.args.logger.warning(f"{name} not found in the database.")
 
         self.face_recognition.update_pkl()
 
