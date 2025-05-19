@@ -3,6 +3,7 @@ import threading
 import queue
 import time
 import logging
+import gc
 from typing import Any, Tuple
 
 
@@ -17,6 +18,8 @@ class StreamHandler:
         self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame
         self.reconnect_delay = 1  # Initial delay between reconnection attempts
         self.max_delay = 30  # Maximum delay between reconnection attempts
+        self.last_gc_time = time.time()
+        self.gc_interval = 60  # Run garbage collection every 60 seconds
 
         ret, frame = self.cap.read()
         if not ret:
@@ -90,15 +93,21 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
             
-            if not self.frame_queue.full():
-                self.frame_queue.put((ret, frame))
-            else:
-                # Get rid of old frame
-                try:
+            # Clear the queue before putting new frame
+            try:
+                while not self.frame_queue.empty():
                     self.frame_queue.get_nowait()
-                    self.frame_queue.put((ret, frame))
-                except queue.Empty:
-                    pass
+            except queue.Empty:
+                pass
+                
+            # Put the new frame
+            self.frame_queue.put((ret, frame))
+            
+            # Periodically run garbage collection
+            current_time = time.time()
+            if current_time - self.last_gc_time > self.gc_interval:
+                gc.collect()
+                self.last_gc_time = current_time
 
     def read(self) -> Tuple[bool, Any]:
         if self.is_video:
@@ -128,6 +137,14 @@ class StreamHandler:
             if self.stopped:
                 return
             self.stopped = True
+            
+        # Clear the queue
+        try:
+            while not self.frame_queue.empty():
+                self.frame_queue.get_nowait()
+        except queue.Empty:
+            pass
+            
         if self.thread is not None:
             self.thread.join()
         self.cap.release()
