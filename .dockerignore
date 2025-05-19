@@ -1,39 +1,58 @@
-#ignore models
+# Ignore typical model/media/data outputs
 *.jpg
-*.png
 *.jpeg
-*.mov
-*.mp4
-*.avi
+*.png
 *.gif
-*.mkv
+*.mp4
 *.MP4
+*.avi
+*.mov
+*.mkv
 *.tif
-*.zip
 *.npz
-*.json
-*.cache
-*.dat
-*.csv
-*.egg-info/
-*.egg
+*.zip
 *.tar.gz
+*.cache
+*.egg
+*.egg-info/
+*.dist-info/
+*.csv
+*.dat
+*.log
+*.json
 
-
+# Ignore Python build/cache
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 
+# Ignore venvs and build artifacts
+env/
+venv/
+myenv/
+build/
+dist/
+tests/
+
+# Ignore specific folders inside data/ that contain large files
 data/collections/
 data/saved_videos/
 data/logs/
 
-myenv/
+# Ignore all inside data/
+data/**
 
+# But allow these:
+!data/
+!data/*.pkl
+!data/embeddings/
+
+
+
+# Ignore documentation and test folders
 docs/
 logs/
 scripts/
 tests/
-
-
-build/
-dist/
 

@@ -1,60 +1,40 @@
 FROM nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
 
-# Set timezone non-interactively
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
-# Set working directory
 WORKDIR /usr/src/vision-app
 
-# Install system dependencies and Python3
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    libopenblas-dev \
-    liblapack-dev \
-    libx11-dev \
+# Install only essential system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-dev python3-pip python3-opencv \
+    build-essential cmake \
+    libopenblas-dev liblapack-dev \
+    libgl1-mesa-glx libx11-dev \
+    libsm6 libxext6 libxrender-dev \
     libgtk-3-dev \
-    python3-dev \
-    python3-venv \
-    python3-pip \
-    git \
-    curl \
-    nano \
-    netcat \
-    # Add OpenCV dependencies
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgl1-mesa-glx \
-    python3-opencv \
-    # Add tzdata and configure it non-interactively
-    tzdata \
-    libpq-dev \
-    gcc \
+    libpq-dev gcc git curl nano tzdata \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create a virtual environment
-RUN python3 -m venv /opt/venv
+# Set pip aliases
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
-# Activate virtual environment and set PATH
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy requirements first to leverage Docker caching
+# Install Python packages
 COPY requirements.txt .
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir opencv-python-headless \
+ && pip install --no-cache-dir -r requirements.txt
 
-# Install opencv-python explicitly before other requirements
-RUN pip install --upgrade pip && \
-    pip install opencv-python && \
-    pip install -r requirements.txt
-
-# Copy the rest of the project files
+# Copy source code
 COPY . .
 
-# Now install your package in editable mode
-RUN pip install -e modules/yolo_tracking && \
-    pip install -e modules/insightface && \
-    pip install -e .
+# Install local editable packages
+RUN pip install --no-cache-dir -e modules/yolo_tracking \
+ && pip install --no-cache-dir -e modules/insightface \
+ && pip install --no-cache-dir -e .
 
-# Expose port (if needed)
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Expose the desired port
 EXPOSE 5003
