@@ -113,9 +113,11 @@ class StreamHandler:
         if self.is_video:
             ret, frame = self.cap.read()
             if not ret and not self.stopped:
-                # For video files that reached the end, we can try to restart
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = self.cap.read()
+                # For video files that reached the end, we can just stop the stream
+                self.logger.warning(f"End of video stream reached: {self.src}")
+                self.stop()
+                return False, None
+            
             return ret, frame
         
         try:
