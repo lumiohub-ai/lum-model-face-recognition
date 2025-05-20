@@ -100,11 +100,11 @@ source myenv/bin/activate
 
 ## ⚙️ Configuration
 
-[**`configs/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/src/face_recognition/cfg/config.yaml):
+[**`configs/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/configs/config.yaml):
 
 ```yaml
 # Device settings
-device: "cuda:0"  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+gpu_id: 0  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
 db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format
@@ -116,18 +116,20 @@ match_threshold: 0.3  # Threshold for face similarity matching
 # Other settings
 show: True  # Show the output video with annotations
 save_video: True  # Save the output video with annotations
+record_always: True  # Always record the video
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
+txt_path: "results/results.txt"  # Path to save the recorded 
 
 # ROI settings
 roi: null  # Enable region of interest (ROI) mode
 line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
 
-# Timezone settings
+# Other settings
 timezone: "Asia/Seoul"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
-log_file: "logs/debug.log"  # Path to save the debug log file               
+log_file: "data/logs/debug.log"  # Path to save the debug log file              
 ```
 
 ## 🚸 Usage/Examples

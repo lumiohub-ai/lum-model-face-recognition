@@ -34,7 +34,7 @@ class FaceEngine:
                 self.model.prepare(ctx_id=self.args.gpu_id)
 
         self.tracker = DeepOCSORT(
-            device='cuda:0',
+            device=f'cuda:{self.args.gpu_id}',
             custom_features=True,
         )
         self.face_recognition = FaceRecognition(self.args)

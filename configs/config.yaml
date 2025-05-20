@@ -6,25 +6,27 @@ db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format
 video_path: "data/videos/sample.mp4"  # Path to the input video file or RTSP stream
 
 # Face recognition settings
-match_threshold: 0.3  # Threshold for face similarity matching
+match_threshold: 0.5  # Threshold for face similarity matching
 
 # Other settings
 show: True  # Show the output video with annotations
 save_video: True  # Save the output video with annotations
+record_always: True  # Always record the video
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
+txt_path: "results/results.txt"  # Path to save the recorded 
 
 # ROI settings
 roi: null  # Enable region of interest (ROI) mode
 line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
 
-# Timezone settings
+# Other settings
 timezone: "Asia/Seoul"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
-log_file: "data/logs/debug.log"  # Path to save the debug log file
+log_file: "data/logs/debug.log"  # Path to save the debug log file  
 
-
-record_always: True  # Always record the video
-txt_path: "results/results.txt"  # Path to save the recorded video
-
+# Production settings
+multi_camera: False  # Enable multi-camera mode
+production: False # Enable production mode for optimized performance
+# If production is True, it will send data to the server 
