@@ -11,8 +11,8 @@ class EntryLogger:
                 max_entries=3):
         self.args = args
         
-        self.create_user_api_url = "https://api.smart-office.humblebee.ai/api/history/create"
-        self.get_all_users_api_url = "https://api.smart-office.humblebee.ai/api/users"
+        self.create_user_api_url = os.getenv("CREATE_USER_API")
+        self.get_all_users_api_url = os.getenv("GET_USER_API")
 
         self.headers = {"Content-Type": "application/json"}
 
