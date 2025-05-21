@@ -11,6 +11,10 @@
   - [Prerequisites](#prerequisites)
   - [Download Repository](#download-or-clone-the-repository)
   - [Package Installation](#install-the-package)
+- [🐳 Docker Setup](#-docker-setup)
+  - [Prerequisites for Docker](#prerequisites-for-docker)
+  - [Building the Docker Image](#building-the-docker-image)
+  - [Running the Docker Container](#running-the-docker-container)
 - [⚙️ Configuration](docs/configurations.md)
 - [🚸 Usage/Examples](#-usageexamples)
 - [📊 Evaluation](docs/evaluation.md)
@@ -98,6 +102,136 @@ source myenv/bin/activate
 2. Download database from here: [LINK](https://drive.google.com/drive/folders/1A6s3MBQvj1PXJDmGKSL4R0ZR6Sc-iicw?usp=sharing)
 
 3. Place put them in the main directory of the repository 
+
+## 🐳 Docker Setup
+
+### Prerequisites for Docker
+
+1. Install Docker:
+   - [Docker Engine](https://docs.docker.com/engine/install/) for Linux
+   - [Docker Desktop](https://docs.docker.com/desktop/) for Windows/macOS
+
+2. For GPU support, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+
+### Building the Docker Image
+
+1. From the project root directory, build the Docker image:
+
+```sh
+# Basic build
+docker build -t face-recognition:latest .
+
+# Build with specific tag
+docker build -t face-recognition:v1.0.0 .
+```
+
+### Running the Docker Container
+
+#### Basic Usage:
+
+```sh
+# Run with GPU support
+docker run --rm -it --gpus all face-recognition:latest
+```
+
+#### Running Examples with commands:
+
+```sh
+# Run a test example
+docker run --rm -it \
+  --gpus all \
+  -v $(pwd)/data:/usr/src/vision-app/data \
+  -v $(pwd)/configs:/usr/src/vision-app/configs \
+  face-recognition:latest \
+  python examples/test.py
+```
+
+##### For Production Run:
+
+```sh
+# Run with access to host webcam
+docker run --rm -it \
+  --gpus all \
+  -v $(pwd):/usr/src/vision-app \
+  face-recognition:latest \
+  python examples/clients/ilhan.py
+```
+
+##### Development Mode:
+
+```sh
+# Run in development mode with source code mounted
+docker run --rm -it \
+  --gpus all \
+  -v $(pwd):/usr/src/vision-app \
+  face-recognition:latest \
+  bash
+```
+
+## 🐳 Docker Setup
+
+### Prerequisites for Docker
+
+1. Install Docker:
+   - [Docker Engine](https://docs.docker.com/engine/install/) for Linux
+   - [Docker Desktop](https://docs.docker.com/desktop/) for Windows/macOS
+
+2. For GPU support, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+
+### Building the Docker Image
+
+1. From the project root directory, build the Docker image:
+
+```sh
+# Basic build
+docker build -t face-recognition:latest .
+
+# Build with specific tag
+docker build -t face-recognition:v1.0.0 .
+```
+
+### Running the Docker Container
+
+#### Basic Usage:
+
+```sh
+# Run with GPU support
+docker run --rm -it --gpus all face-recognition:latest
+```
+
+#### Running Examples with commands:
+
+```sh
+# Run a test example
+docker run --rm -it \
+  --gpus all \
+  -v $(pwd)/data:/usr/src/vision-app/data \
+  -v $(pwd)/configs:/usr/src/vision-app/configs \
+  face-recognition:latest \
+  python examples/test.py
+```
+
+##### For Production Run:
+
+```sh
+# Run with access to host webcam
+docker run --rm -it \
+  --gpus all \
+  -v $(pwd):/usr/src/vision-app \
+  face-recognition:latest \
+  python examples/clients/ilhan.py
+```
+
+##### Development Mode:
+
+```sh
+# Run in development mode with source code mounted
+docker run --rm -it \
+  --gpus all \
+  -v $(pwd):/usr/src/vision-app \
+  face-recognition:latest \
+  bash
+```
 
 ---
 ## 🚸 Usage/Examples
