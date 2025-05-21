@@ -11,10 +11,11 @@
   - [Prerequisites](#prerequisites)
   - [Download Repository](#download-or-clone-the-repository)
   - [Package Installation](#install-the-package)
-- [⚙️ Configuration](#️-configuration)
+- [⚙️ Configuration](docs/configurations.md)
 - [🚸 Usage/Examples](#-usageexamples)
-- [📊 Evaluation](#-evaluation)
-- [🖥️ NVIDIA Jetson Nano setup](#️-nvidia-jetson-nano-setup)
+- [📊 Evaluation](docs/evaluation.md)
+- [📊 Eval Metrics](docs/evalmetrics.md)
+- [🖥️ NVIDIA Jetson Nano setup](docs/jetson_nano.md)
 - [📚 Documentation](#-documentation)
 - [📑 Research References](#--research-references)
 
@@ -98,40 +99,7 @@ source myenv/bin/activate
 
 3. Place put them in the main directory of the repository 
 
-## ⚙️ Configuration
-
-[**`configs/config.yaml`**](https://github.com/humblebeeintel/face-recognition/blob/main/configs/config.yaml):
-
-```yaml
-# Device settings
-gpu_id: 0  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
-
-# Database settings
-db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format
-video_path: "data/videos/sample.mp4"  # Path to the input video file or RTSP stream
-
-# Face recognition settings
-match_threshold: 0.3  # Threshold for face similarity matching
-
-# Other settings
-show: True  # Show the output video with annotations
-save_video: True  # Save the output video with annotations
-record_always: True  # Always record the video
-
-# Evaluation settings
-eval: False  # Enable evaluation mode
-txt_path: "results/results.txt"  # Path to save the recorded 
-
-# ROI settings
-roi: null  # Enable region of interest (ROI) mode
-line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
-
-# Other settings
-timezone: "Asia/Seoul"  # Timezone for tracking times
-debug: True  # Enable debug mode for detailed logging
-log_file: "data/logs/debug.log"  # Path to save the debug log file              
-```
-
+---
 ## 🚸 Usage/Examples
 
 #### For running a face recognition application, use the following command:
@@ -155,111 +123,28 @@ face_engine_multi = HBFace(
     video_path=[in_camera, out_camera],
     multi_camera=True,
     show=True,  # Disable display, just process and save
-    match_threshold=0.3,
+    match_threshold=0.5,
     db_path='data/embeddings/hb-kor-camera.pkl',
 )
 
 # Run the face recognition system
 face_engine_multi.run()
 ```
+---
+
+## ⚙️ Configuration
+
+Please refer to [this page](docs/configurations.md).
 
 ---
 ## 📊 Evaluation
 
-To properly evaluate the face recognition system's performance and identify areas for improvement, follow these steps:
-
-### 1. Video Labeling and Ground Truth
-
-1. Prepare an ID-to-name mapping dictionary:
-
- ```json { "1": "Azamat", "2": "Oybek", "3": "Maruf", "4": "Bahodir", "5": "Sarvar", "6": "MuhammadAmin", "7": "Batkhuu", "8": "Mirsaid" } ```
-
-2. Rename it same with video name and save it ```annotations``` directory.
-
-### 3. Run Evaluation
-
-```bash
-python3 tests/eval.py \
-  --alg_name "fps-calculation" \
-  --benchmark "ilhan" \
-  --videos videoa1-1 videoa1-2 videoa1-3 videoa1-4 videoa1-5 \
-  --video_dir "data/tests/ilhan_videos" \
-  --db_path "data/embeddings/ilhan.pkl" \
-  --output "results/" \
-  --match_threshold 0.3 \
-  --show
-```
-
-| Argument            | Description                                                           |
-| ------------------- | --------------------------------------------------------------------- |
-| `--alg_name`        | Name of the algorithm used for evaluation (e.g., `"fps-calculation"`) |
-| `--benchmark`       | Name of the benchmark dataset or group (e.g., `"ilhan"`)              |
-| `--videos`          | List of video names in ```video_dir``` (space-separated)                                 |
-| `--video_dir`       | Path to the directory containing videos files                          |
-| `--db_path`         | Path to the `.pkl` file with saved embeddings                         |
-| `--output`          | Directory to save evaluation results                                  |
-| `--match_threshold` | Similarity threshold to match faces (default is `0.3`)                |
-| `--show` (optional) | Add this flag to visualize matching results during evaluation         |
-
-
-#### Required Parameters
-
-- `--videos`: Specify one or more video filenames for processing. Multiple entries should be space-delimited.
-- `--video_dir`: Designate the directory path containing the target video files.
-- `--alg_name`: Indicate the face recognition algorithm to be evaluated.
-- `--benchmark`: Select the benchmark dataset for performance evaluation.
-- `--output`: Define the destination CSV filename where evaluation results will be stored.
+Please refer to [this page](docs/evaluation.md).
 
 ---
 ## 🖥️ NVIDIA Jetson Nano Setup
 
-To optimize face recognition performance on NVIDIA Jetson Nano, you'll need to convert the YOLO model to TensorRT format.
-
-### Prerequisites
-
-#### Set up PyTorch and torchvision compatible with your Jetpack version:
-  - Follow the official guide at [Ultralytics Jetson Setup](https://docs.ultralytics.com/guides/nvidia-jetson/)
-
-### Model Conversion
-
-#### 1. Use the provided conversion script to create a TensorRT engine:
-
-```python
-# src/jetson/convert_model.py
-import sys
-import os
-sys.path.append(os.curdir)
-
-from ultralytics import YOLO
-import cv2
-
-# Load the YOLO model
-model = YOLO("yolov11s-face.pt")
-
-# Export the model to TensorRT format
-model.export(format="engine", int8=True, imgsz=640, simplify=True)
-```
-
-#### 2. Customize the conversion:
-  * Change the model path to your specific YOLO model
-  * Adjust quantization options:
-     * Use `int8=True` for maximum speed (default)
-     * Use `int8=False` for higher accuracy
-     * Use `half=True` for fp16 quantization
-  * Modify `imgsz` based on your application needs
-
-#### 3. After conversion, update the `config.yaml` file:
-  * Change the `model_path` from `.pt` to `.engine`:
-
-```yaml
-model_path: "models/yolov8m-face.engine"  # Updated path to TensorRT engine
-```
-
-#### 4. Run the application normally
-
-```
-python examples/test.py
-```
+Please refer to [this page](docs/jetson_nano).
 
 ---
 

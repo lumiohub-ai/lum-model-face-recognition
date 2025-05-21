@@ -1,3 +1,5 @@
+"""Face recognition engine implementation."""
+
 import json
 import os
 import contextlib
@@ -14,7 +16,17 @@ from boxmot import DeepOCSORT # type: ignore
 from insightface.app import FaceAnalysis # type: ignore
 
 class FaceEngine:
+    """Main face recognition engine that handles detection, tracking and recognition of faces.
+    
+    This class provides the core functionality for face processing, including initializing detection 
+    and recognition models, tracking faces across frames, and managing face embeddings.
+    """
     def __init__(self, args) -> None:
+        """Initialize the face recognition engine.
+        
+        Args:
+            args: Configuration arguments containing parameters for the face recognition system
+        """
         self.args = args
         self.timezone = pytz.timezone(args.timezone)
         self.fs = gcsfs.GCSFileSystem(token=os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
@@ -23,11 +35,13 @@ class FaceEngine:
         self._setup_data_collection_folder()
 
     def _setup_data_collection_folder(self) -> None:
+        """Set up folder for storing collected face data and recognition results."""
         self.data_collection_path = os.path.join(os.getcwd(), 'data/collection')
         if not os.path.exists(self.data_collection_path):
             os.makedirs(self.data_collection_path)
 
     def _initialize_models(self) -> None:
+        """Initialize face detection, recognition and tracking models."""
         with open(os.devnull, 'w') as fnull:
             with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
                 self.model = FaceAnalysis(name='buffalo_l')
@@ -40,6 +54,7 @@ class FaceEngine:
         self.face_recognition = FaceRecognition(self.args)
 
     def _initialize_tracking(self) -> None:
+        """Initialize data structures for tracking face information across frames."""
         self.track_emb_frame_history: Dict[int, Dict[int, np.ndarray]] = {}
         self.track_boxes_frame: Dict[int, Dict[int, List[float]]] = {}
         self.track_road_history: Dict[int, List[Tuple[int, int]]] = {}
@@ -53,7 +68,15 @@ class FaceEngine:
         self.mot_results: List[Dict[str, Any]] = []
 
     def compute_embeddings(self, image: np.ndarray, alpha=0.9) -> List[np.ndarray]:
-        """Compute face embeddings for a given image."""
+        """Compute face embeddings for a given image.
+        
+        Args:
+            image: Input image array
+            alpha: Normalization factor for the embedding
+            
+        Returns:
+            Face embedding vector or None if no face is detected
+        """
         faces = self.model.get(image)
 
         if faces:
@@ -69,6 +92,14 @@ class FaceEngine:
         return emb
     
     def get_emb(self, main_url):
+        """Get face embeddings from images stored in cloud storage.
+        
+        Args:
+            main_url: URL or JSON string containing URLs to face images
+            
+        Returns:
+            List of face embeddings or None if no face is found
+        """
         # Url is the str in list of 
         try:
             url_list = json.loads(main_url)
@@ -106,7 +137,12 @@ class FaceEngine:
             return None
     
     def update_database(self, new_users, deleted_users) -> None:
-        """Update the face recognition database with new users and delete old ones."""
+        """Update the face recognition database with new users and delete old ones.
+        
+        Args:
+            new_users: List of new users to add to the database
+            deleted_users: List of users to remove from the database
+        """
         for user in new_users:
             # Convert GCS URL to local path
             embedding = self.get_emb(user['image_path'])
@@ -136,6 +172,14 @@ class FaceEngine:
         return
     
     def track(self, frame: np.ndarray) -> Tuple[List, List]:
+        """Track faces in a given frame using the DeepOCSORT tracker.
+        
+        Args:
+            frame: Input frame to process
+            
+        Returns:
+            Tuple containing lists of active tracks and removed tracks
+        """
         faces = self.model.get(frame)
 
         boxes = []
@@ -161,6 +205,14 @@ class FaceEngine:
         return self.tracker.active_tracks, self.tracker.removed_tracks
     
     def visualize_tracks(self, frame: np.ndarray) -> np.ndarray:
+        """Visualize tracked faces on the input frame.
+        
+        Args:
+            frame: Input frame to visualize tracks on
+            
+        Returns:
+            Frame with visualization of tracked faces
+        """
         visualization_frame = frame.copy()
         self.tracker.plot_results(visualization_frame, show_trajectories=True)
 
@@ -172,6 +224,13 @@ class FaceEngine:
         return visualization_frame
 
     def process_active_tracks(self, tracks: List, frame: np.ndarray, frame_num: int) -> None:
+        """Process active tracks to extract and store face data.
+        
+        Args:
+            tracks: List of active tracks
+            frame: Current frame being processed
+            frame_num: Frame number in the sequence
+        """
         for track in tracks:
             now = datetime.now(self.timezone)
             emb, track_id = track.emb, track.id
@@ -200,6 +259,15 @@ class FaceEngine:
             self.track_emb_frame_history.setdefault(track_id, {})[frame_num] = emb
                            
     def recognize_removed_tracks(self, removed_tracks: List[int], last_frame: bool = False) -> Dict[str, List]:
+        """Recognize faces in tracks that are no longer active.
+        
+        Args:
+            removed_tracks: List of track IDs that are no longer active
+            last_frame: Whether this is the last frame of the video
+            
+        Returns:
+            Dictionary mapping recognized person names to their track information
+        """
         persons_logged = {}
         
         tracks_to_process = sorted(list(self.all_tracks - set(self.passed_tracks))) if last_frame else removed_tracks
@@ -243,7 +311,11 @@ class FaceEngine:
         return persons_logged
     
     def _delete_cache(self, track_id) -> None:
-        """Delete the cache of embeddings and boxes."""
+        """Delete the cache of embeddings and boxes for a specific track ID.
+        
+        Args:
+            track_id: ID of the track to delete from cache
+        """
         try:
             for d in [
                     self.track_emb_frame_history,
@@ -257,7 +329,12 @@ class FaceEngine:
             pass
         
     def _save_face_crop(self, track_id, recognition_info) -> None:
-        """Save a face crop of the recognized person to the data_collection folder."""
+        """Save a face crop of the recognized person to the data collection folder.
+        
+        Args:
+            track_id: ID of the track
+            recognition_info: Recognition information dictionary
+        """
         parent_path = 'recognized' if recognition_info['recognized'] else 'unrecognized'
         if not os.path.exists(os.path.join(self.data_collection_path, parent_path)):
             os.makedirs(os.path.join(self.data_collection_path, parent_path))
@@ -275,6 +352,14 @@ class FaceEngine:
             pass
     
     def _count_line_passing(self, track_id: int) -> bool:
+        """Check if a tracked face has crossed a configured counting line.
+        
+        Args:
+            track_id: ID of the track to check
+            
+        Returns:
+            True if the track has crossed the counting line, False otherwise
+        """
         if self.args.line_points is None:
             return True
             
@@ -290,6 +375,12 @@ class FaceEngine:
         return track_line.intersects(counting_line)
     
     def _record_evaluation_results(self, track_id: int, name: str) -> None:
+        """Record evaluation results for a recognized face.
+        
+        Args:
+            track_id: ID of the track
+            name: Recognized name of the person
+        """
         if not self.args.eval:
             return
         

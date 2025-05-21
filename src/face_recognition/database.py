@@ -1,3 +1,5 @@
+"""Face database creation module for generating and saving face embeddings."""
+
 import os
 import cv2
 import numpy as np
@@ -6,13 +8,19 @@ import argparse
 from insightface.app import FaceAnalysis
 
 class Database:
+    """Face database creator for generating and managing face embeddings.
+    
+    This class provides functionality to create a database of face embeddings
+    from a collection of face images, which can be used for face recognition.
+    """
     def __init__(self, device='gpu', alpha=0.9, det_thresh=0.1, det_size=(160, 160)):
-        """
-        Initialize the FaceDatabaseCreator with device and alpha parameter
+        """Initialize the FaceDatabaseCreator with device and alpha parameter
         
         Args:
             device (str): 'gpu' or 'cpu' for face detection
             alpha (float): Weight factor for face embedding normalization
+            det_thresh (float): Detection threshold for face detection
+            det_size (tuple): Detection size for face detector
         """
         self.alpha = alpha
         self.ctx_id = 0 if device == 'gpu' else -1 # GPU or CPU
@@ -20,15 +28,14 @@ class Database:
         self.model.prepare(ctx_id=self.ctx_id, det_thresh=det_thresh, det_size=det_size)
     
     def generate(self, input_dir, output_file):
-        """
-        Create a face database from images in input_dir and save to output_file
+        """Create a face database from images in input_dir and save to output_file
         
         Args:
             input_dir (str): Directory containing face images
             output_file (str): Output pickle file path to save embeddings
         
         Returns:
-            dict: Dictionary containing embeddings and names
+            dict: Dictionary containing embeddings and names, or None if no faces detected
         """
         known_embeddings = []
         class_names = []

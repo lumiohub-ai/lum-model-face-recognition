@@ -1,3 +1,5 @@
+"""Main face recognition system for processing video streams and recognizing faces."""
+
 import os
 import warnings
 from typing import List, Optional, Union
@@ -18,9 +20,22 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 # Main class that merges configuration and processing
 class HBFace:
+    """Main face recognition system for processing video streams and identifying people.
+    
+    This class integrates all components of the face recognition system, including
+    video handling, face detection and recognition, and result logging.
+    """
     def __init__(self, cam_types: Optional[List[str]] = None, video_path: Optional[Union[str, List[str]]] = None,
                  multi_camera: bool = True, config_path: str = "configs/config.yaml", **kwargs) -> None:
-        """Initialize the face recognition system with optional camera types and video paths."""
+        """Initialize the face recognition system with optional camera types and video paths.
+        
+        Args:
+            cam_types: List of camera types (e.g., "entry", "exit")
+            video_path: Path(s) to video file(s) or stream URL(s)
+            multi_camera: Whether to process multiple cameras simultaneously
+            config_path: Path to the configuration file
+            **kwargs: Additional configuration parameters
+        """
         # Initialize configuration
         self.config = FaceSetup(cam_types, video_path, multi_camera, config_path, **kwargs)
         
@@ -79,12 +94,29 @@ class HBFace:
             logger.info(f"Average FPS: {avg_fps:.2f}")
 
     def _process_frames(self, frames: List[NDArray], frame_nums: List[int]) -> List[NDArray]:
-        """Process multiple frames for face detection, tracking and recognition."""
+        """Process multiple frames for face detection, tracking and recognition.
+        
+        Args:
+            frames: List of video frames to process
+            frame_nums: List of frame numbers corresponding to each frame
+            
+        Returns:
+            List of annotated frames with visualization
+        """
         return [self._process_single_frame(frame, frame_nums[i], self.engines[i]) 
                 for i, frame in enumerate(frames)]
 
     def _process_single_frame(self, frame: NDArray, frame_num: int, engine: FaceEngine) -> NDArray:
-        """Process a single frame for face detection, tracking and recognition."""
+        """Process a single frame for face detection, tracking and recognition.
+        
+        Args:
+            frame: Video frame to process
+            frame_num: Frame number in the sequence
+            engine: FaceEngine instance to use for processing
+            
+        Returns:
+            Annotated frame with visualization
+        """
         roi = engine.args.roi
         frame_cropped = frame[roi[1]:roi[3], roi[0]:roi[2]] if roi else frame
 
@@ -116,7 +148,11 @@ class HBFace:
         return frame_annotated
         
     def _add_timestamp(self, frame: NDArray) -> None:
-        """Add timestamp to the frame."""
+        """Add timestamp to the frame.
+        
+        Args:
+            frame: Frame to add timestamp to
+        """
         try:
             # Get current time in the configured timezone
             tz = pytz.timezone(self.engines[0].args.timezone)
@@ -131,7 +167,11 @@ class HBFace:
             logger.error(f"Error adding timestamp: {e}")
     
     def _display_frames(self, frames: List[NDArray]) -> None:
-        """Display processed frames if configured to show output."""
+        """Display processed frames if configured to show output.
+        
+        Args:
+            frames: List of processed frames to display
+        """
         if self.engines[0].args.show:
             combined_frame = self.visualize.concat_frames(*frames) if len(frames) > 1 else frames[0]
             
@@ -141,8 +181,13 @@ class HBFace:
                     logger.info("ESC key pressed, exiting")
 
     def _check_time_interval(self) -> bool:
-        """Program must save the frames from
-        7 AM to 9 AM and 5 PM to 7 PM every day with Uzbekistan time.
+        """Check if current time is within the defined recording intervals.
+        
+        Program must save the frames from 7 AM to 9 AM and 5 PM to 7 PM 
+        every day with Uzbekistan time.
+        
+        Returns:
+            True if current time is within recording intervals, False otherwise
         """
         tz = pytz.timezone('Asia/Tashkent')
         current_time = datetime.datetime.now(tz)
@@ -154,7 +199,11 @@ class HBFace:
         return (start_morning <= current_time <= end_morning) or (start_evening <= current_time <= end_evening)
     
     def _save_frames(self, frames: List[NDArray]) -> None:
-        """Save processed frames to video files if enabled."""
+        """Save processed frames to video files if enabled.
+        
+        Args:
+            frames: List of processed frames to save
+        """
         if not self.engines[0].args.record_always:
             if not self._check_time_interval():
                 return

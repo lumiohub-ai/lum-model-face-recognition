@@ -1,3 +1,5 @@
+"""Entry logging module for tracking and visualizing person entries and exits."""
+
 from collections import deque
 import cv2
 import pandas as pd
@@ -6,9 +8,20 @@ import json
 import requests
 
 class EntryLogger:
+    """Logger for tracking and recording person entries and exits.
+    
+    This class handles communication with the API to retrieve user information,
+    tracks person status changes, and provides visualization for entry/exit events.
+    """
     def __init__(self, 
                 args,
                 max_entries=3):
+        """Initialize the entry logger.
+        
+        Args:
+            args: Configuration arguments
+            max_entries: Maximum number of recent entries to display on screen
+        """
         self.args = args
         
         self.create_user_api_url = os.getenv("CREATE_USER_API")
@@ -25,6 +38,11 @@ class EntryLogger:
         self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
         
     def get_all_users(self):
+        """Retrieve all users from the API and determine new and deleted users.
+        
+        Returns:
+            Tuple containing lists of new users, deleted users, and name-to-ID mappings
+        """
         response = requests.get(self.get_all_users_api_url)
 
         new_users = []
@@ -63,6 +81,12 @@ class EntryLogger:
             raise Exception(f"Error fetching users: {response.status_code} - {response.text}")
 
     def send_data_to_api(self, name, status):
+        """Send person entry/exit data to the API.
+        
+        Args:
+            name: Name of the person
+            status: Entry/exit status (IN/OUT)
+        """
         user_id = next((int(i['id']) for i in self.name_to_id if i['name'] == name), None)
 
         if user_id is None:
@@ -84,6 +108,13 @@ class EntryLogger:
 
 
     def log_person_entry(self, name, status, appear_time):
+        """Log a person's entry or exit.
+        
+        Args:
+            name: Name of the person
+            status: Entry/exit status (IN/OUT)
+            appear_time: Time when the person appeared
+        """
         previous_status = self.person_status.get(name)
 
         # If status is the same as before, do nothing
@@ -122,6 +153,12 @@ class EntryLogger:
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
 
     def visualize_entries(self, frame, max_text_width=0):
+        """Visualize recent entries on the frame.
+        
+        Args:
+            frame: Frame to add visualization to
+            max_text_width: Maximum width of the text display
+        """
         self.padding = 10
         self.base_y = 30
 
@@ -149,6 +186,14 @@ class EntryLogger:
             )
     
     def save_status_info(self, video_name='status_info'):
+        """Save status information to a CSV file.
+        
+        Args:
+            video_name: Base name for the output CSV file
+            
+        Returns:
+            Text message indicating where the status information was saved
+        """
         os.makedirs('logs', exist_ok=True)
 
         # Convert saving_status_info to DataFrame and save to CSV

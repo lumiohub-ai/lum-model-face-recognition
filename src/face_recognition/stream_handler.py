@@ -1,3 +1,5 @@
+"""Video stream handling module for processing camera streams and video files."""
+
 import cv2
 import threading
 import queue
@@ -8,7 +10,18 @@ from typing import Any, Tuple
 
 
 class StreamHandler:
+    """Handles video stream input from various sources with robust error handling and reconnection.
+    
+    This class manages video capture from files, cameras or network streams, providing a
+    reliable and thread-safe interface for reading frames even with unreliable sources.
+    """
     def __init__(self, src: Any, logger: logging.Logger) -> None:
+        """Initialize the stream handler with a video source.
+        
+        Args:
+            src: Video source (file path, camera index, or network URL)
+            logger: Logger instance for reporting stream status
+        """
         self.src = src
         self.is_video = self.is_video_file(src)
         self.logger = logger
@@ -43,7 +56,11 @@ class StreamHandler:
         self.thread = None  # Store reference to thread
 
     def _reconnect(self) -> bool:
-        """Attempt to reconnect to the video source infinitely until successful"""
+        """Attempt to reconnect to the video source infinitely until successful.
+        
+        Returns:
+            True if reconnection was successful
+        """
         self.logger.warning(f"Reconnecting to stream: {self.src}")
         if self.cap is not None:
             self.cap.release()
@@ -65,15 +82,33 @@ class StreamHandler:
 
     @staticmethod
     def is_video_file(source: str) -> bool:
+        """Determine if the source is a video file based on its extension.
+        
+        Args:
+            source: Path to the potential video file
+            
+        Returns:
+            True if the source is a video file, False otherwise
+        """
         return isinstance(source, str) and source.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))
 
     def start(self) -> "StreamHandler":
+        """Start the frame reading thread for non-video file sources.
+        
+        Returns:
+            Self reference for method chaining
+        """
         if not self.is_video:
             self.thread = threading.Thread(target=self.update, daemon=True)
             self.thread.start()
         return self
 
     def update(self) -> None:
+        """Background thread function that continuously reads frames from the video source.
+        
+        This method runs in a separate thread for live streams, continuously reading frames
+        and updating the frame queue with the most recent frame.
+        """
         consecutive_failures = 0
         while True:
             with self.lock:
@@ -110,6 +145,11 @@ class StreamHandler:
                 self.last_gc_time = current_time
 
     def read(self) -> Tuple[bool, Any]:
+        """Read the next frame from the video source.
+        
+        Returns:
+            Tuple containing a boolean indicating success and the frame (if successful)
+        """
         if self.is_video:
             ret, frame = self.cap.read()
             if not ret and not self.stopped:
@@ -132,9 +172,15 @@ class StreamHandler:
             return self.ret, self.frame
         
     def get_first_frame(self) -> Any:
+        """Get the first frame that was captured from the video source.
+        
+        Returns:
+            The first frame captured from the video source
+        """
         return self.frame
 
     def stop(self) -> None:
+        """Stop the frame reading thread and release resources."""
         with self.lock:
             if self.stopped:
                 return
@@ -153,7 +199,13 @@ class StreamHandler:
         # cv2.destroyAllWindows()
 
     def __enter__(self) -> "StreamHandler":
+        """Context manager entry method.
+        
+        Returns:
+            Started StreamHandler instance
+        """
         return self.start()
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Context manager exit method that ensures resources are properly released."""
         self.stop()

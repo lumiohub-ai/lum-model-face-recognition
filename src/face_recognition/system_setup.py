@@ -1,3 +1,5 @@
+"""System setup module for configuring the face recognition system."""
+
 import os
 import sys
 import cv2
@@ -18,6 +20,15 @@ class FaceSetup:
     
     def __init__(self, cam_types: Optional[List[str]] = None, video_path: Optional[Union[str, List[str]]] = None,
                  multi_camera: bool = True, config_path: str = "src/face_recognition/cfg/config.yaml", **kwargs) -> None:
+        """Initialize the system configuration.
+        
+        Args:
+            cam_types: List of camera types (e.g., "entry", "exit")
+            video_path: Path(s) to video file(s) or stream URL(s)
+            multi_camera: Whether to process multiple cameras simultaneously
+            config_path: Path to the configuration file
+            **kwargs: Additional configuration parameters
+        """
         # Core configuration
         self.multi_camera = multi_camera
         self.streams: List[StreamHandler] = []
@@ -35,7 +46,16 @@ class FaceSetup:
         self.entry_logger = EntryLogger(args=args)
     
     def setup_cameras(self, cam_types: Optional[List[str]], video_paths: Optional[Union[str, List[str]]], **kwargs) -> None:
-        """Set up camera streams based on configuration."""
+        """Set up camera streams based on configuration.
+        
+        Args:
+            cam_types: List of camera types
+            video_paths: Path(s) to video file(s) or stream URL(s)
+            **kwargs: Additional configuration parameters
+            
+        Returns:
+            Configuration arguments
+        """
         if self.multi_camera:
             args = self._setup_multi_camera(cam_types, video_paths, **kwargs)
         else:
@@ -44,7 +64,19 @@ class FaceSetup:
         return args
 
     def _setup_multi_camera(self, cam_types: Optional[List[str]], video_paths: Optional[List[str]], **kwargs) -> None:
-        """Configure multiple camera streams."""
+        """Configure multiple camera streams.
+        
+        Args:
+            cam_types: List of camera types
+            video_paths: List of paths to video files or stream URLs
+            **kwargs: Additional configuration parameters
+            
+        Returns:
+            Configuration arguments
+            
+        Raises:
+            ValueError: If cam_types is None or video_paths is not a list
+        """
         if not cam_types or not isinstance(video_paths, list):
             raise ValueError("Multi-camera setup requires cam_types and a list of video_paths")
 
@@ -57,7 +89,16 @@ class FaceSetup:
         return args
 
     def _setup_single_camera(self, cam_type: Optional[str], video_path: Optional[str], **kwargs) -> None:
-        """Configure a single camera stream."""
+        """Configure a single camera stream.
+        
+        Args:
+            cam_type: Camera type
+            video_path: Path to video file or stream URL
+            **kwargs: Additional configuration parameters
+            
+        Returns:
+            Configuration arguments
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args = self._load_config(video_path=video_path, cam_type=cam_type, **kwargs)
         self._initialize_camera(args, video_path, cam_type, timestamp)
@@ -65,7 +106,15 @@ class FaceSetup:
         return args
 
     def _initialize_camera(self, args: Any, vid_path: str, cam_type: str, timestamp: str, index: Optional[int] = None) -> None:
-        """Initialize a camera with configuration and prepare video writer if needed."""
+        """Initialize a camera with configuration and prepare video writer if needed.
+        
+        Args:
+            args: Configuration arguments
+            vid_path: Path to video file or stream URL
+            cam_type: Camera type
+            timestamp: Current timestamp string
+            index: Camera index (for multi-camera setup)
+        """
         args.cam_type = cam_type
         
         # Handle ROI configuration
@@ -112,7 +161,17 @@ class FaceSetup:
         self._show_config(args)
 
     def _load_config(self, **kwargs) -> Any:
-        """Load configuration from YAML file and override with provided arguments."""
+        """Load configuration from YAML file and override with provided arguments.
+        
+        Args:
+            **kwargs: Configuration parameters to override
+            
+        Returns:
+            Configuration arguments object
+            
+        Raises:
+            Exception: If there's an error loading the configuration file
+        """
         try:
             with open(self.config_path, 'r') as file:
                 config = yaml.safe_load(file)
@@ -134,7 +193,11 @@ class FaceSetup:
         return args
 
     def _show_config(self, args: Any) -> None:
-        """Display the configuration settings."""
+        """Display the configuration settings.
+        
+        Args:
+            args: Configuration arguments to display
+        """
         logger.info("\n=== Configuration Settings ===")
         needed_keys = ['cam_type', 'video_path', 'match_threshold', 'db_path', 'roi', 'line_points', 'show', 
                        'record_always', 'eval']
@@ -144,7 +207,12 @@ class FaceSetup:
         logger.info("===========================\n")
     
     def _setup_logger(self, log_file: Optional[str] = None, debug: bool = False) -> None:
-        """Setup the logger with different levels and formats."""
+        """Setup the logger with different levels and formats.
+        
+        Args:
+            log_file: Path to log file (if None, logging to file is disabled)
+            debug: Whether to enable debug logging
+        """
         logger.remove()  # Clear default handlers
 
         # Define levels and their formats

@@ -1,22 +1,39 @@
+"""Visualization utilities for displaying and drawing on video frames."""
+
 import random
 import cv2
 import numpy as np
 from typing import List, Tuple
 
 class Visualization():
+    """Class for visualizing tracking results and other information on video frames."""
     def __init__(self):
+        """Initialize the visualization class with default parameters."""
         super().__init__()
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.font_scale = 0.5
         self.color_track_id = {}
     
     def define_color(self, track_id: int) -> Tuple[int, int, int]:
+        """Define a consistent color for a specific track ID.
+        
+        Args:
+            track_id: ID of the track to define color for
+            
+        Returns:
+            RGB color tuple for the specified track ID
+        """
         if track_id not in self.color_track_id:
             self.color_track_id[track_id] = self.generate_random_color()
         return self.color_track_id[track_id]
     
     @staticmethod
     def generate_random_color() -> Tuple[int, int, int]:
+        """Generate a random RGB color.
+        
+        Returns:
+            Random RGB color tuple
+        """
         return tuple(random.randint(0, 255) for _ in range(3))
     
     def draw_region(self,
@@ -24,6 +41,14 @@ class Visualization():
                     reg_pts: List[Tuple[int, int]], 
                     color: Tuple[int, int, int] = (0, 255, 0), 
                     thickness: int = 5) -> None:
+        """Draw a polygon region on an image.
+        
+        Args:
+            image: Image to draw on
+            reg_pts: List of points defining the polygon
+            color: RGB color for the polygon outline
+            thickness: Line thickness for the polygon
+        """
         if image is None:
             raise ValueError("No image provided for drawing.")
 
@@ -34,6 +59,16 @@ class Visualization():
     
     @staticmethod
     def concat_frames(frame1: np.ndarray, frame2: np.ndarray, mode: str = "horizontal") -> np.ndarray:
+        """Concatenate two frames horizontally or vertically.
+        
+        Args:
+            frame1: First frame
+            frame2: Second frame
+            mode: Concatenation mode ("horizontal" or "vertical")
+            
+        Returns:
+            Concatenated frame
+        """
         # Resize frames to window size whcih is 720x1920
         frame1 = cv2.resize(frame1, (1280, 720))
         frame2 = cv2.resize(frame2, (1280, 720))
@@ -52,10 +87,12 @@ class Visualization():
 
 
 class ShapeDrawer:
+    """Interactive shape drawing utility for defining regions of interest."""
     def __init__(self, image):
-        """
-        Initializes the ShapeDrawer with an image.
-        :param image_path: Path to the input image
+        """Initialize the ShapeDrawer with an image.
+        
+        Args:
+            image: Input image to draw shapes on
         """
         self.image = image
         self.clone = self.image.copy()
@@ -65,6 +102,14 @@ class ShapeDrawer:
     
     @staticmethod
     def get_first_frame(source):
+        """Get the first frame from a video source.
+        
+        Args:
+            source: Video source (file path, camera index, or URL)
+            
+        Returns:
+            First frame from the video source
+        """
         cap = cv2.VideoCapture(source)
         _, frame = cap.read()
         cap.release()
@@ -73,11 +118,25 @@ class ShapeDrawer:
 
     @staticmethod
     def initialize_shape_drawer(frame):
+        """Initialize and run the shape drawer on a frame.
+        
+        Args:
+            frame: Frame to draw shapes on
+            
+        Returns:
+            List of drawn shapes
+        """
         return ShapeDrawer(frame).run()[0]
 
     def mouse_callback(self, event, x, y, flags, param):
-        """
-        Mouse callback function for drawing shapes interactively.
+        """Mouse callback function for drawing shapes interactively.
+        
+        Args:
+            event: Mouse event type
+            x: X-coordinate of the mouse cursor
+            y: Y-coordinate of the mouse cursor
+            flags: Additional flags
+            param: Additional parameters
         """
         if event == cv2.EVENT_LBUTTONDOWN:
             self.current_shape.append((x, y))
@@ -86,8 +145,10 @@ class ShapeDrawer:
             self.current_shape = []
 
     def draw_shapes(self):
-        """
-        Draws all stored shapes on a copy of the image.
+        """Draw all stored shapes on a copy of the image.
+        
+        Returns:
+            Image with drawn shapes
         """
         temp_image = self.clone.copy()
         
@@ -103,8 +164,10 @@ class ShapeDrawer:
         return temp_image
 
     def run(self):
-        """
-        Runs the interactive shape drawing process.
+        """Run the interactive shape drawing process.
+        
+        Returns:
+            List of drawn shapes
         """
         cv2.namedWindow("Shape Drawer")
         cv2.setMouseCallback("Shape Drawer", self.mouse_callback)
