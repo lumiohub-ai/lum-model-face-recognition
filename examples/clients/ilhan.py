@@ -21,6 +21,7 @@ face_engine_multi = HBFace(
     production=True,
     record_always=False,
     match_threshold=0.5,
+    save_video=False,
     debug=True)
 
 

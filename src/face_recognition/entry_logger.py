@@ -23,9 +23,9 @@ class EntryLogger:
             max_entries: Maximum number of recent entries to display on screen
         """
         self.args = args
-        
-        self.create_user_api_url = os.getenv("CREATE_USER_API")
-        self.get_all_users_api_url = os.getenv("GET_USER_API")
+
+        self.create_user_api_url = args.api_host + "api/history/create"
+        self.get_all_users_api_url = args.api_host + "api/history/get_all"
 
         self.headers = {"Content-Type": "application/json"}
 
