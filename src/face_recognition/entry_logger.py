@@ -25,7 +25,7 @@ class EntryLogger:
         self.args = args
 
         self.create_user_api_url = args.api_host + "api/history/create"
-        self.get_all_users_api_url = args.api_host + "api/history/get_all"
+        self.get_all_users_api_url = args.api_host + "api/users"
 
         self.headers = {"Content-Type": "application/json"}
 
