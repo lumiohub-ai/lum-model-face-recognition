@@ -6,7 +6,9 @@ import pandas as pd
 import os
 import json
 import requests
+from typing import Optional, Dict, Any
 
+clientSlug = 'humblebee'
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
     
@@ -24,15 +26,17 @@ class EntryLogger:
         """
         self.args = args
 
-        self.create_user_api_url = args.api_host + "api/history/create"
-        self.get_all_users_api_url = args.api_host + "api/users"
-
         self.headers = {"Content-Type": "application/json"}
 
         self.recent_entries = deque(maxlen=max_entries)
         self.person_status = {}
         self.saving_status_info = []
+        self.base_url = args.api_host + 'api'
+        self.token = None
+        self.client_slug = None
+        self.session = requests.Session()
 
+        self.login_response = self.login('humblebee', 'Hbvision2025@', 'humblebee')
         self.current_users = args.db_names
 
         self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
@@ -43,7 +47,14 @@ class EntryLogger:
         Returns:
             Tuple containing lists of new users, deleted users, and name-to-ID mappings
         """
-        response = requests.get(self.get_all_users_api_url)
+        if not self.token:
+            raise ValueError("Not authenticated. Please login first.")
+        page = 1
+        limit = 50
+        response = self.session.get(
+                f"{self.base_url}/{self.client_slug}/users",
+                params={"page": page, "limit": limit, "status": "active"}
+            )
 
         new_users = []
         deleted_users = []
@@ -79,7 +90,52 @@ class EntryLogger:
         else:
             self.args.logger.critical(f"Error fetching users: {response.status_code} - {response.text}")
             raise Exception(f"Error fetching users: {response.status_code} - {response.text}")
-
+   
+    def login(self, username: str, password: str, client_slug: str) -> Dict[str, Any]:
+        """
+        Authenticate user and obtain access token
+        
+        Args:
+            username (str): User's username
+            password (str): User's password
+            client_slug (str): Client slug for organization
+            
+        Returns:
+            dict: Login response data
+            
+        Raises:
+            requests.exceptions.RequestException: If login fails
+        """
+        login_data = {
+            "username": username,
+            "password": password,
+            "client_slug": client_slug
+        }
+        
+        try:
+            response = self.session.post(
+                f"{self.base_url}/auth/login",
+                json=login_data,
+                headers={"Content-Type": "application/json"}
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if data.get('success'):
+                self.token = data.get('token')
+                self.client_slug = client_slug
+                # Set authorization header for future requests
+                self.session.headers.update({
+                    'Authorization': f'Bearer {self.token}'
+                })
+                return data
+            else:
+                raise requests.exceptions.RequestException(f"Login failed: {data.get('error', 'Unknown error')}")
+                
+        except requests.exceptions.RequestException as e:
+            raise requests.exceptions.RequestException(f"Login request failed: {str(e)}")
+        
     def send_data_to_api(self, name, status):
         """Send person entry/exit data to the API.
         
@@ -98,8 +154,7 @@ class EntryLogger:
             "detection_type": status.lower()
         }
         
-        response = requests.post(self.create_user_api_url, json=payload, headers=self.headers)
-        
+        response = self.create_record(user_id, status)
         data = response.json()
         if response.status_code == 201:
             self.args.logger.info(f"Success: {data['message']}")
@@ -151,6 +206,44 @@ class EntryLogger:
         })
 
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
+
+    def create_record(self, user_id: int, status: str) -> Dict[str, Any]:
+        """
+        Create an attendance record
+        
+        Args:
+            user_id (int): ID of the user to create record for
+            status (str): Either 'in' or 'out'
+            
+        Returns:
+            dict: Record creation response data
+            
+        Raises:
+            requests.exceptions.RequestException: If record creation fails
+        """
+        if not self.token:
+            raise ValueError("Not authenticated. Please login first.")
+        status = status.lower()
+        if status not in ['in', 'out']:
+            raise ValueError("Status must be either 'in' or 'out'")
+        
+        record_data = {
+            "user_id": user_id,
+            "status": status
+        }
+        
+        try:
+            response = self.session.post(
+                f"{self.base_url}/{self.client_slug}/history/create",
+                json=record_data,
+                headers={"Content-Type": "application/json"}
+            )
+            response.raise_for_status()
+            
+            return response 
+            
+        except requests.exceptions.RequestException as e:
+            raise requests.exceptions.RequestException(f"Record creation request failed: {str(e)}")
 
     def visualize_entries(self, frame, max_text_width=0):
         """Visualize recent entries on the frame.
