@@ -4,6 +4,7 @@ from collections import deque
 import cv2
 import pandas as pd
 import os
+import io
 import json
 import requests
 from typing import Optional, Dict, Any
@@ -161,7 +162,45 @@ class EntryLogger:
         else:
             self.args.logger.warning(f"Error: {data.get('error', 'Unknown error')}")
 
+    def send_unrecognized_face(self, face, status):
+        if not self.token:
+            raise ValueError("Not authenticated. Please login first.")
+        status = status.lower()
+        if status not in ['in', 'out']:
+            raise ValueError("Status must be either 'in' or 'out'")
+        
+        url = self.base_url + f'/{self.client_slug}/unrecognized'
+        headers = {
+            'Authorization': f'Bearer {self.token}'
+        }
 
+        data ={'user_status': status}
+
+        success, encoded_image = cv2.imencode('.jpg', face)
+        if not success:
+            raise ValueError("Image encoding failed")
+
+        # Convert to byte stream
+        image_bytes = io.BytesIO(encoded_image.tobytes())
+
+        # Prepare file payload
+        files = [
+            ('images', ('cropped_face.jpg', image_bytes, 'image/jpeg')),
+        ]
+        try:
+            response = requests.post(url, headers=headers, files=files, data=data)
+
+            response.raise_for_status()
+            if response.status_code == 201:
+                self.args.logger.info("Unrecognized face sent successfully")
+            else:
+                self.args.logger.warning(f"Failed to send unrecognized face: {response.text}")
+            
+            return response 
+            
+        except requests.exceptions.RequestException as e:
+            raise requests.exceptions.RequestException(f"Send unrecognized face request failed: {str(e)}")
+        
     def log_person_entry(self, name, status, appear_time):
         """Log a person's entry or exit.
         

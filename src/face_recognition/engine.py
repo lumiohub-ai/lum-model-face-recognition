@@ -296,12 +296,10 @@ class FaceEngine:
             except Exception as e:
                 pass
 
-            if not recognition_info['recognized']:
-                self._delete_cache(track_id)
-                continue
+            cropped_face = self.track_crop_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None)
 
 
-            persons_logged[name] = [track_id, self.id_appear_time[track_id]]
+            persons_logged[name] = [track_id, self.id_appear_time[track_id], recognition_info['recognized'], cropped_face]
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
@@ -347,7 +345,7 @@ class FaceEngine:
         if matched_frame_crop is not None:
             file_name = f"{recognition_info['name']}_{track_id}_{sim:.2f}.jpg"
             file_path = os.path.join(self.data_collection_path, parent_path, file_name)
-            cv2.imwrite(file_path, matched_frame_crop)
+            # cv2.imwrite(file_path, matched_frame_crop)
         else:
             pass
     

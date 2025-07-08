@@ -131,9 +131,13 @@ class HBFace:
         persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
             
         # Log recognized persons
-        for name, (_, appear_time) in persons_recognized.items():
+        for name, (_, appear_time, recognized, cropped_face) in persons_recognized.items():
             status = engine.args.cam_type
-            self.entry_logger.log_person_entry(name, status, appear_time)
+            if recognized:
+                self.entry_logger.log_person_entry(name, status, appear_time)
+            else:
+                # Log unrecognized faces
+                self.entry_logger.send_unrecognized_face(face = cropped_face, status=status)
 
         # Draw counting line if configured
         if engine.args.line_points:
@@ -189,7 +193,7 @@ class HBFace:
         Returns:
             True if current time is within recording intervals, False otherwise
         """
-        tz = pytz.timezone('Asia/Tashkent')
+        tz = pytz.timezone('Asia/Seoul')  # Use 'Asia/Seoul' for Korea timezone
         current_time = datetime.datetime.now(tz)
         start_morning = current_time.replace(hour=7, minute=0, second=0, microsecond=0)
         end_morning = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
@@ -218,9 +222,13 @@ class HBFace:
         for engine in self.engines:
             persons_recognized = engine.recognize_removed_tracks([], last_frame=True)
             # Log any final recognized persons
-            for name, (_, appear_time) in persons_recognized.items():
+            for name, (_, appear_time, recognized, cropped_face) in persons_recognized.items():
                 status = engine.args.cam_type
-                self.entry_logger.log_person_entry(name, status, appear_time)
+                if recognized:
+                    self.entry_logger.log_person_entry(name, status, appear_time)
+                else:
+                    # Log unrecognized faces
+                    self.entry_logger.send_unrecognized_face(face = cropped_face, status=status)
 
     def _cleanup(self) -> None:
         """Cleanup resources and finalize the face recognition system."""
