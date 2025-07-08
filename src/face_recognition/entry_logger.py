@@ -176,6 +176,10 @@ class EntryLogger:
 
         data ={'user_status': status}
 
+        if face is None or face.size == 0:
+            self.args.logger.warning("No face detected to send")
+            return
+
         success, encoded_image = cv2.imencode('.jpg', face)
         if not success:
             raise ValueError("Image encoding failed")
