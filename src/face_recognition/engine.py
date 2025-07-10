@@ -52,6 +52,8 @@ class FaceEngine:
             custom_features=True,
         )
         self.face_recognition = FaceRecognition(self.args)
+        self.args.logger.info(f"Loaded {len(self.face_recognition.db_embs)} embeddings from {self.face_recognition.args.db_path}")
+
 
     def _initialize_tracking(self) -> None:
         """Initialize data structures for tracking face information across frames."""

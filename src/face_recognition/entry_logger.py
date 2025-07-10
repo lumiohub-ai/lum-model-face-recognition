@@ -7,7 +7,8 @@ import os
 import io
 import json
 import requests
-from typing import Optional, Dict, Any
+from typing import Optional, Dict ,List, Any
+from datetime import datetime
 
 clientSlug = 'humblebee'
 class EntryLogger:
@@ -30,17 +31,17 @@ class EntryLogger:
         self.headers = {"Content-Type": "application/json"}
 
         self.recent_entries = deque(maxlen=max_entries)
-        self.person_status = {}
         self.saving_status_info = []
         self.base_url = args.api_host + 'api'
-        self.token = None
         self.client_slug = None
         self.session = requests.Session()
 
-        self.login_response = self.login('humblebee', 'Hbvision2025@', 'humblebee')
+        self.token = self.login('humblebee', 'Hbvision2025@', 'humblebee')
         self.current_users = args.db_names
 
         self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
+        self.person_status = self.get_last_status()
+
         
     def get_all_users(self):
         """Retrieve all users from the API and determine new and deleted users.
@@ -77,7 +78,6 @@ class EntryLogger:
                             'image_path': next((item['path'] for item in id_to_path if item['id'] == user['id']), None)
                         }
                     )
-    
             for user in self.current_users:
                 if user not in user_dict.keys():
                     deleted_users.append(user)
@@ -102,7 +102,7 @@ class EntryLogger:
             client_slug (str): Client slug for organization
             
         Returns:
-            dict: Login response data
+            token (str): Access token for authenticated requests
             
         Raises:
             requests.exceptions.RequestException: If login fails
@@ -124,13 +124,13 @@ class EntryLogger:
             data = response.json()
             
             if data.get('success'):
-                self.token = data.get('token')
+                token = data.get('token')
                 self.client_slug = client_slug
                 # Set authorization header for future requests
                 self.session.headers.update({
-                    'Authorization': f'Bearer {self.token}'
+                    'Authorization': f'Bearer {token}'
                 })
-                return data
+                return token
             else:
                 raise requests.exceptions.RequestException(f"Login failed: {data.get('error', 'Unknown error')}")
                 
@@ -163,6 +163,16 @@ class EntryLogger:
             self.args.logger.warning(f"Error: {data.get('error', 'Unknown error')}")
 
     def send_unrecognized_face(self, face, status):
+        """Send unrecognized face image to the API.
+        Args:
+            face: Detected face image (numpy array)
+            status: Status of the user ('in' or 'out')
+        Raises:
+            ValueError: If the status is not 'in' or 'out'
+            requests.exceptions.RequestException: If the request to the API fails
+        """
+         # Check if user is authenticated
+         # If not, raise an error
         if not self.token:
             raise ValueError("Not authenticated. Please login first.")
         status = status.lower()
@@ -339,5 +349,119 @@ class EntryLogger:
         text = f"Status information saved to logs/{video_name}.csv"
 
         return text
+   
+    def fetch_all_history(self, page: int = 1, limit: int = 100) -> List[Dict[str, Any]]:
+        """Fetch all history records from the API.
+        Args:
+            all_records: List to accumulate records (used for recursive calls)
+            page: Current page number for pagination
+            limit: Number of records per page
+        Returns:
+            List of all history records"""
+        all_records = []
 
+        while True:
+            response = self.session.get(
+                f"{self.base_url}/{self.client_slug}/history",
+                headers=self.headers,
+                params={"page": page, "limit": limit}
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not data.get('success', True):
+                raise requests.exceptions.RequestException(f"Failed to get history: {data.get('error', 'Unknown error')}")
+            records = data.get("records", [])
+            all_records.extend(records)
+
+            if page >= data.get("totalPages", 1):
+                break
+            page += 1
+            
+        self.args.logger.info(f"Fetched {len(all_records)} history records")
+        return all_records
+
+    def get_last_status(self):
+        """Get the last status of each user from the history records.
+        This method fetches all history records, filters out deleted users,
+        and updates the person_status dictionary with the latest status for each user.
+        Users with no records will be marked as 'out'.
+        """
+
+        new_users, deleted_users, name_to_id = self.get_all_users()
+        user_map = {entry['id']: entry['name'] for entry in name_to_id}
+        all_records = self.fetch_all_history()
+
+        # Track latest record per user_id
+        user_last_status = {}
+        for record in all_records:
+            if record.get("deleted"):
+                continue
+
+            user_id = record["user_id"]
+            if user_id not in user_map:
+                continue
+
+            timestamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
+
+            if user_id not in user_last_status or timestamp > user_last_status[user_id]["timestamp"]:
+                user_last_status[user_id] = {
+                    "name": user_map[user_id],
+                    "timestamp": timestamp,
+                    "status": record["status"]
+                }
+
+        # Build self.person_status using names as keys
+        person_status = {}  # Reset
+        for user_data in user_last_status.values():
+            name = user_data["name"]
+            status = user_data["status"]
+            person_status[name] = status
+
+        # Fill in 'out' for users with no record
+        for entry in name_to_id:
+            name = entry["name"]
+            if name not in person_status:
+                person_status[name] = "out"
+
+        return person_status
+
+    def send_annotated_frame(self, frame, camera):
+        """Send annotated frame to the API.
+        
+        Args:
+            frame: Annotated frame to send
+            camera: IN/OUT camera
+        Raises:
+            ValueError: If the frame cannot be encoded or if the user is not authenticated
+            requests.exceptions.RequestException: If the request to the API fails
+        Uses:
+            requests: To send the frame to the API
+        """
+        if not self.token:
+            raise ValueError("Not authenticated. Please login first.")
+        
+        url = self.base_url + f'/{self.client_slug}/'
+        headers = {
+            'Authorization': f'Bearer {self.token}'
+        }
+
+        data = {'camera': camera}
+
+        success, encoded_image = cv2.imencode('.jpg', frame)
+        if not success:
+            raise ValueError("Image encoding failed")
+        image_bytes = io.BytesIO(encoded_image.tobytes())
+
+        # Prepare file payload
+        files = [
+            ('images', ('annotated_frame.jpg', image_bytes, 'image/jpeg')),
+        ]
+        try:
+            response = requests.post(url, headers=headers, files=files, data=data)
+
+            response.raise_for_status()
+            if response.status_code != 201:
+                self.args.logger.warning(f"Failed to send annotated frame: {response.text}")
+        except requests.exceptions.RequestException as e:
+            raise requests.exceptions.RequestException(f"Send annotated frame request failed: {str(e)}")
 

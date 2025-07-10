@@ -33,7 +33,6 @@ class FaceRecognition:
         db_names = data['names']
         db_names = [name.split('_')[0] for name in db_names]
 
-        self.args.logger.info(f"Loaded {len(db_embs)} embeddings from {self.args.db_path}")
 
         return db_names, db_embs
     

@@ -148,6 +148,8 @@ class HBFace:
         
         # Add timestamp to the frame
         self._add_timestamp(frame_annotated)
+        # self.entry_logger.`send_annotated_frame`(frame_annotated, engine.args.cam_type)
+
 
         return frame_annotated
         
