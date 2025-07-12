@@ -14,7 +14,7 @@ myenv/
 *.zip
 *.npz
 *.json
-
+*.pkl
 *.engine
 *.onnx
 *.pt
