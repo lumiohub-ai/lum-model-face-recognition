@@ -2,7 +2,7 @@
 gpu_id: 0  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
 # Database settings
-db_path: "data/embeddings/hb-kor.pkl" # Must be in pkl format
+db_path: 'data/embeddings/hb_korea.pkl' # Must be in pkl format
 video_path: "data/videos/sample.mp4"  # Path to the input video file or RTSP stream
 
 # Face recognition settings

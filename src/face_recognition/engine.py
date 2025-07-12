@@ -285,8 +285,10 @@ class FaceEngine:
                 # self.args.logger.debug(f"Track {track_id} has no embeddings or has not passed the counting line.")
                 continue
                 
-            track_id_embeddings = np.array(list(track_id_embeddings.values()))
-            recognition_info = self.face_recognition.recognize_face(track_id_embeddings)
+            frame_nums = list(track_id_embeddings.keys())
+            emb_array = np.array(list(track_id_embeddings.values()))
+            recognition_info = self.face_recognition.recognize_face(emb_array, frame_nums)
+
 
             name = recognition_info['name']
             sim = recognition_info['similarity']
@@ -305,8 +307,7 @@ class FaceEngine:
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
-
-            self._delete_cache(track_id)           
+            self._delete_cache(track_id)
 
         return persons_logged
     

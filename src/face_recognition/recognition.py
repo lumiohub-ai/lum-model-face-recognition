@@ -46,7 +46,7 @@ class FaceRecognition:
             pickle.dump(data, f)
         self.args.logger.info(f"Updated {self.args.db_path} with {len(self.db_embs)} embeddings")
     
-    def recognize_face(self, face_embs):
+    def recognize_face(self, face_embs, frame_nums):
         """Recognize a face by comparing its embeddings to the database.
         
         Args:
@@ -58,7 +58,7 @@ class FaceRecognition:
         similarities = self.compute_similarities(face_embs)
         best_match_idx, best_similarity = self.get_best_match(similarities)
         matched_name = self.db_names[best_match_idx].split('_')[0]
-        matched_frame_num = self.get_matched_frame_number(similarities, best_match_idx)
+        matched_frame_num = self.get_matched_frame_number(similarities, best_match_idx, frame_nums)
 
         recognized = False
         if best_similarity >= self.args.match_threshold:
@@ -102,16 +102,14 @@ class FaceRecognition:
 
         return best_match_db_idx, best_similarity
 
-    def get_matched_frame_number(self, similarities, best_match_idx):
-        """Get the frame number that had the highest similarity for the best match.
-        
-        Args:
-            similarities: Matrix of similarity scores
-            best_match_idx: Index of the best matching face in the database
-            
-        Returns:
-            Frame number with the highest similarity for the best match
+    def get_matched_frame_number(self, similarities, best_match_idx, frame_nums):
         """
-        frame_num_matched = np.argmax(similarities, axis=0)
-        return frame_num_matched[best_match_idx]
+        Get the frame number (from user-provided list) that had the highest similarity
+        to the best matched database entry.
+        """
+        max_sim_indices = np.argmax(similarities, axis=1)  # DB entry index per input emb
+        best_query_idx = np.argmax(np.max(similarities, axis=1))  # input embedding with best match
+
+        return frame_nums[best_query_idx]
+
 
