@@ -11,7 +11,8 @@ face_engine_multi = HBFace(
     multi_camera=True,
     show=True,  # Disable display, just process and save
     match_threshold=0.3,
-    db_path='data/embeddings/ilhan.pkl',
+    partial_match_threshold=0.15,  # Threshold for partial matches
+    db_path='data/embeddings/hb-kor-camera.pkl',
     production=False,
 )
 

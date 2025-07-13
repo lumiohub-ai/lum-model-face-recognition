@@ -133,7 +133,7 @@ class HBFace:
         # Log recognized persons
         for name, (_, appear_time, recognized, cropped_face) in persons_recognized.items():
             status = engine.args.cam_type
-            if recognized:
+            if recognized == 'recognized':
                 self.entry_logger.log_person_entry(name, status, appear_time)
             else:
                 # Log unrecognized faces
@@ -226,7 +226,7 @@ class HBFace:
             # Log any final recognized persons
             for name, (_, appear_time, recognized, cropped_face) in persons_recognized.items():
                 status = engine.args.cam_type
-                if recognized:
+                if recognized == 'recognized':
                     self.entry_logger.log_person_entry(name, status, appear_time)
                 else:
                     # Log unrecognized faces

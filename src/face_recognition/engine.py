@@ -288,7 +288,9 @@ class FaceEngine:
             frame_nums = list(track_id_embeddings.keys())
             emb_array = np.array(list(track_id_embeddings.values()))
             recognition_info = self.face_recognition.recognize_face(emb_array, frame_nums)
-
+            if recognition_info['recognized'] == 'unrecognized':
+                self._delete_cache(track_id)
+                continue
 
             name = recognition_info['name']
             sim = recognition_info['similarity']
@@ -300,6 +302,7 @@ class FaceEngine:
             except Exception as e:
                 pass
 
+            matched_frame = recognition_info.get('matched_frame_num')
             cropped_face = self.track_crop_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None)
 
 

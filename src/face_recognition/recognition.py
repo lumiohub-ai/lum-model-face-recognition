@@ -60,9 +60,11 @@ class FaceRecognition:
         matched_name = self.db_names[best_match_idx].split('_')[0]
         matched_frame_num = self.get_matched_frame_number(similarities, best_match_idx, frame_nums)
 
-        recognized = False
+        recognized = 'unrecognized'
         if best_similarity >= self.args.match_threshold:
-            recognized = True
+            recognized = 'recognized'
+        elif best_similarity >= self.args.partial_match_threshold:
+            recognized = 'partial_match'
 
         recognition_info = {
             'name': matched_name,

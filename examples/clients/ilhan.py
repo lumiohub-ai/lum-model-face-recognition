@@ -21,6 +21,7 @@ face_engine_multi = HBFace(
     production=True,
     record_always=False,
     match_threshold=0.5,
+    partial_match_threshold=0.15,  # Threshold for partial matches
     save_video=False,
     debug=True)
 

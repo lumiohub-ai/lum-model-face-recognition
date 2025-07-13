@@ -5,8 +5,9 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 # RTSP streams for IN and OUT cameras
-out_camera = os.getenv("HB_IN")
-in_camera = os.getenv("HB_OUT")
+
+in_camera = os.getenv("HB_IN")
+out_camera = os.getenv("HB_OUT")
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
@@ -17,8 +18,8 @@ face_engine_multi = HBFace(
     multi_camera=True,
     show=False,  # Disable display, just process and save
     match_threshold=0.3,
-    log_file='data/logs/korea.log',
-    db_path='data/embeddings/hb-kor-latest.pkl',
+    partial_match_threshold=0.17,  # Threshold for partial matches
+    db_path='data/embeddings/hb_korea.pkl',
     production=False,
     debug=True,
 )
