@@ -9,6 +9,10 @@ load_dotenv(override=True)
 in_camera = os.getenv("HB_IN")
 out_camera = os.getenv("HB_OUT")
 
+username = os.getenv("EXPERIMENT_USERNAME", "experiment")
+password = os.getenv("EXPERIMENT_PASSWORD", "Frecog2025@")
+client_slug = os.getenv("EXPERIMENT_CLIENTSLUG", "frecognition")
+
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
     cam_types=["IN", "OUT"],
@@ -20,8 +24,14 @@ face_engine_multi = HBFace(
     match_threshold=0.3,
     partial_match_threshold=0.17,  # Threshold for partial matches
     db_path='data/embeddings/hb_korea.pkl',
-    production=False,
+    production=True,
     debug=True,
+    record_always=False,
+    save_video=False,
+    username=username,
+    password=password,
+    client_slug=client_slug,
+    save_recognized_frame=True
 )
 
 # Run the face recognition system

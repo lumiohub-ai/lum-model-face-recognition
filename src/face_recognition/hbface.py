@@ -195,7 +195,7 @@ class HBFace:
         Returns:
             True if current time is within recording intervals, False otherwise
         """
-        tz = pytz.timezone('Asia/Seoul')  # Use 'Asia/Seoul' for Korea timezone
+        tz = pytz.timezone('UTC')  # Use 'Asia/Seoul' for Korea timezone
         current_time = datetime.datetime.now(tz)
         start_morning = current_time.replace(hour=7, minute=0, second=0, microsecond=0)
         end_morning = current_time.replace(hour=9, minute=0, second=0, microsecond=0)

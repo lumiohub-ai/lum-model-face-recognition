@@ -22,7 +22,7 @@ roi: null  # Enable region of interest (ROI) mode
 line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
 
 # Other settings
-timezone: "Asia/Seoul"  # Timezone for tracking times
+timezone: "UTC"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
 log_file: "data/logs/debug.log"  # Path to save the debug log file  
 

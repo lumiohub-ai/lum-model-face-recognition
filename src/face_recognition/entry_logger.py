@@ -10,7 +10,6 @@ import requests
 from typing import Optional, Dict ,List, Any
 from datetime import datetime
 
-clientSlug = 'humblebee'
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
     
@@ -33,10 +32,11 @@ class EntryLogger:
         self.recent_entries = deque(maxlen=max_entries)
         self.saving_status_info = []
         self.base_url = args.api_host + 'api'
-        self.client_slug = None
         self.session = requests.Session()
-
-        self.token = self.login('humblebee', 'Hbvision2025@', 'humblebee')
+        self.client_slug = args.client_slug
+        self.username = args.username
+        self.password = args.password
+        self.token = self.login()
         self.current_users = args.db_names
 
         self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
@@ -92,7 +92,7 @@ class EntryLogger:
             self.args.logger.critical(f"Error fetching users: {response.status_code} - {response.text}")
             raise Exception(f"Error fetching users: {response.status_code} - {response.text}")
    
-    def login(self, username: str, password: str, client_slug: str) -> Dict[str, Any]:
+    def login(self) -> Dict[str, Any]:
         """
         Authenticate user and obtain access token
         
@@ -108,9 +108,9 @@ class EntryLogger:
             requests.exceptions.RequestException: If login fails
         """
         login_data = {
-            "username": username,
-            "password": password,
-            "client_slug": client_slug
+            "username": self.username,
+            "password": self.password,
+            "client_slug": self.client_slug
         }
         
         try:
@@ -125,7 +125,6 @@ class EntryLogger:
             
             if data.get('success'):
                 token = data.get('token')
-                self.client_slug = client_slug
                 # Set authorization header for future requests
                 self.session.headers.update({
                     'Authorization': f'Bearer {token}'
@@ -148,13 +147,8 @@ class EntryLogger:
 
         if user_id is None:
             self.args.logger.warning(f'User with ID {user_id} not found in the database')
-            return
-        
-        payload = {
-            "user_id": user_id,
-            "detection_type": status.lower()
-        }
-        
+            return       
+
         response = self.create_record(user_id, status)
         data = response.json()
         if response.status_code == 201:
@@ -166,25 +160,25 @@ class EntryLogger:
         """Send unrecognized face image to the API.
         Args:
             face: Detected face image (numpy array)
-            status: Status of the user ('in' or 'out')
+            status: Status of the user ('IN' or 'OUT')
         Raises:
-            ValueError: If the status is not 'in' or 'out'
+            ValueError: If the status is not 'IN' or 'OUT'
             requests.exceptions.RequestException: If the request to the API fails
         """
          # Check if user is authenticated
          # If not, raise an error
         if not self.token:
             raise ValueError("Not authenticated. Please login first.")
-        status = status.lower()
-        if status not in ['in', 'out']:
-            raise ValueError("Status must be either 'in' or 'out'")
+        status = status.upper()
+        if status not in ['IN', 'OUT']:
+            raise ValueError("Status must be either 'IN' or 'OUT'")
         
         url = self.base_url + f'/{self.client_slug}/unrecognized'
         headers = {
             'Authorization': f'Bearer {self.token}'
         }
 
-        data ={'user_status': status}
+        data ={'user_status': status.lower()}
 
         if face is None or face.size == 0:
             self.args.logger.warning("No face detected to send")
@@ -223,14 +217,14 @@ class EntryLogger:
             status: Entry/exit status (IN/OUT)
             appear_time: Time when the person appeared
         """
+        
         previous_status = self.person_status.get(name)
-
         # If status is the same as before, do nothing
-        if previous_status == status:
+        if previous_status == status.upper():
             return
 
         # Update the cached status
-        self.person_status[name] = status
+        self.person_status[name] = status.upper()
 
         # Format the appearance time
         today_date = appear_time.strftime("%Y-%m-%d")
@@ -266,7 +260,7 @@ class EntryLogger:
         
         Args:
             user_id (int): ID of the user to create record for
-            status (str): Either 'in' or 'out'
+            status (str): Either 'IN' or 'OUT'
             
         Returns:
             dict: Record creation response data
@@ -276,13 +270,13 @@ class EntryLogger:
         """
         if not self.token:
             raise ValueError("Not authenticated. Please login first.")
-        status = status.lower()
-        if status not in ['in', 'out']:
-            raise ValueError("Status must be either 'in' or 'out'")
+        status = status.upper()
+        if status not in ['IN', 'OUT']:
+            raise ValueError("Status must be either 'IN' or 'OUT'")
         
         record_data = {
             "user_id": user_id,
-            "status": status
+            "status": status.lower()  # Use lowercase for consistency
         }
         
         try:
@@ -382,9 +376,9 @@ class EntryLogger:
 
     def get_last_status(self):
         """Get the last status of each user from the history records.
-        This method fetches all history records, filters out deleted users,
+        This method fetches all history records, filters OUT deleted users,
         and updates the person_status dictionary with the latest status for each user.
-        Users with no records will be marked as 'out'.
+        Users with no records will be marked as 'OUT'.
         """
 
         new_users, deleted_users, name_to_id = self.get_all_users()
@@ -414,14 +408,19 @@ class EntryLogger:
         person_status = {}  # Reset
         for user_data in user_last_status.values():
             name = user_data["name"]
-            status = user_data["status"]
+            if user_data["status"].upper() not in ["IN", "OUT"]:
+                self.args.logger.warning(f"Invalid status '{user_data['status']}' for user '{name}'")
+                status = "OUT"  # Default to 'OUT' for invalid statuses
+            else:
+                status = user_data["status"].upper()
+            
             person_status[name] = status
 
-        # Fill in 'out' for users with no record
+        # Fill in 'OUT' for users with no record
         for entry in name_to_id:
             name = entry["name"]
             if name not in person_status:
-                person_status[name] = "out"
+                person_status[name] = "OUT"
 
         return person_status
 
