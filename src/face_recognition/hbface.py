@@ -131,13 +131,15 @@ class HBFace:
         persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
             
         # Log recognized persons
-        for name, (_, appear_time, recognized, cropped_face) in persons_recognized.items():
+        for name, (_, appear_time, recognized, image) in persons_recognized.items():
             status = engine.args.cam_type
             if recognized == 'recognized':
-                self.entry_logger.log_person_entry(name, status, appear_time)
+                recorded = self.entry_logger.log_person_entry(name, status, appear_time)
+                if engine.args.save_recognized_frame and recorded:
+                    self.save_recognized_frame(name, image, status)
             else:
                 # Log unrecognized faces
-                self.entry_logger.send_unrecognized_face(face = cropped_face, status=status)
+                self.entry_logger.send_unrecognized_face(face = image, status=status)
 
         # Draw counting line if configured
         if engine.args.line_points:
@@ -224,14 +226,42 @@ class HBFace:
         for engine in self.engines:
             persons_recognized = engine.recognize_removed_tracks([], last_frame=True)
             # Log any final recognized persons
-            for name, (_, appear_time, recognized, cropped_face) in persons_recognized.items():
+            for name, (_, appear_time, recognized, image) in persons_recognized.items():
                 status = engine.args.cam_type
                 if recognized == 'recognized':
-                    self.entry_logger.log_person_entry(name, status, appear_time)
+                    recorded = self.entry_logger.log_person_entry(name, status, appear_time)
+                    if self.engines[0].args.save_recognized_frame and recorded:
+                        self.save_recognized_frame(name, image, status)
                 else:
                     # Log unrecognized faces
-                    self.entry_logger.send_unrecognized_face(face = cropped_face, status=status)
+                    self.entry_logger.send_unrecognized_face(face = image, status=status)
 
+    def save_recognized_frame(self, name: str, image: NDArray, status: str) -> None:
+        """Save recognized frame to the specified directory.
+        
+        Args:
+            name: Name of the recognized person
+            image: Image of the recognized face
+            status: Status of the recognition (e.g., "entry", "exit")
+        """
+        # Use absolute path or ensure we're in the right working directory
+        recognized_dir = os.path.join("data", "recognized_frames")
+        if not os.path.exists(recognized_dir):
+            os.makedirs(recognized_dir)
+        
+        # Create status subdirectory if it doesn't exist
+        status_dir = os.path.join(recognized_dir, status)
+        if not os.path.exists(status_dir):
+            os.makedirs(status_dir)
+        
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{name}_{timestamp}.jpg"
+        save_path = os.path.join(status_dir, filename)
+        
+        # Add error handling for cv2.imwrite
+        cv2.imwrite(save_path, image)
+        
+        
     def _cleanup(self) -> None:
         """Cleanup resources and finalize the face recognition system."""
         # Release resources and perform final recognition on remaining tracks

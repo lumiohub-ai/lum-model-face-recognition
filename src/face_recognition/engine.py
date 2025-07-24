@@ -61,6 +61,7 @@ class FaceEngine:
         self.track_boxes_frame: Dict[int, Dict[int, List[float]]] = {}
         self.track_road_history: Dict[int, List[Tuple[int, int]]] = {}
         self.track_crop_history = {}
+        self.track_frame_history = {}
        
 
         self.all_tracks: Set[int] = set()
@@ -254,6 +255,7 @@ class FaceEngine:
                   x1, y1, x2, y2, track.conf, 0
                 ]
                 self.track_crop_history.setdefault(track_id, {})[frame_num] = face_crop
+                self.track_frame_history.setdefault(track_id, {})[frame_num] = frame
                 
             else:
                 continue 
@@ -302,15 +304,13 @@ class FaceEngine:
             # except Exception as e:
             #     pass
 
-            cropped_face = self.track_crop_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None)
-
-
-            persons_logged[name] = [track_id, self.id_appear_time[track_id], recognition_info['recognized'], cropped_face]
             # if recognition_info['recognized'] == 'recognized' save frame to recognized folder image name is timestemp_name.jpg
             if recognition_info['recognized'] == 'recognized':
-               #image = recognized frame
-               image = self.track_crop_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None) 
+                image = self.track_frame_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None)
+            else:
+                image = self.track_crop_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None)
 
+            persons_logged[name] = [track_id, self.id_appear_time[track_id], recognition_info['recognized'], image]
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
@@ -331,6 +331,7 @@ class FaceEngine:
                     self.track_crop_history,
                     self.track_road_history,
                     self.id_appear_time,
+                    self.track_frame_history
                 ]:
                     del d[track_id]
         except KeyError:

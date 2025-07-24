@@ -199,10 +199,6 @@ class EntryLogger:
             response = requests.post(url, headers=headers, files=files, data=data)
 
             response.raise_for_status()
-            if response.status_code == 201:
-                self.args.logger.info("Unrecognized face sent successfully")
-            else:
-                self.args.logger.warning(f"Failed to send unrecognized face: {response.text}")
             
             return response 
             
@@ -216,13 +212,16 @@ class EntryLogger:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
             appear_time: Time when the person appeared
+        Returns:
+            bool: True if the status was recorded, False if new status is the same as previous status
         """
         
         previous_status = self.person_status.get(name)
+        recorded = False
         # If status is the same as before, do nothing
         if previous_status == status.upper():
-            return
-
+            return recorded
+        recorded = True
         # Update the cached status
         self.person_status[name] = status.upper()
 
@@ -253,6 +252,7 @@ class EntryLogger:
         })
 
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
+        return recorded
 
     def create_record(self, user_id: int, status: str) -> Dict[str, Any]:
         """
