@@ -7,9 +7,9 @@ load_dotenv(override=True)
 in_camera = os.getenv("NAMANGAN_IN")
 out_camera = os.getenv("NAMANGAN_OUT")
 
-username = os.getenv("NAMANGAN_CLIENTSLUG", "experiment")
-password = os.getenv("NAMANGAN_PASSWORD", "Frecog2025@")
-client_slug = os.getenv("NAMANGAN_CLIENTSLUG", "frecognition")
+username = os.getenv("NAMANGAN_CLIENTSLUG")
+password = os.getenv("NAMANGAN_PASSWORD")
+client_slug = os.getenv("NAMANGAN_CLIENTSLUG")
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
@@ -21,7 +21,7 @@ face_engine_multi = HBFace(
     show=False,  # Disable display, just process and save
     match_threshold=0.3,
     partial_match_threshold=0.17,  # Threshold for partial matches
-    db_path='data/embeddings/hb_korea.pkl',
+    db_path='data/embeddings/namangan.pkl',
     production=True,
     debug=True,
     record_always=False,
