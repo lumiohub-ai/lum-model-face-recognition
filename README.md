@@ -21,6 +21,7 @@
 - [📊 Eval Metrics](docs/evalmetrics.md)
 - [🖥️ NVIDIA Jetson Nano setup](docs/jetson_nano.md)
 - [📚 Documentation](#-documentation)
+- [Video Recording using ffmpeg](#video-recording-using-ffmpeg)
 - [📑 Research References](#--research-references)
 
 
@@ -282,12 +283,55 @@ Please refer to [this page](docs/jetson_nano).
 
 ---
 
+
+
 ## 📚 Documentation
 
 - [Description](https://docs.google.com/document/d/1DaPsSgqk6UXJVogyn9UbPGN5JYFbu2do8p9r11yKAKA)
 - [Methodology and Evaluation](https://docs.google.com/document/d/1SsCB4fBA2nK6PQISYrcaki0moe4ID7Mwm4J2cF_g9i0)
 
 --- 
+
+## Video recording using ffmpeg
+### Simple video recording 
+```bash 
+ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -c copy output.mp4
+```
+
+### Scheduled Video Recording
+
+You can schedule video recording from an RTSP camera using `ffmpeg` together with the `at` command.
+
+#### When the camera **has audio**
+
+```bash
+echo 'ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -t 3000 -an -c:v copy output.mp4' | at 17:45
+```
+#### When the camera does not have audio
+```bash
+echo 'ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -t 3000 -c copy output.mp4' | at 17:45
+```
+
+rtsp://<camera-link> → Replace with your camera’s RTSP stream URL.
+
+-t 3000 → Duration of recording in seconds (adjust as needed).
+
+-an → Disable audio (useful when you only want video).
+
+-c:v copy / -c copy → Copy streams without re-encoding for efficiency.
+
+at 17:45 → Time to schedule the recording (24-hour format).
+
+#### Check scheduled jobs
+```bash
+atq
+```
+#### Remove a scheduled job
+```bash
+atrm <job-number>
+```
+
+
 
 ## 📑  Research References
 

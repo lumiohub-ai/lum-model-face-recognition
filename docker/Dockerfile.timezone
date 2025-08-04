@@ -3,7 +3,7 @@ FROM face-recognition:latest
 
 # Set timezone configuration environment
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=Asia/Seoul
+ENV TZ=UTC
 
 # Install utilities and configure tzdata without prompts
 RUN apt-get update && \
