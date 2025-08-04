@@ -36,14 +36,15 @@ class FaceSetup:
         self.visualize = Visualization()
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.config_path = config_path
+        self.client_slug = kwargs.get('client_slug', 'default_client')
         
         # Configure logger
         self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True))
         
         # Setup camera streams
-        args = self.setup_cameras(cam_types, video_path, **kwargs)
+        self.args = self.setup_cameras(cam_types, video_path, **kwargs)
 
-        self.entry_logger = EntryLogger(args=args)
+        self.entry_logger = EntryLogger(args=self.args)
     
     def setup_cameras(self, cam_types: Optional[List[str]], video_paths: Optional[Union[str, List[str]]], **kwargs) -> None:
         """Set up camera streams based on configuration.
@@ -150,9 +151,11 @@ class FaceSetup:
             width, height = roi[2] - roi[0], roi[3] - roi[1]
 
         if args.save_video:
-            os.makedirs("data/saved_videos", exist_ok=True)
+            client_slug = self.client_slug
+            os.makedirs(f"data/saved_videos/{client_slug}", exist_ok=True)
+
             camera_id = f"{cam_type}_{index if index is not None else ''}"
-            video_filename = f"data/saved_videos/{camera_id}_{timestamp}.avi"
+            video_filename = f"data/saved_videos/{client_slug}/{camera_id}_{timestamp}.avi"
             writer = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'XVID'), 20, (width, height))
             self.video_writers.append(writer)
         else:

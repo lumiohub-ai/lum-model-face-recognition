@@ -245,7 +245,7 @@ class HBFace:
             status: Status of the recognition (e.g., "entry", "exit")
         """
         # Use absolute path or ensure we're in the right working directory
-        recognized_dir = os.path.join("data", "recognized_frames")
+        recognized_dir = os.path.join("data", f"recognized_frames/{self.config.client_slug}")
         if not os.path.exists(recognized_dir):
             os.makedirs(recognized_dir)
         
