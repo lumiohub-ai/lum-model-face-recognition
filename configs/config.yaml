@@ -10,7 +10,7 @@ match_threshold: 0.5  # Threshold for face similarity matching
 partial_match_threshold: 0.15  # Threshold for partial face matches
 # Other settings
 show: True  # Show the output video with annotations
-save_video: False  # Save the output video with annotations
+save_video: True  # Save the output video with annotations
 record_always: True  # Always record the video
 
 # Evaluation settings
@@ -27,8 +27,8 @@ debug: True  # Enable debug mode for detailed logging
 log_file: "data/logs/debug.log"  # Path to save the debug log file  
 
 # Production settings
-multi_camera: False  # Enable multi-camera mode
-production: False # Enable production mode for optimized performance
+multi_camera: True  # Enable multi-camera mode
+production: True # Enable production mode for optimized performance
 # If production is True, it will send data to the server
 
 api_host: "https://smart-office-api.humblebee.ai/"
