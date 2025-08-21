@@ -53,3 +53,4 @@ dist/
 *.txt
 
 .env
+compose.override.yml

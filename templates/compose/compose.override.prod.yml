@@ -1,0 +1,12 @@
+services:
+  face-recognition:
+    image: face-recognition:latest
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    volumes:
+      - ./volumes/storage/face-recognition/data:/app/data
+      - ./volumes/storage/face-recognition/logs:/app/logs
