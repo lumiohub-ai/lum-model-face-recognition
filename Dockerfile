@@ -22,8 +22,6 @@ WORKDIR "/usr/src/${FR_SLUG}"
 
 RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=private \
 	--mount=type=cache,target=/root/.cache,sharing=locked \
-	_BUILD_TARGET_ARCH=$(uname -m) && \
-	echo "BUILDING TARGET ARCHITECTURE: ${_BUILD_TARGET_ARCH}" && \
 	rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* && \
 	apt-get clean -y && \
 	# echo "Acquire::http::Pipeline-Depth 0;" >> /etc/apt/apt.conf.d/99fixbadproxy && \
@@ -41,19 +39,8 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=private \
     add-apt-repository ppa:ubuntu-toolchain-r/test && \
     apt-get update --fix-missing -o Acquire::CompressionTypes::Order::=gz && \
 	_MINICONDA_VERSION=py310_25.1.1-2 && \
-	if [ "${_BUILD_TARGET_ARCH}" == "x86_64" ]; then \
-		_MINICONDA_FILENAME=Miniconda3-${_MINICONDA_VERSION}-Linux-x86_64.sh && \
-		export _MINICONDA_URL=https://repo.anaconda.com/miniconda/${_MINICONDA_FILENAME}; \
-	elif [ "${_BUILD_TARGET_ARCH}" == "aarch64" ]; then \
-		_MINICONDA_FILENAME=Miniconda3-${_MINICONDA_VERSION}-Linux-aarch64.sh && \
-		export _MINICONDA_URL=https://repo.anaconda.com/miniconda/${_MINICONDA_FILENAME}; \
-		# _MINIFORGE_VERSION=24.11.3-0 && \
-		# _MINICONDA_FILENAME=Miniforge3-${_MINIFORGE_VERSION}-Linux-aarch64.sh && \
-		# export _MINICONDA_URL=https://github.com/conda-forge/miniforge/releases/download/${_MINIFORGE_VERSION}/${_MINICONDA_FILENAME}; \
-	else \
-		echo "Unsupported platform: ${_BUILD_TARGET_ARCH}" && \
-		exit 1; \
-	fi && \
+	_MINICONDA_FILENAME=Miniconda3-${_MINICONDA_VERSION}-Linux-x86_64.sh && \
+	export _MINICONDA_URL=https://repo.anaconda.com/miniconda/${_MINICONDA_FILENAME}; \
 	if [ ! -f "/root/.cache/${_MINICONDA_FILENAME}" ]; then \
 		wget -nv --show-progress --progress=bar:force:noscroll "${_MINICONDA_URL}" -O "/root/.cache/${_MINICONDA_FILENAME}"; \
 	fi && \
@@ -62,19 +49,15 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=private \
 	/opt/conda/condabin/conda install -y python=${PYTHON_VERSION} pip && \
 	/opt/conda/bin/pip install --timeout 60 -U pip
 
-# COPY ./requirements* ./
+COPY setup.py setup.cfg pyproject.toml requirements.txt ./
+COPY src ./src
+COPY modules ./modules
+
 RUN	--mount=type=cache,target=/root/.cache,sharing=locked \
-	--mount=type=bind,source=requirements.txt,target=requirements.txt \
-	# _BUILD_TARGET_ARCH=$(uname -m) && \
-	# if [ "${_BUILD_TARGET_ARCH}" == "x86_64" ] && [ "${USE_GPU}" == "false" ]; then \
-	# 	export _REQUIRE_FILE_PATH=./requirements/requirements.amd64.txt; \
-	# elif [ "${_BUILD_TARGET_ARCH}" == "x86_64" ] && [ "${USE_GPU}" == "true" ]; then \
-	# 	export _REQUIRE_FILE_PATH=./requirements/requirements.gpu.txt; \
-	# elif [ "${_BUILD_TARGET_ARCH}" == "aarch64" ]; then \
-	# 	export _REQUIRE_FILE_PATH=./requirements/requirements.arm64.txt; \
-	# fi && \
-	# /opt/conda/bin/pip install --timeout 60 -r "${_REQUIRE_FILE_PATH}" && \
-	/opt/conda/bin/pip install --timeout 60 -r ./requirements.txt
+	/opt/conda/bin/pip install --timeout 60 ./modules/insightface && \
+	/opt/conda/bin/pip install --timeout 60 ./modules/yolo_tracking && \
+	/opt/conda/bin/pip install --timeout 60 . && \
+	/opt/conda/bin/pip install --timeout 120 -r ./requirements.txt
 
 
 ## Here is the base image:
@@ -130,7 +113,9 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 		iputils-ping \
 		iproute2 \
 		curl \
-		nano && \
+		nano \
+		libgl1-mesa-glx \
+		libglib2.0-0 && \
 	apt-get clean -y && \
 	sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
 	sed -i -e 's/# en_AU.UTF-8 UTF-8/en_AU.UTF-8 UTF-8/' /etc/locale.gen && \
