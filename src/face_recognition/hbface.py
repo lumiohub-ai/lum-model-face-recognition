@@ -45,6 +45,8 @@ class HBFace:
         self.visualize = self.config.visualize
         self.entry_logger = self.config.entry_logger
         self.video_writers = self.config.video_writers
+        self.FR_SLUG = os.getenv("FR_SLUG")
+        self.client_slug = self.entry_logger.client_slug
         
         # Get timezone from config, default to UTC if not specified
         self.timezone = getattr(self.config, 'timezone', 'UTC')
@@ -122,6 +124,11 @@ class HBFace:
 
         # Track faces in the current frame
         active_tracks, removed_tracks = engine.track(frame_cropped)
+        
+        # Prune tracks that have been active for too long and add them to the removed list
+        expired_tracks = engine.prune_long_lived_tracks()
+        removed_tracks.extend(expired_tracks)
+
         frame_annotated = engine.visualize_tracks(frame_cropped)
 
         if active_tracks:
@@ -245,7 +252,7 @@ class HBFace:
             status: Status of the recognition (e.g., "entry", "exit")
         """
         # Use absolute path or ensure we're in the right working directory
-        recognized_dir = os.path.join("data", f"recognized_frames/{self.config.client_slug}")
+        recognized_dir = os.path.join(f"volumes/storage/{self.FR_SLUG}/data/{self.client_slug}", f"recognized_frames/")
         if not os.path.exists(recognized_dir):
             os.makedirs(recognized_dir)
         

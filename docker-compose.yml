@@ -2,10 +2,17 @@ services:
   face-recognition:
     image: face-recognition:latest
     volumes:
+      - ./data:/app/face-recognition/data
       - ./volumes/storage/face-recognition/data:/app/data
       - ./volumes/storage/face-recognition/logs:/app/logs
+      - ./configs:/app/face-recognition/configs
+      - ./examples:/app/face-recognition/examples
+      - ./volumes/storage/face-recognition/data:/app/data
+      - ./volumes/storage/face-recognition/logs:/app/logs
+    working_dir: /app/face-recognition
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONPATH=/app/face-recognition
     ports:
       - ${FR_PORT:-5000}:${FR_PORT:-5000}
     env_file:

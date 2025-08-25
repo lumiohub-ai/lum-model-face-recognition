@@ -25,19 +25,41 @@ class EntryLogger:
             args: Configuration arguments
             max_entries: Maximum number of recent entries to display on screen
         """
+        self.FR_SLUG = os.getenv("FR_SLUG")
         self.args = args
-
         self.headers = {"Content-Type": "application/json"}
-
         self.recent_entries = deque(maxlen=max_entries)
-        self.saving_status_info = []
+        self.client_slug = args.client_slug        
+        # Configure a dedicated, rotating sink for the CSV status log
+        self.log_file_path = f'volumes/storage/{self.FR_SLUG}/logs/{self.client_slug}/status_info.csv'
+        os.makedirs('logs', exist_ok=True)
+        
+        # Filter to ensure only CSV-intended messages go to this file
+        csv_filter = lambda record: record["extra"].get("is_csv", False)
+        
+        # Use the rotation period from config, with a fallback default
+        rotation_period = getattr(self.args, 'csv_log_rotation', '2 weeks')
+        
+        self.args.logger.add(
+            self.log_file_path,
+            rotation=rotation_period,
+            format="{message}",
+            level="INFO",
+            filter=csv_filter,
+            encoding="utf-8"
+        )
+
+        # Write header if the file is new or empty
+        if not os.path.exists(self.log_file_path) or os.path.getsize(self.log_file_path) == 0:
+            self.args.logger.bind(is_csv=True).info("name,status,time,date")
+
         self.base_url = args.api_host + 'api'
         self.session = requests.Session()
-        self.client_slug = args.client_slug
         self.username = args.username
         self.password = args.password
         self.token = self.login()
         self.current_users = args.db_names
+        self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120) # Default to 120 seconds
 
         self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
         self.person_status = self.get_last_status()
@@ -244,12 +266,10 @@ class EntryLogger:
         else:
             print(f"{BOLD}{YELLOW}STATUS   | {name} {status.upper()} at {today_time}{RESET}")
 
-        self.saving_status_info.append({
-            'name': name,
-            'status': status,
-            'time': today_time,
-            'date': today_date,
-        })
+        # Log status change to CSV file using the dedicated sink
+        csv_message = f'{name},{status},{today_time},{today_date}'
+        self.args.logger.bind(is_csv=True).info(csv_message)
+
 
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
         return recorded
@@ -326,22 +346,15 @@ class EntryLogger:
             )
     
     def save_status_info(self, video_name='status_info'):
-        """Save status information to a CSV file.
+        """Returns the path to the status information log file.
         
         Args:
-            video_name: Base name for the output CSV file
+            video_name: Base name for the output CSV file (ignored, kept for compatibility)
             
         Returns:
             Text message indicating where the status information was saved
         """
-        os.makedirs('logs', exist_ok=True)
-
-        # Convert saving_status_info to DataFrame and save to CSV
-        df = pd.DataFrame(self.saving_status_info)
-        df.to_csv(f'logs/{video_name}.csv', index=False)
-
-        text = f"Status information saved to logs/{video_name}.csv"
-
+        text = f"Status information has been saved continuously to {self.log_file_path}"
         return text
    
     def fetch_all_history(self, page: int = 1, limit: int = 100) -> List[Dict[str, Any]]:

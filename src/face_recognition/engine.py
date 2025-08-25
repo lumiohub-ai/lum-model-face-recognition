@@ -1,5 +1,6 @@
 """Face recognition engine implementation."""
 
+from collections import deque
 import json
 import os
 import contextlib
@@ -28,7 +29,10 @@ class FaceEngine:
             args: Configuration arguments containing parameters for the face recognition system
         """
         self.args = args
+        self.client_slug = args.client_slug
+        self.FR_SLUG = os.getenv("FR_SLUG")
         self.timezone = pytz.timezone(args.timezone)
+        self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120) # Default to 120 seconds
         self.fs = gcsfs.GCSFileSystem(token=os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
         self._initialize_models()
         self._initialize_tracking()
@@ -36,7 +40,7 @@ class FaceEngine:
 
     def _setup_data_collection_folder(self) -> None:
         """Set up folder for storing collected face data and recognition results."""
-        self.data_collection_path = os.path.join(os.getcwd(), 'data/collection')
+        self.data_collection_path = os.path.join(os.getcwd(), f'volumes/storage/{self.FR_SLUG}/data/{self.client_slug}/collection')
         if not os.path.exists(self.data_collection_path):
             os.makedirs(self.data_collection_path)
 
@@ -66,7 +70,7 @@ class FaceEngine:
 
         self.all_tracks: Set[int] = set()
         self.id_appear_time: Dict[int, datetime] = {}
-        self.passed_tracks: List[int] = []
+        self.passed_tracks: deque = deque(maxlen=5000)
 
         self.mot_results: List[Dict[str, Any]] = []
 
@@ -317,6 +321,29 @@ class FaceEngine:
             self._delete_cache(track_id)
 
         return persons_logged
+
+    def prune_long_lived_tracks(self) -> List[int]:
+        """Identify and prune tracks that have exceeded their maximum lifetime.
+        
+        Returns:
+            A list of track IDs that were pruned.
+        """
+        now = datetime.now(self.timezone)
+        expired_track_ids = []
+        
+        # Identify expired tracks from the active list
+        for track in self.tracker.active_tracks:
+            if track.id in self.id_appear_time:
+                track_age = (now - self.id_appear_time[track.id]).total_seconds()
+                if track_age > self.max_track_lifetime_seconds:
+                    self.args.logger.debug(f"Track {track.id} has expired. Marking as removed.")
+                    expired_track_ids.append(track.id)
+
+        # Remove the expired tracks from the active list so they aren't processed further
+        if expired_track_ids:
+            self.tracker.active_tracks = [t for t in self.tracker.active_tracks if t.id not in expired_track_ids]
+
+        return expired_track_ids
     
     def _delete_cache(self, track_id) -> None:
         """Delete the cache of embeddings and boxes for a specific track ID.

@@ -114,6 +114,12 @@ source myenv/bin/activate
 
 2. For GPU support, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
 
+### Clone submodules
+
+```bash
+git submodule update --init --recursive
+```
+
 ### Building the Docker Image
 
 1. From the project root directory, build the Docker image:
