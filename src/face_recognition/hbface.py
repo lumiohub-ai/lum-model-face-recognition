@@ -87,6 +87,9 @@ class HBFace:
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
+        
+        except Exception as e:
+            logger.error(f"Error during processing: {e}")
 
         finally:
             self._cleanup()
