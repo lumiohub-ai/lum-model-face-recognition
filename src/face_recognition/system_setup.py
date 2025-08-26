@@ -43,6 +43,8 @@ class FaceSetup:
         
         # Setup camera streams
         self.args = self.setup_cameras(cam_types, video_path, **kwargs)
+        self.FR_SLUG = os.getenv("FR_SLUG")
+
 
         self.entry_logger = EntryLogger(args=self.args)
     
@@ -152,10 +154,11 @@ class FaceSetup:
 
         if args.save_video:
             client_slug = self.client_slug
-            os.makedirs(f"data/saved_videos/{client_slug}", exist_ok=True)
+            dir = f"volumes/storage/{self.FR_SLUG}/data/{self.client_slug}/saved_videos/"
+            os.makedirs(f"{dir}", exist_ok=True)
 
             camera_id = f"{cam_type}_{index if index is not None else ''}"
-            video_filename = f"data/saved_videos/{client_slug}/{camera_id}_{timestamp}.avi"
+            video_filename = f"{dir}/{camera_id}_{timestamp}.avi"
             writer = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'XVID'), 20, (width, height))
             self.video_writers.append(writer)
         else:

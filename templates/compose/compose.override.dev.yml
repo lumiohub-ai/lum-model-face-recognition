@@ -1,0 +1,11 @@
+
+services:
+  face-recognition:
+    image: face-recognition:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./src:/app/src
+      - ./examples:/app/examples
+    # command: ["/bin/bash"]

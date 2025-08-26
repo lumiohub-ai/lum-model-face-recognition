@@ -1,0 +1,9 @@
+services:
+  face-recognition:
+    image: face-recognition:latest
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

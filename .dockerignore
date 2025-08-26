@@ -52,6 +52,5 @@ data/**
 
 # Ignore documentation and test folders
 docs/**
-scripts/**
 tests/**
 notebooks/** 
