@@ -9,15 +9,15 @@ load_dotenv(override=True)
 in_camera = os.getenv("HB_IN")
 out_camera = os.getenv("HB_OUT")
 
-username = os.getenv("EXPERIMENT_USERNAME")
-password = os.getenv("EXPERIMENT_PASSWORD")
-client_slug = os.getenv("EXPERIMENT_CLIENTSLUG")
+username = os.getenv("HB_USERNAME")
+password = os.getenv("HB_PASSWORD")
+client_slug = os.getenv("HB_CLIENTSLUG")
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
     cam_types=["IN", "OUT"],
     video_path=[in_camera, out_camera],
-    # roi=[(858, 41, 1660, 903), (527, 62, 1316, 864)], 
+    # roi=[(858, 41, 1660, 903), (527, 62, 1316, 864)],
     # line_points=[[(724, 497), (1206, 830)], [(525, 1069), (1522, 1065)]],
     multi_camera=True,
     show=False,  # Disable display, just process and save
