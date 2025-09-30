@@ -311,3 +311,4 @@ logs/**
 models/**
 recorded_videos/**
 compose.override.yml
+volumes/**

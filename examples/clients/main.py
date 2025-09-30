@@ -9,9 +9,9 @@ load_dotenv(override=True)
 in_camera = os.getenv("HB_IN")
 out_camera = os.getenv("HB_OUT")
 
-username = os.getenv("HB_USERNAME")
-password = os.getenv("HB_PASSWORD")
-client_slug = os.getenv("HB_CLIENTSLUG")
+username = os.getenv("EXPERIMENT_USERNAME")
+password = os.getenv("EXPERIMENT_PASSWORD")
+client_slug = os.getenv("EXPERIMENT_CLIENTSLUG")
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(

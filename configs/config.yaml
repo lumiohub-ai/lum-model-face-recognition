@@ -15,7 +15,7 @@ record_always: True  # Always record the video
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
-txt_path: "results/results.txt"  # Path to save the recorded 
+txt_path: "results/results.txt"  # Path to save the recorded
 
 # ROI settings
 roi: null  # Enable region of interest (ROI) mode
@@ -24,7 +24,7 @@ line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
 # Other settings
 timezone: "UTC"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
-log_file: "data/logs/debug.log"  # Path to save the debug log file  
+log_file: "data/logs/debug.log"  # Path to save the debug log file
 
 # Production settings
 multi_camera: True  # Enable multi-camera mode
@@ -36,4 +36,4 @@ api_host: "https://smart-office-api.humblebee.ai/"
 # System settings
 max_track_lifetime_seconds: 120
 csv_log_rotation: "2 weeks"
-
+minimum_face_size: 150  # Minimum face size to consider for recognition

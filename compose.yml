@@ -1,19 +1,19 @@
 services:
   face-recognition:
-    image: humblebeeintel/face-recognition
+    image: face-recognition:latest
     build:
       context: .
       dockerfile: Dockerfile
     volumes:
       - ./data:/app/face-recognition/data
+      - ./volumes/storage/face-recognition/data:/app/data
+      - ./volumes/storage/face-recognition/logs:/app/logs
       - ./configs:/app/face-recognition/configs
       - ./examples:/app/face-recognition/examples
-      - ./volumes/storage/face-recognition/logs:/app/face-recognition/logs
     working_dir: /app/face-recognition
     environment:
-      - FR_SLUG=${FR_SLUG:-"face-recognition"}
       - NVIDIA_VISIBLE_DEVICES=all
-      - PYTHONPATH=/app/${FR_SLUG}
+      - PYTHONPATH=/app/face-recognition
     ports:
       - ${FR_PORT:-5000}:${FR_PORT:-5000}
     env_file:
