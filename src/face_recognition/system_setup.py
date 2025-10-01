@@ -17,11 +17,11 @@ from .entry_logger import EntryLogger
 
 class FaceSetup:
     """Handles system configuration and initialization for the face recognition system."""
-    
+
     def __init__(self, cam_types: Optional[List[str]] = None, video_path: Optional[Union[str, List[str]]] = None,
                  multi_camera: bool = True, config_path: str = "src/face_recognition/cfg/config.yaml", **kwargs) -> None:
         """Initialize the system configuration.
-        
+
         Args:
             cam_types: List of camera types (e.g., "entry", "exit")
             video_path: Path(s) to video file(s) or stream URL(s)
@@ -37,25 +37,25 @@ class FaceSetup:
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.config_path = config_path
         self.client_slug = kwargs.get('client_slug', 'default_client')
-        
+
         # Configure logger
         self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True))
-        
+
         # Setup camera streams
         self.args = self.setup_cameras(cam_types, video_path, **kwargs)
         self.FR_SLUG = os.getenv("FR_SLUG")
 
 
         self.entry_logger = EntryLogger(args=self.args)
-    
+
     def setup_cameras(self, cam_types: Optional[List[str]], video_paths: Optional[Union[str, List[str]]], **kwargs) -> None:
         """Set up camera streams based on configuration.
-        
+
         Args:
             cam_types: List of camera types
             video_paths: Path(s) to video file(s) or stream URL(s)
             **kwargs: Additional configuration parameters
-            
+
         Returns:
             Configuration arguments
         """
@@ -68,15 +68,15 @@ class FaceSetup:
 
     def _setup_multi_camera(self, cam_types: Optional[List[str]], video_paths: Optional[List[str]], **kwargs) -> None:
         """Configure multiple camera streams.
-        
+
         Args:
             cam_types: List of camera types
             video_paths: List of paths to video files or stream URLs
             **kwargs: Additional configuration parameters
-            
+
         Returns:
             Configuration arguments
-            
+
         Raises:
             ValueError: If cam_types is None or video_paths is not a list
         """
@@ -88,17 +88,17 @@ class FaceSetup:
         for i, (cam_type, vid_path) in enumerate(zip(cam_types, video_paths)):
             args = self._load_config(video_path=vid_path, cam_type=cam_type, **kwargs)
             self._initialize_camera(args, vid_path, cam_type, timestamp, i)
-        
+
         return args
 
     def _setup_single_camera(self, cam_type: Optional[str], video_path: Optional[str], **kwargs) -> None:
         """Configure a single camera stream.
-        
+
         Args:
             cam_type: Camera type
             video_path: Path to video file or stream URL
             **kwargs: Additional configuration parameters
-            
+
         Returns:
             Configuration arguments
         """
@@ -110,7 +110,7 @@ class FaceSetup:
 
     def _initialize_camera(self, args: Any, vid_path: str, cam_type: str, timestamp: str, index: Optional[int] = None) -> None:
         """Initialize a camera with configuration and prepare video writer if needed.
-        
+
         Args:
             args: Configuration arguments
             vid_path: Path to video file or stream URL
@@ -119,14 +119,14 @@ class FaceSetup:
             index: Camera index (for multi-camera setup)
         """
         args.cam_type = cam_type
-        
+
         # Handle ROI configuration
         if hasattr(args, 'roi') and args.roi is not None:
             if index is not None and isinstance(args.roi, (list, tuple)) and len(args.roi) > index:
                 args.roi = args.roi[index]
         else:
             args.roi = None
-        
+
         # Handle line points configuration
         if hasattr(args, 'line_points') and args.line_points is not None:
             if index is not None and isinstance(args.line_points, (list, tuple)) and len(args.line_points) > index:
@@ -154,7 +154,7 @@ class FaceSetup:
 
         if args.save_video:
             client_slug = self.client_slug
-            dir = f"volumes/storage/{self.FR_SLUG}/data/{self.client_slug}/saved_videos/"
+            dir = f"/app/volumes/storage/{self.FR_SLUG}/data/{self.client_slug}/saved_videos/"
             os.makedirs(f"{dir}", exist_ok=True)
 
             camera_id = f"{cam_type}_{index if index is not None else ''}"
@@ -168,13 +168,13 @@ class FaceSetup:
 
     def _load_config(self, **kwargs) -> Any:
         """Load configuration from YAML file and override with provided arguments.
-        
+
         Args:
             **kwargs: Configuration parameters to override
-            
+
         Returns:
             Configuration arguments object
-            
+
         Raises:
             Exception: If there's an error loading the configuration file
         """
@@ -192,29 +192,29 @@ class FaceSetup:
 
         # Set default values
         args.save_video = getattr(args, "save_video", True)
-        
+
         # Add logger to args
         args.logger = logger
-        
+
         return args
 
     def _show_config(self, args: Any) -> None:
         """Display the configuration settings.
-        
+
         Args:
             args: Configuration arguments to display
         """
         logger.info("\n=== Configuration Settings ===")
-        needed_keys = ['cam_type', 'video_path', 'match_threshold', 'db_path', 'roi', 'line_points', 'show', 
+        needed_keys = ['cam_type', 'video_path', 'match_threshold', 'db_path', 'roi', 'line_points', 'show',
                        'record_always', 'eval']
         for key, value in args.__dict__.items():
             if key in needed_keys:
                 logger.info(f"{key}: {value}")
         logger.info("===========================\n")
-    
+
     def _setup_logger(self, log_file: Optional[str] = None, debug: bool = False) -> None:
         """Setup the logger with different levels and formats.
-        
+
         Args:
             log_file: Path to log file (if None, logging to file is disabled)
             debug: Whether to enable debug logging
@@ -243,5 +243,20 @@ class FaceSetup:
                 filter=lambda record, lvl=level: record["level"].name == lvl
             )
 
-        if log_file:
-            logger.add(log_file, rotation="10 MB", level="DEBUG" if debug else "INFO")
+        # Always add file logging with rotation
+        FR_SLUG = os.getenv("FR_SLUG", "face-recognition")
+        client_slug = getattr(self.args, 'client_slug', 'default')
+        default_log_path = f'/app/volumes/storage/{FR_SLUG}/logs/{client_slug}/app.log'
+
+        # Create log directory if it doesn't exist
+        log_path = log_file if log_file else default_log_path
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+        logger.add(
+            log_path,
+            rotation="10 MB",
+            retention="2 weeks",
+            level="DEBUG" if debug else "INFO",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+            encoding="utf-8"
+        )

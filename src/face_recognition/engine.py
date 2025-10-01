@@ -40,7 +40,7 @@ class FaceEngine:
 
     def _setup_data_collection_folder(self) -> None:
         """Set up folder for storing collected face data and recognition results."""
-        self.data_collection_path = os.path.join(os.getcwd(), f'volumes/storage/{self.FR_SLUG}/data/{self.client_slug}/collection')
+        self.data_collection_path = os.path.join(os.getcwd(), f'/app/volumes/storage/{self.FR_SLUG}/data/{self.client_slug}/collection')
         if not os.path.exists(self.data_collection_path):
             os.makedirs(self.data_collection_path)
 

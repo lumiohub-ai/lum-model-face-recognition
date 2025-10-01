@@ -1,19 +1,24 @@
 services:
   face-recognition:
-    image: face-recognition:latest
+    image: humblebeeintel/face-recognition
     build:
       context: .
       dockerfile: Dockerfile
+    network_mode: host
     volumes:
       - ./data:/app/face-recognition/data
-      - ./volumes/storage/face-recognition/data:/app/data
-      - ./volumes/storage/face-recognition/logs:/app/logs
       - ./configs:/app/face-recognition/configs
       - ./examples:/app/face-recognition/examples
+      - ./volumes/storage/face-recognition/logs:/app/volumes/storage/face-recognition/logs
+      - ./volumes/storage/face-recognition/data:/app/volumes/storage/face-recognition/data
     working_dir: /app/face-recognition
     environment:
+      - FR_SLUG=${FR_SLUG:-"face-recognition"}
       - NVIDIA_VISIBLE_DEVICES=all
-      - PYTHONPATH=/app/face-recognition
+      - PYTHONPATH=/app/${FR_SLUG}
+      - HB_IN=${HB_IN:-"rtsp://username:password@camera_ip:554/stream"}
+      - HB_IN_MANAGEMENT=${HB_IN_MANAGEMENT:-"rtsp://username:password@camera_ip:554/stream"}
+      - HB_OUT=${HB_OUT:-"rtsp://username:password@camera_ip:554/stream"}
     ports:
       - ${FR_PORT:-5000}:${FR_PORT:-5000}
     env_file:

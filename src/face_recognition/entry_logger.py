@@ -12,15 +12,15 @@ from datetime import datetime
 
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
-    
+
     This class handles communication with the API to retrieve user information,
     tracks person status changes, and provides visualization for entry/exit events.
     """
-    def __init__(self, 
+    def __init__(self,
                 args,
                 max_entries=3):
         """Initialize the entry logger.
-        
+
         Args:
             args: Configuration arguments
             max_entries: Maximum number of recent entries to display on screen
@@ -29,17 +29,17 @@ class EntryLogger:
         self.args = args
         self.headers = {"Content-Type": "application/json"}
         self.recent_entries = deque(maxlen=max_entries)
-        self.client_slug = args.client_slug        
+        self.client_slug = args.client_slug
         # Configure a dedicated, rotating sink for the CSV status log
-        self.log_file_path = f'volumes/storage/{self.FR_SLUG}/logs/{self.client_slug}/status_info.csv'
+        self.log_file_path = f'/app/volumes/storage/{self.FR_SLUG}/logs/{self.client_slug}/status_info.csv'
         os.makedirs('logs', exist_ok=True)
-        
+
         # Filter to ensure only CSV-intended messages go to this file
         csv_filter = lambda record: record["extra"].get("is_csv", False)
-        
+
         # Use the rotation period from config, with a fallback default
         rotation_period = getattr(self.args, 'csv_log_rotation', '2 weeks')
-        
+
         self.args.logger.add(
             self.log_file_path,
             rotation=rotation_period,
@@ -64,10 +64,10 @@ class EntryLogger:
         self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
         self.person_status = self.get_last_status()
 
-        
+
     def get_all_users(self):
         """Retrieve all users from the API and determine new and deleted users.
-        
+
         Returns:
             Tuple containing lists of new users, deleted users, and name-to-ID mappings
         """
@@ -85,7 +85,7 @@ class EntryLogger:
 
         if response.status_code == 200:
             users = response.json()
-            
+
             user_dict = {user['username']: user['id'] for user in users}
             path_dict = {user['id']: user['image_path'] for user in users}
 
@@ -105,27 +105,27 @@ class EntryLogger:
                     deleted_users.append(user)
 
             return new_users, deleted_users, name_to_id
-        
+
         elif response.status_code == 404:
             self.args.logger.warning("No users found in the database")
             return [], [], []
-        
+
         else:
             self.args.logger.critical(f"Error fetching users: {response.status_code} - {response.text}")
             raise Exception(f"Error fetching users: {response.status_code} - {response.text}")
-   
+
     def login(self) -> Dict[str, Any]:
         """
         Authenticate user and obtain access token
-        
+
         Args:
             username (str): User's username
             password (str): User's password
             client_slug (str): Client slug for organization
-            
+
         Returns:
             token (str): Access token for authenticated requests
-            
+
         Raises:
             requests.exceptions.RequestException: If login fails
         """
@@ -134,7 +134,7 @@ class EntryLogger:
             "password": self.password,
             "client_slug": self.client_slug
         }
-        
+
         try:
             response = self.session.post(
                 f"{self.base_url}/auth/login",
@@ -142,9 +142,9 @@ class EntryLogger:
                 headers={"Content-Type": "application/json"}
             )
             response.raise_for_status()
-            
+
             data = response.json()
-            
+
             if data.get('success'):
                 token = data.get('token')
                 # Set authorization header for future requests
@@ -154,13 +154,13 @@ class EntryLogger:
                 return token
             else:
                 raise requests.exceptions.RequestException(f"Login failed: {data.get('error', 'Unknown error')}")
-                
+
         except requests.exceptions.RequestException as e:
             raise requests.exceptions.RequestException(f"Login request failed: {str(e)}")
-        
+
     def send_data_to_api(self, name, status):
         """Send person entry/exit data to the API.
-        
+
         Args:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
@@ -169,7 +169,7 @@ class EntryLogger:
 
         if user_id is None:
             self.args.logger.warning(f'User with ID {user_id} not found in the database')
-            return       
+            return
 
         response = self.create_record(user_id, status)
         data = response.json()
@@ -194,7 +194,7 @@ class EntryLogger:
         status = status.upper()
         if status not in ['IN', 'OUT']:
             raise ValueError("Status must be either 'IN' or 'OUT'")
-        
+
         url = self.base_url + f'/{self.client_slug}/unrecognized'
         headers = {
             'Authorization': f'Bearer {self.token}'
@@ -221,15 +221,15 @@ class EntryLogger:
             response = requests.post(url, headers=headers, files=files, data=data)
 
             response.raise_for_status()
-            
-            return response 
-            
+
+            return response
+
         except requests.exceptions.RequestException as e:
             raise requests.exceptions.RequestException(f"Send unrecognized face request failed: {str(e)}")
-        
+
     def log_person_entry(self, name, status, appear_time):
         """Log a person's entry or exit.
-        
+
         Args:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
@@ -237,7 +237,7 @@ class EntryLogger:
         Returns:
             bool: True if the status was recorded, False if new status is the same as previous status
         """
-        
+
         previous_status = self.person_status.get(name)
         recorded = False
         # If status is the same as before, do nothing
@@ -277,14 +277,14 @@ class EntryLogger:
     def create_record(self, user_id: int, status: str) -> Dict[str, Any]:
         """
         Create an attendance record
-        
+
         Args:
             user_id (int): ID of the user to create record for
             status (str): Either 'IN' or 'OUT'
-            
+
         Returns:
             dict: Record creation response data
-            
+
         Raises:
             requests.exceptions.RequestException: If record creation fails
         """
@@ -293,12 +293,12 @@ class EntryLogger:
         status = status.upper()
         if status not in ['IN', 'OUT']:
             raise ValueError("Status must be either 'IN' or 'OUT'")
-        
+
         record_data = {
             "user_id": user_id,
             "status": status.lower()  # Use lowercase for consistency
         }
-        
+
         try:
             response = self.session.post(
                 f"{self.base_url}/{self.client_slug}/history/create",
@@ -306,15 +306,15 @@ class EntryLogger:
                 headers={"Content-Type": "application/json"}
             )
             response.raise_for_status()
-            
-            return response 
-            
+
+            return response
+
         except requests.exceptions.RequestException as e:
             raise requests.exceptions.RequestException(f"Record creation request failed: {str(e)}")
 
     def visualize_entries(self, frame, max_text_width=0):
         """Visualize recent entries on the frame.
-        
+
         Args:
             frame: Frame to add visualization to
             max_text_width: Maximum width of the text display
@@ -344,19 +344,19 @@ class EntryLogger:
                 (0, 255, 0),
                 2,
             )
-    
+
     def save_status_info(self, video_name='status_info'):
         """Returns the path to the status information log file.
-        
+
         Args:
             video_name: Base name for the output CSV file (ignored, kept for compatibility)
-            
+
         Returns:
             Text message indicating where the status information was saved
         """
         text = f"Status information has been saved continuously to {self.log_file_path}"
         return text
-   
+
     def fetch_all_history(self, page: int = 1, limit: int = 100) -> List[Dict[str, Any]]:
         """Fetch all history records from the API.
         Args:
@@ -383,7 +383,7 @@ class EntryLogger:
             if page >= data.get("totalPages", 1):
                 break
             page += 1
-            
+
         self.args.logger.info(f"Fetched {len(all_records)} history records")
         return all_records
 
@@ -426,7 +426,7 @@ class EntryLogger:
                 status = "OUT"  # Default to 'OUT' for invalid statuses
             else:
                 status = user_data["status"].upper()
-            
+
             person_status[name] = status
 
         # Fill in 'OUT' for users with no record
@@ -439,7 +439,7 @@ class EntryLogger:
 
     def send_annotated_frame(self, frame, camera):
         """Send annotated frame to the API.
-        
+
         Args:
             frame: Annotated frame to send
             camera: IN/OUT camera
@@ -451,7 +451,7 @@ class EntryLogger:
         """
         if not self.token:
             raise ValueError("Not authenticated. Please login first.")
-        
+
         url = self.base_url + f'/{self.client_slug}/'
         headers = {
             'Authorization': f'Bearer {self.token}'
