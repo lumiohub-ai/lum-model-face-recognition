@@ -37,9 +37,10 @@ class FaceSetup:
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.config_path = config_path
         self.client_slug = kwargs.get('client_slug', 'default_client')
+        self.FR_SLUG = os.getenv("FR_SLUG", "face-recognition")
 
-        # Configure logger
-        self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True))
+        # Configure logger (pass client_slug directly)
+        self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True), self.client_slug)
 
         # Setup camera streams
         self.args = self.setup_cameras(cam_types, video_path, **kwargs)
@@ -212,12 +213,13 @@ class FaceSetup:
                 logger.info(f"{key}: {value}")
         logger.info("===========================\n")
 
-    def _setup_logger(self, log_file: Optional[str] = None, debug: bool = False) -> None:
+    def _setup_logger(self, log_file: Optional[str] = None, debug: bool = False, client_slug: str = 'default') -> None:
         """Setup the logger with different levels and formats.
 
         Args:
             log_file: Path to log file (if None, logging to file is disabled)
             debug: Whether to enable debug logging
+            client_slug: Client slug for organizing logs
         """
         logger.remove()  # Clear default handlers
 
@@ -245,7 +247,6 @@ class FaceSetup:
 
         # Always add file logging with rotation
         FR_SLUG = os.getenv("FR_SLUG", "face-recognition")
-        client_slug = getattr(self.args, 'client_slug', 'default')
         default_log_path = f'/app/volumes/storage/{FR_SLUG}/logs/{client_slug}/app.log'
 
         # Create log directory if it doesn't exist
