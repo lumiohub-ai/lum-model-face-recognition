@@ -256,27 +256,21 @@ class HBFace:
             image: Image of the recognized face
             status: Status of the recognition (e.g., "entry", "exit")
         """
-        try:
-            # Use absolute path that matches Docker volume mount
-            recognized_dir = os.path.join(f"/app/volumes/storage/{self.FR_SLUG}/data/{self.client_slug}", f"recognized_frames/")
-            if not os.path.exists(recognized_dir):
-                os.makedirs(recognized_dir)
+        # Use absolute path that matches Docker volume mount
+        recognized_dir = os.path.join(f"/app/volumes/storage/{self.FR_SLUG}/data/{self.client_slug}", f"recognized_frames/")
+        if not os.path.exists(recognized_dir):
+            os.makedirs(recognized_dir)
 
-            # Create status subdirectory if it doesn't exist
-            status_dir = os.path.join(recognized_dir, status)
-            if not os.path.exists(status_dir):
-                os.makedirs(status_dir)
+        # Create status subdirectory if it doesn't exist
+        status_dir = os.path.join(recognized_dir, status)
+        if not os.path.exists(status_dir):
+            os.makedirs(status_dir)
 
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{name}_{timestamp}.jpg"
-            save_path = os.path.join(status_dir, filename)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{name}_{timestamp}.jpg"
+        save_path = os.path.join(status_dir, filename)
 
-            # Check if image is valid
-            if image is None or image.size == 0:
-                logger.error(f"Cannot save - image is None or empty for {name}")
-                return
-
-            # Add error handling for cv2.imwrite
+        # Add error handling for cv2.imwrite
         cv2.imwrite(save_path, image)
 
 
