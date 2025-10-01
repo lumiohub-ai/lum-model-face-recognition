@@ -34,6 +34,6 @@ production: True # Enable production mode for optimized performance
 api_host: "https://smart-office-api.humblebee.ai/"
 
 # System settings
-max_track_lifetime_seconds: 120
+max_track_lifetime_seconds: 30
 csv_log_rotation: "2 weeks"
 minimum_face_size: 150  # Minimum face size to consider for recognition
