@@ -53,11 +53,12 @@ COPY setup.py setup.cfg pyproject.toml requirements.txt ./
 COPY src ./src
 COPY modules ./modules
 
-RUN	--mount=type=cache,target=/root/.cache,sharing=locked \
-	/opt/conda/bin/pip install --timeout 60 ./modules/insightface && \
-	/opt/conda/bin/pip install --timeout 60 ./modules/yolo_tracking && \
-	/opt/conda/bin/pip install --timeout 60 . && \
-	/opt/conda/bin/pip install --timeout 120 -r ./requirements.txt
+RUN for i in 1 2 3; do \
+        /opt/conda/bin/pip install --retries 5 --timeout 300 --no-cache-dir ./modules/insightface && \
+        /opt/conda/bin/pip install --retries 5 --timeout 300 --no-cache-dir ./modules/yolo_tracking && \
+        /opt/conda/bin/pip install --retries 5 --timeout 300 --no-cache-dir . && \
+        /opt/conda/bin/pip install --retries 5 --timeout 300 --no-cache-dir -r ./requirements.txt && break || sleep 15; \
+    done
 
 
 ## Here is the base image:
