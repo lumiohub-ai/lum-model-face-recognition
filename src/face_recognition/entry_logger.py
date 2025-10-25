@@ -8,7 +8,7 @@ import io
 import json
 import requests
 from typing import Optional, Dict ,List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
@@ -55,9 +55,10 @@ class EntryLogger:
 
         self.base_url = args.api_host + 'api'
         self.session = requests.Session()
-        self.username = args.username
+        self.email = args.email
         self.password = args.password
         self.token = self.login()
+        unique_id = self.get_org_unique_id()
         self.current_users = args.db_names
         self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120) # Default to 120 seconds
 
@@ -76,7 +77,7 @@ class EntryLogger:
         page = 1
         limit = 50
         response = self.session.get(
-                f"{self.base_url}/{self.client_slug}/users",
+                f"{self.base_url}/org/{self.client_slug}/users",
                 params={"page": page, "limit": limit, "status": "active"}
             )
 
@@ -86,11 +87,11 @@ class EntryLogger:
         if response.status_code == 200:
             users = response.json()
 
-            user_dict = {user['username']: user['id'] for user in users}
-            path_dict = {user['id']: user['image_path'] for user in users}
+            user_dict = {user.get("full_name"): user.get("id") for user in users if user.get("full_name")}
+            path_dict = {user.get("id"): user.get("image_path") for user in users if user.get("id")}
 
-            name_to_id = [{'name': name, 'id': user_id} for name, user_id in user_dict.items()]
-            id_to_path = [{'id': user_id, 'path': path} for user_id, path in path_dict.items()]
+            name_to_id = [{"name": name, "id": user_id} for name, user_id in user_dict.items()]
+            id_to_path = [{"id": user_id, "path": path} for user_id, path in path_dict.items()]
 
             for user in name_to_id:
                 if user['name'] not in self.current_users:
@@ -119,7 +120,7 @@ class EntryLogger:
         Authenticate user and obtain access token
 
         Args:
-            username (str): User's username
+            password (str): User's EMAIL
             password (str): User's password
             client_slug (str): Client slug for organization
 
@@ -129,18 +130,12 @@ class EntryLogger:
         Raises:
             requests.exceptions.RequestException: If login fails
         """
-        login_data = {
-            "username": self.username,
-            "password": self.password,
-            "client_slug": self.client_slug
-        }
 
         try:
-            response = self.session.post(
-                f"{self.base_url}/auth/login",
-                json=login_data,
-                headers={"Content-Type": "application/json"}
-            )
+            response = self.session.post(f"{self.base_url}/auth/login",
+                                         json={"email": self.email,
+                                               "password": self.password})
+
             response.raise_for_status()
 
             data = response.json()
@@ -157,6 +152,40 @@ class EntryLogger:
 
         except requests.exceptions.RequestException as e:
             raise requests.exceptions.RequestException(f"Login request failed: {str(e)}")
+
+    def get_org_unique_id(self) -> str | None:
+        """
+        Fetch the unique_id of the organization matching this client's slug.
+        Returns
+        -------
+        str | None
+            The organization's unique_id if found, otherwise None.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json",
+        }
+        url = f"{self.base_url}/organizations"
+        try:
+            response = self.session.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+        except Exception as e:
+            # log or re-raise depending on your error handling policy
+            self.args.logger.warning(f"[get_org_unique_id] Request failed: {e}")
+            return None
+        try:
+            data = response.json()
+        except ValueError:
+            self.args.logger.warning("[get_org_unique_id] Invalid JSON response")
+            return None
+        unique_id = next(
+            (org["unique_id"] for org in data if org.get("slug") == self.client_slug),
+            None
+        )
+        if not unique_id:
+            self.args.logger.warning(f"[get_org_unique_id] No organization found for slug '{self.client_slug}'")
+
+        return unique_id
 
     def send_data_to_api(self, name, status):
         """Send person entry/exit data to the API.
@@ -195,12 +224,11 @@ class EntryLogger:
         if status not in ['IN', 'OUT']:
             raise ValueError("Status must be either 'IN' or 'OUT'")
 
-        url = self.base_url + f'/{self.client_slug}/unrecognized'
-        headers = {
-            'Authorization': f'Bearer {self.token}'
-        }
-
-        data ={'user_status': status.lower()}
+        url = self.base_url + f'/org/{self.client_slug}/unrecognized-faces'
+        headers = {'Authorization': f'Bearer {self.token}'}
+        # data ={'user_status': status.lower()}
+        timestamp = timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        data = {'detection_time':timestamp}
 
         if face is None or face.size == 0:
             self.args.logger.warning("No face detected to send")
@@ -238,6 +266,7 @@ class EntryLogger:
         Returns:
             bool: True if the status was recorded, False if new status is the same as previous status
         """
+
 
         previous_status = self.person_status.get(name)
         recorded = False
@@ -297,14 +326,19 @@ class EntryLogger:
         if status not in ['IN', 'OUT']:
             raise ValueError("Status must be either 'IN' or 'OUT'")
 
+        # Generate timestamp in ISO 8601 format with milliseconds
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
         record_data = {
             "user_id": user_id,
-            "status": status.lower()  # Use lowercase for consistency
+            "status": status.lower(),  # Use lowercase for consistency
+            "camera_id": getattr(self, 'camera_id', None),
+            "timestamp": timestamp
         }
 
         try:
             response = self.session.post(
-                f"{self.base_url}/{self.client_slug}/history/create",
+                f"{self.base_url}/org/{self.client_slug}/attendance-records",
                 json=record_data,
                 headers={"Content-Type": "application/json"}
             )
@@ -397,45 +431,34 @@ class EntryLogger:
         Users with no records will be marked as 'OUT'.
         """
 
-        new_users, deleted_users, name_to_id = self.get_all_users()
-        user_map = {entry['id']: entry['name'] for entry in name_to_id}
-        all_records = self.fetch_all_history()
+        headers = {"Authorization": f"Bearer {self.token}"}
+        resp_in = requests.get(f"{self.base_url}/org/{self.slug}/users/in", headers=headers)
+        resp_in.raise_for_status()
+        data_in = resp_in.json()
+        in_names = [user["full_name"] for user in data_in if "full_name" in user]
 
-        # Track latest record per user_id
-        user_last_status = {}
-        for record in all_records:
-            if record.get("deleted"):
-                continue
+        # 2. Fetch current OUT users
+        resp_out = requests.get(f"{self.base_url}/org/{self.slug}/users/out", headers=headers)
+        resp_out.raise_for_status()
+        data_out = resp_out.json()
+        out_names = [user["full_name"] for user in data_out if "full_name" in user]
 
-            user_id = record["user_id"]
-            if user_id not in user_map:
-                continue
+        person_status = {}
 
-            timestamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
+        for name in out_names:
+            person_status[name] = "OUT"
 
-            if user_id not in user_last_status or timestamp > user_last_status[user_id]["timestamp"]:
-                user_last_status[user_id] = {
-                    "name": user_map[user_id],
-                    "timestamp": timestamp,
-                    "status": record["status"]
-                }
+        for name in in_names:
+            # IN overrides OUT if there's any overlap
+            person_status[name] = "IN"
 
-        # Build self.person_status using names as keys
-        person_status = {}  # Reset
-        for user_data in user_last_status.values():
-            name = user_data["name"]
-            if user_data["status"].upper() not in ["IN", "OUT"]:
-                self.args.logger.warning(f"Invalid status '{user_data['status']}' for user '{name}'")
-                status = "OUT"  # Default to 'OUT' for invalid statuses
-            else:
-                status = user_data["status"].upper()
-
-            person_status[name] = status
-
-        # Fill in 'OUT' for users with no record
+        _, _, name_to_id = self.get_all_users()
         for entry in name_to_id:
             name = entry["name"]
             if name not in person_status:
+                # They're "active" in org but not explicitly IN or OUT.
+                # Old behavior: treat as OUT and warn.
+                self.logger.warning(f"No status from API for user '{name}', defaulting to OUT")
                 person_status[name] = "OUT"
 
         return person_status

@@ -153,6 +153,15 @@ class FaceSetup:
         else:
             args.camera_name = f"Camera_{index}" if index is not None else "Camera_0"
 
+        # Handle camera_ids configuration
+        if hasattr(args, 'camera_ids') and args.camera_ids is not None:
+            if index is not None and isinstance(args.camera_ids, (list, tuple)) and len(args.camera_ids) > index:
+                args.camera_id = args.camera_ids[index]
+            else:
+                args.camera_id = str(index) if index is not None else "0"
+        else:
+            args.camera_id = str(index) if index is not None else "0"
+
         # Initialize stream and engine
         stream_handler = StreamHandler(vid_path, args.logger)
         engine = FaceEngine(args=args)

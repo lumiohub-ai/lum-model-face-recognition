@@ -10,15 +10,16 @@ in_camera = os.getenv("HB_IN")
 # in_camera_management = os.getenv("HB_IN_MANAGEMENT")
 out_camera = os.getenv("HB_OUT")
 
-username = os.getenv("HB_USERNAME")
-password = os.getenv("HB_PASSWORD")
+email = os.getenv("SA_EMAIL")
+password = os.getenv("SA_PASSWORD")
 client_slug = os.getenv("HB_CLIENTSLUG")
 
 # Initialize HBFace for multi-camera setup
 face_engine_multi = HBFace(
     cam_types=["IN", "OUT"],
     video_path=[in_camera, out_camera],
-    camera_names=["Camera_2", "Camera_3"],
+    camera_names=["Dev Camera 2", "Dev Camera 3"],
+    camera_ids = [3,4]
     # roi=[(858, 41, 1660, 903), (527, 62, 1316, 864)],
     # line_points=[[(724, 497), (1206, 830)], [(525, 1069), (1522, 1065)]],
     multi_camera=True,
@@ -30,7 +31,7 @@ face_engine_multi = HBFace(
     debug=True,
     record_always=True,
     save_video=True,
-    username=username,
+    email=email,
     password=password,
     client_slug=client_slug,
     save_recognized_frame=True

@@ -219,9 +219,10 @@ class HBFace:
             for name, (track_id, appear_time, recognized, image, recognition_info) in persons_recognized.items():
                 status = engine.args.cam_type
                 camera_name = engine.args.camera_name
+                camera_id = engine.args.camera_id
 
                 if recognized == 'recognized':
-                    recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name)
+                    recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name, camera_id)
                     logger.info(f"Person recognized: {name}, recorded={recorded}, save_enabled={engine.args.save_recognized_frame}")
                     if engine.args.save_recognized_frame and recorded:
                         self.save_recognized_frame(name, image, status)
@@ -273,9 +274,10 @@ class HBFace:
         for name, (track_id, appear_time, recognized, image, recognition_info) in persons_recognized.items():
             status = engine.args.cam_type
             camera_name = engine.args.camera_name
+            camera_id = engine.args.camera_id
 
             if recognized == 'recognized':
-                recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name)
+                recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name, camera_id)
                 logger.info(f"Person recognized: {name}, recorded={recorded}, save_enabled={engine.args.save_recognized_frame}")
                 if engine.args.save_recognized_frame and recorded:
                     logger.info(f"Calling save_recognized_frame for {name}")
@@ -375,9 +377,10 @@ class HBFace:
             for name, (track_id, appear_time, recognized, image, recognition_info) in persons_recognized.items():
                 status = engine.args.cam_type
                 camera_name = engine.args.camera_name
+                camera_id = engine.args.camera_id
 
                 if recognized == 'recognized':
-                    recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name)
+                    recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name, camera_id)
                     if self.engines[0].args.save_recognized_frame and recorded:
                         self.save_recognized_frame(name, image, status)
                 elif recognized == 'unrecognized':
