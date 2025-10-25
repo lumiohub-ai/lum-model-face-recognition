@@ -191,7 +191,7 @@ class HBFace:
         """
         if not self.use_multiprocessing:
             # Serial processing (fallback for single camera or if multiprocessing disabled)
-            return [self._process_single_frame(frame, frame_nums[i], self.engines[i])
+            return [self._process_single_frame(frame, frame_nums[i], self.engines[i], i)
                     for i, frame in enumerate(frames)]
 
         # Parallel processing using worker processes
@@ -238,16 +238,20 @@ class HBFace:
             # Add timestamp to the frame
             self._add_timestamp(frame_annotated)
 
+            # Send annotated frame to API
+            self.entry_logger.send_annotated_frame(frame_annotated, camera_idx, engine.args.cam_type)
+
         # Return frames in correct order
         return [results[i][0] for i in range(len(frames))]
 
-    def _process_single_frame(self, frame: NDArray, frame_num: int, engine: FaceEngine) -> NDArray:
+    def _process_single_frame(self, frame: NDArray, frame_num: int, engine: FaceEngine, camera_idx: int) -> NDArray:
         """Process a single frame for face detection, tracking and recognition.
 
         Args:
             frame: Video frame to process
             frame_num: Frame number in the sequence
             engine: FaceEngine instance to use for processing
+            camera_idx: Camera index for this frame
 
         Returns:
             Annotated frame with visualization
@@ -298,8 +302,9 @@ class HBFace:
 
         # Add timestamp to the frame
         self._add_timestamp(frame_annotated)
-        # self.entry_logger.`send_annotated_frame`(frame_annotated, engine.args.cam_type)
 
+        # Send annotated frame to API
+        self.entry_logger.send_annotated_frame(frame_annotated, camera_idx, engine.args.cam_type)
 
         return frame_annotated
 
