@@ -440,12 +440,13 @@ class EntryLogger:
 
         return person_status
 
-    def send_annotated_frame(self, frame, camera):
+    def send_annotated_frame(self, frame, camera_index, camera_type):
         """Send annotated frame to the API.
 
         Args:
             frame: Annotated frame to send
-            camera: IN/OUT camera
+            camera_index: Camera index (0, 1, 2, etc.)
+            camera_type: Camera type (IN/OUT)
         Raises:
             ValueError: If the frame cannot be encoded or if the user is not authenticated
             requests.exceptions.RequestException: If the request to the API fails
@@ -455,12 +456,10 @@ class EntryLogger:
         if not self.token:
             raise ValueError("Not authenticated. Please login first.")
 
-        url = self.base_url + f'/{self.client_slug}/'
+        url = self.base_url + f'/{self.client_slug}/cameras/{camera_index}/{camera_type}'
         headers = {
             'Authorization': f'Bearer {self.token}'
         }
-
-        data = {'camera': camera}
 
         success, encoded_image = cv2.imencode('.jpg', frame)
         if not success:
@@ -472,7 +471,7 @@ class EntryLogger:
             ('images', ('annotated_frame.jpg', image_bytes, 'image/jpeg')),
         ]
         try:
-            response = requests.post(url, headers=headers, files=files, data=data)
+            response = requests.post(url, headers=headers, files=files)
 
             response.raise_for_status()
             if response.status_code != 201:
