@@ -227,13 +227,14 @@ class EntryLogger:
         except requests.exceptions.RequestException as e:
             raise requests.exceptions.RequestException(f"Send unrecognized face request failed: {str(e)}")
 
-    def log_person_entry(self, name, status, appear_time):
+    def log_person_entry(self, name, status, appear_time, camera_name="Unknown"):
         """Log a person's entry or exit.
 
         Args:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
             appear_time: Time when the person appeared
+            camera_name: Name of the camera that detected the person
         Returns:
             bool: True if the status was recorded, False if new status is the same as previous status
         """
@@ -242,6 +243,8 @@ class EntryLogger:
         recorded = False
         # If status is the same as before, do nothing
         if previous_status == status.upper():
+            timestamp = appear_time.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[{timestamp}] {name} | Status: {status} | Camera: {camera_name} (unchanged)")
             return recorded
         recorded = True
         # Update the cached status

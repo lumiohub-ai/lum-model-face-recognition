@@ -6,7 +6,7 @@ db_path: 'data/embeddings/hb_korea.pkl' # Must be in pkl format
 video_path: "data/videos/sample.mp4"  # Path to the input video file or RTSP stream
 
 # Face recognition settings
-match_threshold: 0.5  # Threshold for face similarity matching
+match_threshold: 0.3  # Threshold for face similarity matching (can be a list for per-camera thresholds)
 partial_match_threshold: 0.15  # Threshold for partial face matches
 # Other settings
 show: True  # Show the output video with annotations

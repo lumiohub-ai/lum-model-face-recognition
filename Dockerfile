@@ -53,11 +53,25 @@ COPY setup.py setup.cfg pyproject.toml requirements.txt ./
 COPY src ./src
 COPY modules ./modules
 
+# --- Make TLS sane in the Conda env ---
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/condabin/conda install -y \
+        ca-certificates \
+        openssl \
+        certifi && \
+    /opt/conda/condabin/conda update -y ca-certificates openssl && \
+    /opt/conda/bin/python -c "import ssl,certifi; print('OpenSSL:', ssl.OPENSSL_VERSION); print('certifi:', certifi.where())"
+
+# Ensure Python requests use the system bundle (keeps you future-proof)
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
+
 RUN	--mount=type=cache,target=/root/.cache,sharing=locked \
-	/opt/conda/bin/pip install --timeout 60 ./modules/insightface && \
-	/opt/conda/bin/pip install --timeout 60 ./modules/yolo_tracking && \
-	/opt/conda/bin/pip install --timeout 60 . && \
-	/opt/conda/bin/pip install --timeout 120 -r ./requirements.txt
+	/opt/conda/bin/pip install --timeout 600 ./modules/insightface && \
+	/opt/conda/bin/pip install --timeout 600 ./modules/yolo_tracking && \
+	/opt/conda/bin/pip install --timeout 600 . && \
+	/opt/conda/bin/pip install --timeout 600 -r ./requirements.txt
 
 
 ## Here is the base image:
@@ -106,6 +120,8 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 	# echo "Acquire::BrokenProxy true;" >> /etc/apt/apt.conf.d/99fixbadproxy && \
 	apt-get update --fix-missing -o Acquire::CompressionTypes::Order::=gz && \
 	apt-get install -y --no-install-recommends \
+		ca-certificates \
+		openssl \
 		sudo \
 		locales \
 		tzdata \
@@ -116,6 +132,7 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 		nano \
 		libgl1-mesa-glx \
 		libglib2.0-0 && \
+	update-ca-certificates && \
 	apt-get clean -y && \
 	sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
 	sed -i -e 's/# en_AU.UTF-8 UTF-8/en_AU.UTF-8 UTF-8/' /etc/locale.gen && \

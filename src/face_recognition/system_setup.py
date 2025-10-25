@@ -135,6 +135,24 @@ class FaceSetup:
         else:
             args.line_points = None
 
+        # Handle match_threshold configuration (can be single value or list)
+        if hasattr(args, 'match_threshold') and isinstance(args.match_threshold, list):
+            if index is not None and index < len(args.match_threshold):
+                args.match_threshold = args.match_threshold[index]
+            else:
+                # Use default if list is too short
+                args.match_threshold = 0.3
+                logger.warning(f"match_threshold list is too short for camera index {index}, using default 0.3")
+
+        # Handle camera_names configuration
+        if hasattr(args, 'camera_names') and args.camera_names is not None:
+            if index is not None and isinstance(args.camera_names, (list, tuple)) and len(args.camera_names) > index:
+                args.camera_name = args.camera_names[index]
+            else:
+                args.camera_name = f"Camera_{index}" if index is not None else "Camera_0"
+        else:
+            args.camera_name = f"Camera_{index}" if index is not None else "Camera_0"
+
         # Initialize stream and engine
         stream_handler = StreamHandler(vid_path, args.logger)
         engine = FaceEngine(args=args)

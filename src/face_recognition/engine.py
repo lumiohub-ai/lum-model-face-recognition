@@ -301,9 +301,14 @@ class FaceEngine:
             self.passed_tracks.append(track_id)
 
             track_id_embeddings = self.track_emb_frame_history.get(track_id, {})
-            if not track_id_embeddings or not self._count_line_passing(track_id):
+            if not track_id_embeddings:
+                self.args.logger.debug(f"Track {track_id} skipped - no embeddings stored")
                 self._delete_cache(track_id)
-                # self.args.logger.debug(f"Track {track_id} has no embeddings or has not passed the counting line.")
+                continue
+
+            if not self._count_line_passing(track_id):
+                self.args.logger.debug(f"Track {track_id} skipped - did not pass counting line")
+                self._delete_cache(track_id)
                 continue
 
             frame_nums = list(track_id_embeddings.keys())
@@ -313,43 +318,52 @@ class FaceEngine:
             track_landmarks = self.track_landmarks_history.get(track_id, {})
 
             recognition_info = self.face_recognition.recognize_face(emb_array, frame_nums, track_landmarks)
-            if recognition_info['recognized'] == 'unrecognized':
-                self._delete_cache(track_id)
-                continue
 
             name = recognition_info['name']
             sim = recognition_info['similarity']
+            recognized_status = recognition_info['recognized']
 
-            self.args.logger.debug(f"{self.args.cam_type} -> {track_id} -> {name} -> {sim:.2f}.")
+            self.args.logger.debug(f"{self.args.camera_names}: {self.args.cam_type} -> {track_id} -> {name} -> {sim:.2f}.")
 
-            # try:
-            #     self._save_face_crop(track_id, recognition_info)
-            # except Exception as e:
-            #     pass
+            # Log ALL detections (recognized, partial_match, unrecognized) to console immediately
+            from datetime import datetime
+            import pytz
+            tz = pytz.timezone(self.args.timezone)
+            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            camera_name = getattr(self.args, 'camera_name', 'Unknown')
+
+            if recognized_status == 'unrecognized':
+                print(f"[{timestamp}] UNRECOGNIZED | Track ID: {track_id} | Best Match: {name} ({sim:.2f}) | Camera: {camera_name}")
+            elif recognized_status == 'partial_match':
+                print(f"[{timestamp}] PARTIAL_MATCH | Track ID: {track_id} | Best Match: {name} ({sim:.2f}) | Camera: {camera_name}")
 
             # if recognition_info['recognized'] == 'recognized' save frame to recognized folder image name is timestemp_name.jpg
-            if recognition_info['recognized'] == 'recognized':
+            if recognized_status == 'recognized':
                 image = self.track_frame_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None)
-            else:
+            elif recognized_status == 'unrecognized':
                 # For unrecognized faces, verify the matched frame has valid frontal landmarks
                 matched_frame_num = recognition_info['matched_frame_num']
                 image = self.track_crop_history.get(track_id, {}).get(matched_frame_num, None)
 
-                # Validate landmarks before including in logged results
+                # Validate landmarks before including in logged results (for API submission)
                 if matched_frame_num in track_landmarks:
                     landmarks = track_landmarks[matched_frame_num]
                     if not self.face_recognition.is_face_frontal_and_valid(landmarks):
-                        # Skip this unrecognized face if it's not frontal/valid
-                        self.args.logger.debug(f"Skipping unrecognized face {track_id} - not frontal or missing keypoints")
+                        # Skip API submission for non-frontal faces, but we already logged above
+                        self.args.logger.debug(f"Skipping API submission for unrecognized face {track_id} - not frontal or missing keypoints")
                         self._delete_cache(track_id)
                         continue
                 else:
-                    # No landmarks available for this frame, skip it
-                    self.args.logger.debug(f"Skipping unrecognized face {track_id} - no landmarks available")
+                    # No landmarks available for this frame, skip API submission
+                    self.args.logger.debug(f"Skipping API submission for unrecognized face {track_id} - no landmarks available")
                     self._delete_cache(track_id)
                     continue
+            else:
+                # partial_match
+                image = self.track_crop_history.get(track_id, {}).get(recognition_info['matched_frame_num'], None)
 
-            persons_logged[name] = [track_id, self.id_appear_time[track_id], recognition_info['recognized'], image]
+            # Store all faces (recognized, partial_match, and unrecognized) with recognition info
+            persons_logged[name] = [track_id, self.id_appear_time[track_id], recognition_info['recognized'], image, recognition_info]
 
             if self.args.eval:
                 self._record_evaluation_results(track_id, name)
@@ -371,7 +385,8 @@ class FaceEngine:
             if track.id in self.id_appear_time:
                 track_age = (now - self.id_appear_time[track.id]).total_seconds()
                 if track_age > self.max_track_lifetime_seconds:
-                    self.args.logger.debug(f"Track {track.id} has expired. Marking as removed.")
+                    emb_count = len(self.track_emb_frame_history.get(track.id, {}))
+                    self.args.logger.debug(f"Track {track.id} has expired after {track_age:.1f}s. Embeddings stored: {emb_count}")
                     expired_track_ids.append(track.id)
 
         # Remove the expired tracks from the active list so they aren't processed further
