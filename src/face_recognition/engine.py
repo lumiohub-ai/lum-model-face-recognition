@@ -302,7 +302,7 @@ class FaceEngine:
 
             track_id_embeddings = self.track_emb_frame_history.get(track_id, {})
             if not track_id_embeddings:
-                self.args.logger.debug(f"Track {track_id} skipped - no embeddings stored")
+                # self.args.logger.debug(f"Track {track_id} skipped - no embeddings stored")
                 self._delete_cache(track_id)
                 continue
 
@@ -323,7 +323,7 @@ class FaceEngine:
             sim = recognition_info['similarity']
             recognized_status = recognition_info['recognized']
 
-            self.args.logger.debug(f"{self.args.camera_names}: {self.args.cam_type} -> {track_id} -> {name} -> {sim:.2f}.")
+            self.args.logger.debug(f"{self.args.camera_name}: {self.args.cam_type} -> {track_id} -> {name} -> {sim:.2f}.")
 
             # Log ALL detections (recognized, partial_match, unrecognized) to console immediately
             from datetime import datetime

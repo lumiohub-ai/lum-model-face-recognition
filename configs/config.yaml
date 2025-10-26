@@ -31,7 +31,7 @@ multi_camera: True  # Enable multi-camera mode
 production: True # Enable production mode for optimized performance
 # If production is True, it will send data to the server
 
-api_host: "https://smart-office-api.humblebee.ai/"
+api_host: "http://localhost:7091/"
 
 # System settings
 max_track_lifetime_seconds: 30

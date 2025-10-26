@@ -136,7 +136,9 @@ class EntryLogger:
                                          json={"email": self.email,
                                                "password": self.password})
 
-            response.raise_for_status()
+            if response.status_code != 200:
+                self.args.logger.critical(f"Login request failed with status {response.status_code}: {response.text}")
+                return None
 
             data = response.json()
 
@@ -187,12 +189,13 @@ class EntryLogger:
 
         return unique_id
 
-    def send_data_to_api(self, name, status):
+    def send_data_to_api(self, name, status, camera_id=None):
         """Send person entry/exit data to the API.
 
         Args:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
+            camera_id: ID of the camera that detected the person
         """
         user_id = next((int(i['id']) for i in self.name_to_id if i['name'] == name), None)
 
@@ -200,11 +203,9 @@ class EntryLogger:
             self.args.logger.warning(f'User with ID {user_id} not found in the database')
             return
 
-        response = self.create_record(user_id, status)
+        response = self.create_record(user_id, status, camera_id)
         data = response.json()
-        if response.status_code == 201:
-            self.args.logger.info(f"Success: {data['message']}")
-        else:
+        if response.status_code != 201:
             self.args.logger.warning(f"Error: {data.get('error', 'Unknown error')}")
 
     def send_unrecognized_face(self, face, status):
@@ -212,17 +213,18 @@ class EntryLogger:
         Args:
             face: Detected face image (numpy array)
             status: Status of the user ('IN' or 'OUT')
-        Raises:
-            ValueError: If the status is not 'IN' or 'OUT'
-            requests.exceptions.RequestException: If the request to the API fails
+        Returns:
+            Response object if successful, None otherwise
         """
          # Check if user is authenticated
-         # If not, raise an error
+         # If not, log error and return
         if not self.token:
-            raise ValueError("Not authenticated. Please login first.")
+            self.args.logger.critical("Not authenticated. Please login first.")
+            return None
         status = status.upper()
         if status not in ['IN', 'OUT']:
-            raise ValueError("Status must be either 'IN' or 'OUT'")
+            self.args.logger.warning(f"Invalid status '{status}'. Status must be either 'IN' or 'OUT'")
+            return None
 
         url = self.base_url + f'/org/{self.client_slug}/unrecognized-faces'
         headers = {'Authorization': f'Bearer {self.token}'}
@@ -232,11 +234,12 @@ class EntryLogger:
 
         if face is None or face.size == 0:
             self.args.logger.warning("No face detected to send")
-            return
+            return None
 
         success, encoded_image = cv2.imencode('.jpg', face)
         if not success:
-            raise ValueError("Image encoding failed")
+            self.args.logger.error("Image encoding failed")
+            return None
 
         # Convert to byte stream
         image_bytes = io.BytesIO(encoded_image.tobytes())
@@ -248,14 +251,17 @@ class EntryLogger:
         try:
             response = requests.post(url, headers=headers, files=files, data=data)
 
-            response.raise_for_status()
+            if response.status_code not in [200, 201]:
+                self.args.logger.error(f"Send unrecognized face failed with status {response.status_code}: {response.text}")
+                return None
 
             return response
 
         except requests.exceptions.RequestException as e:
-            raise requests.exceptions.RequestException(f"Send unrecognized face request failed: {str(e)}")
+            self.args.logger.error(f"Send unrecognized face request failed: {str(e)}")
+            return None
 
-    def log_person_entry(self, name, status, appear_time, camera_name="Unknown"):
+    def log_person_entry(self, name, status, appear_time, camera_name="Unknown", camera_id=None):
         """Log a person's entry or exit.
 
         Args:
@@ -263,6 +269,7 @@ class EntryLogger:
             status: Entry/exit status (IN/OUT)
             appear_time: Time when the person appeared
             camera_name: Name of the camera that detected the person
+            camera_id: ID of the camera that detected the person
         Returns:
             bool: True if the status was recorded, False if new status is the same as previous status
         """
@@ -285,7 +292,7 @@ class EntryLogger:
 
         if self.args.production:
             # Send data to the API
-            self.send_data_to_api(name, status)
+            self.send_data_to_api(name, status, camera_id)
 
         # ANSI color codes
         BOLD = "\033[1m"
@@ -306,25 +313,25 @@ class EntryLogger:
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
         return recorded
 
-    def create_record(self, user_id: int, status: str) -> Dict[str, Any]:
+    def create_record(self, user_id: int, status: str, camera_id: int = None) -> Dict[str, Any]:
         """
         Create an attendance record
 
         Args:
             user_id (int): ID of the user to create record for
             status (str): Either 'IN' or 'OUT'
+            camera_id (int): ID of the camera that detected the person
 
         Returns:
-            dict: Record creation response data
-
-        Raises:
-            requests.exceptions.RequestException: If record creation fails
+            Response object if successful, None otherwise
         """
         if not self.token:
-            raise ValueError("Not authenticated. Please login first.")
+            self.args.logger.critical("Not authenticated. Please login first.")
+            return None
         status = status.upper()
         if status not in ['IN', 'OUT']:
-            raise ValueError("Status must be either 'IN' or 'OUT'")
+            self.args.logger.warning(f"Invalid status '{status}'. Status must be either 'IN' or 'OUT'")
+            return None
 
         # Generate timestamp in ISO 8601 format with milliseconds
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -332,7 +339,7 @@ class EntryLogger:
         record_data = {
             "user_id": user_id,
             "status": status.lower(),  # Use lowercase for consistency
-            "camera_id": getattr(self, 'camera_id', None),
+            "camera_id": camera_id,
             "timestamp": timestamp
         }
 
@@ -342,12 +349,15 @@ class EntryLogger:
                 json=record_data,
                 headers={"Content-Type": "application/json"}
             )
-            response.raise_for_status()
+            if response.status_code not in [200, 201]:
+                self.args.logger.error(f"Record creation failed with status {response.status_code}: {response.text}")
+                return None
 
             return response
 
         except requests.exceptions.RequestException as e:
-            raise requests.exceptions.RequestException(f"Record creation request failed: {str(e)}")
+            self.args.logger.error(f"Record creation request failed: {str(e)}")
+            return None
 
     def visualize_entries(self, frame, max_text_width=0):
         """Visualize recent entries on the frame.
@@ -410,10 +420,13 @@ class EntryLogger:
                 headers=self.headers,
                 params={"page": page, "limit": limit}
             )
-            response.raise_for_status()
+            if response.status_code != 200:
+                self.args.logger.error(f"Fetch history failed with status {response.status_code}: {response.text}")
+                return all_records
             data = response.json()
             if not data.get('success', True):
-                raise requests.exceptions.RequestException(f"Failed to get history: {data.get('error', 'Unknown error')}")
+                self.args.logger.error(f"Failed to get history: {data.get('error', 'Unknown error')}")
+                return all_records
             records = data.get("records", [])
             all_records.extend(records)
 
@@ -432,14 +445,18 @@ class EntryLogger:
         """
 
         headers = {"Authorization": f"Bearer {self.token}"}
-        resp_in = requests.get(f"{self.base_url}/org/{self.slug}/users/in", headers=headers)
-        resp_in.raise_for_status()
+        resp_in = requests.get(f"{self.base_url}/org/{self.client_slug}/users/in", headers=headers)
+        if resp_in.status_code != 200:
+            self.args.logger.error(f"Failed to fetch IN users with status {resp_in.status_code}: {resp_in.text}")
+            return {}
         data_in = resp_in.json()
         in_names = [user["full_name"] for user in data_in if "full_name" in user]
 
         # 2. Fetch current OUT users
-        resp_out = requests.get(f"{self.base_url}/org/{self.slug}/users/out", headers=headers)
-        resp_out.raise_for_status()
+        resp_out = requests.get(f"{self.base_url}/org/{self.client_slug}/users/out", headers=headers)
+        if resp_out.status_code != 200:
+            self.args.logger.error(f"Failed to fetch OUT users with status {resp_out.status_code}: {resp_out.text}")
+            return {}
         data_out = resp_out.json()
         out_names = [user["full_name"] for user in data_out if "full_name" in user]
 
@@ -458,7 +475,7 @@ class EntryLogger:
             if name not in person_status:
                 # They're "active" in org but not explicitly IN or OUT.
                 # Old behavior: treat as OUT and warn.
-                self.logger.warning(f"No status from API for user '{name}', defaulting to OUT")
+                self.args.logger.warning(f"No status from API for user '{name}', defaulting to OUT")
                 person_status[name] = "OUT"
 
         return person_status
@@ -470,11 +487,8 @@ class EntryLogger:
             frame: Annotated frame to send
             camera_index: Camera index (0, 1, 2, etc.)
             camera_type: Camera type (IN/OUT)
-        Raises:
-            ValueError: If the frame cannot be encoded or if the user is not authenticated
-            requests.exceptions.RequestException: If the request to the API fails
-        Uses:
-            requests: To send the frame to the API
+        Returns:
+            Response object if successful, None otherwise
         """
         if not self.token:
             raise ValueError("Not authenticated. Please login first.")
@@ -486,7 +500,8 @@ class EntryLogger:
 
         success, encoded_image = cv2.imencode('.jpg', frame)
         if not success:
-            raise ValueError("Image encoding failed")
+            self.args.logger.error("Image encoding failed")
+            return None
         image_bytes = io.BytesIO(encoded_image.tobytes())
 
         # Prepare file payload
@@ -496,9 +511,11 @@ class EntryLogger:
         try:
             response = requests.post(url, headers=headers, files=files)
 
-            response.raise_for_status()
-            if response.status_code != 201:
-                self.args.logger.warning(f"Failed to send annotated frame: {response.text}")
+            if response.status_code not in [200, 201]:
+                self.args.logger.warning(f"Failed to send annotated frame with status {response.status_code}: {response.text}")
+                return None
+            return response
         except requests.exceptions.RequestException as e:
-            raise requests.exceptions.RequestException(f"Send annotated frame request failed: {str(e)}")
+            self.args.logger.error(f"Send annotated frame request failed: {str(e)}")
+            return None
 

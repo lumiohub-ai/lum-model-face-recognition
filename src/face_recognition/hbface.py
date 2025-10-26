@@ -9,8 +9,6 @@ from numpy.typing import NDArray
 from loguru import logger
 import datetime
 import pytz  # For timezone support
-from multiprocessing import Process, Queue
-import queue as queue_module
 
 # Local imports
 from .engine import FaceEngine
@@ -18,61 +16,6 @@ from .system_setup import FaceSetup
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
-
-# Worker process function for persistent camera processing
-def _camera_worker_process(camera_idx, engine_args, input_queue, output_queue):
-    """Persistent worker process that maintains FaceEngine state across frames.
-
-    Args:
-        camera_idx: Index of the camera being processed
-        engine_args: Arguments to initialize FaceEngine
-        input_queue: Queue to receive (frame, frame_num) tuples
-        output_queue: Queue to send back (camera_idx, annotated_frame, persons_recognized)
-    """
-    # Initialize engine once in this process
-    engine = FaceEngine(args=engine_args)
-
-    while True:
-        try:
-            # Get frame from queue (with timeout to allow checking for poison pill)
-            data = input_queue.get(timeout=1)
-
-            if data is None:  # Poison pill to terminate
-                break
-
-            frame, frame_num = data
-
-            # Process the frame
-            roi = engine.args.roi
-            frame_cropped = frame[roi[1]:roi[3], roi[0]:roi[2]] if roi else frame
-
-            # Track faces in the current frame
-            active_tracks, removed_tracks = engine.track(frame_cropped)
-
-            # Prune tracks that have been active for too long
-            expired_tracks = engine.prune_long_lived_tracks()
-            removed_tracks.extend(expired_tracks)
-
-            frame_annotated = engine.visualize_tracks(frame_cropped)
-
-            if active_tracks:
-                engine.process_active_tracks(active_tracks, frame_cropped, frame_num)
-
-            persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
-
-            # Draw counting line if configured
-            if engine.args.line_points:
-                cv2.line(frame_annotated, engine.args.line_points[0], engine.args.line_points[1], (0, 255, 0), 3)
-
-            # Send result back
-            output_queue.put((camera_idx, frame_annotated, persons_recognized))
-
-        except queue_module.Empty:
-            continue
-        except Exception as e:
-            logger.error(f"Error in camera worker {camera_idx}: {e}")
-            output_queue.put((camera_idx, None, {}))
 
 
 # Main class that merges configuration and processing
@@ -107,30 +50,6 @@ class HBFace:
 
         # Get timezone from config, default to UTC if not specified
         self.timezone = getattr(self.config, 'timezone', 'UTC')
-
-        # Initialize multiprocessing for parallel camera processing
-        self.use_multiprocessing = multi_camera and len(self.engines) > 1
-        self.worker_processes = []
-        self.input_queues = []
-        self.output_queue = None
-
-        if self.use_multiprocessing:
-            self.output_queue = Queue(maxsize=len(self.engines) * 2)
-
-            for i, engine in enumerate(self.engines):
-                input_queue = Queue(maxsize=2)
-                self.input_queues.append(input_queue)
-
-                # Start worker process for this camera
-                worker = Process(
-                    target=_camera_worker_process,
-                    args=(i, engine.args, input_queue, self.output_queue),
-                    daemon=True
-                )
-                worker.start()
-                self.worker_processes.append(worker)
-
-            logger.info(f"Started {len(self.worker_processes)} worker processes for parallel camera processing")
 
     def run(self) -> None:
         """Run the face recognition system and process video streams."""
@@ -189,69 +108,16 @@ class HBFace:
         Returns:
             List of annotated frames with visualization
         """
-        if not self.use_multiprocessing:
-            # Serial processing (fallback for single camera or if multiprocessing disabled)
-            return [self._process_single_frame(frame, frame_nums[i], self.engines[i], i)
-                    for i, frame in enumerate(frames)]
+        return [self._process_single_frame(frame, frame_nums[i], self.engines[i])
+                for i, frame in enumerate(frames)]
 
-        # Parallel processing using worker processes
-        # Send frames to worker processes
-        for i, (frame, frame_num) in enumerate(zip(frames, frame_nums)):
-            self.input_queues[i].put((frame, frame_num))
-
-        # Collect results from all workers
-        results = {}
-        for _ in range(len(frames)):
-            try:
-                camera_idx, frame_annotated, persons_recognized = self.output_queue.get(timeout=10)
-                results[camera_idx] = (frame_annotated, persons_recognized)
-            except queue_module.Empty:
-                logger.error("Timeout waiting for worker process result")
-                # Use empty result for failed camera
-                results[len(results)] = (frames[len(results)], {})
-
-        # Process recognition results (logging, saving, API calls)
-        for camera_idx in sorted(results.keys()):
-            frame_annotated, persons_recognized = results[camera_idx]
-            engine = self.engines[camera_idx]
-
-            # Handle persons recognized (same logic as _process_single_frame)
-            for name, (track_id, appear_time, recognized, image, recognition_info) in persons_recognized.items():
-                status = engine.args.cam_type
-                camera_name = engine.args.camera_name
-                camera_id = engine.args.camera_id
-
-                if recognized == 'recognized':
-                    recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name, camera_id)
-                    logger.info(f"Person recognized: {name}, recorded={recorded}, save_enabled={engine.args.save_recognized_frame}")
-                    if engine.args.save_recognized_frame and recorded:
-                        self.save_recognized_frame(name, image, status)
-                elif recognized == 'unrecognized':
-                    self.entry_logger.send_unrecognized_face(face=image, status=status)
-                else:
-                    # partial_match
-                    self.entry_logger.send_unrecognized_face(face=image, status=status)
-
-            # Add visualization of recognized entries
-            self.entry_logger.visualize_entries(frame_annotated)
-
-            # Add timestamp to the frame
-            self._add_timestamp(frame_annotated)
-
-            # Send annotated frame to API
-            self.entry_logger.send_annotated_frame(frame_annotated, camera_idx, engine.args.cam_type)
-
-        # Return frames in correct order
-        return [results[i][0] for i in range(len(frames))]
-
-    def _process_single_frame(self, frame: NDArray, frame_num: int, engine: FaceEngine, camera_idx: int) -> NDArray:
+    def _process_single_frame(self, frame: NDArray, frame_num: int, engine: FaceEngine) -> NDArray:
         """Process a single frame for face detection, tracking and recognition.
 
         Args:
             frame: Video frame to process
             frame_num: Frame number in the sequence
             engine: FaceEngine instance to use for processing
-            camera_idx: Camera index for this frame
 
         Returns:
             Annotated frame with visualization
@@ -302,9 +168,10 @@ class HBFace:
 
         # Add timestamp to the frame
         self._add_timestamp(frame_annotated)
+        # self.entry_logger.`send_annotated_frame`(frame_annotated, engine.args.cam_type)
 
         # Send annotated frame to API
-        self.entry_logger.send_annotated_frame(frame_annotated, camera_idx, engine.args.cam_type)
+        # self.entry_logger.send_annotated_frame(frame_annotated, camera_idx, engine.args.cam_type)
 
         return frame_annotated
 
@@ -424,31 +291,7 @@ class HBFace:
     def _cleanup(self) -> None:
         """Cleanup resources and finalize the face recognition system."""
         # Release resources and perform final recognition on remaining tracks
-        if not self.use_multiprocessing:
-            self._process_rest_tracks()
-
-        # Terminate worker processes
-        if self.use_multiprocessing:
-            logger.info("Terminating worker processes...")
-            # Send poison pills to worker processes
-            for input_queue in self.input_queues:
-                input_queue.put(None)
-
-            # Wait for workers to finish
-            for worker in self.worker_processes:
-                worker.join(timeout=5)
-                if worker.is_alive():
-                    logger.warning(f"Force terminating worker process {worker.pid}")
-                    worker.terminate()
-                    worker.join()
-
-            # Close queues
-            for input_queue in self.input_queues:
-                input_queue.close()
-                input_queue.join_thread()
-            if self.output_queue:
-                self.output_queue.close()
-                self.output_queue.join_thread()
+        self._process_rest_tracks()
 
         # Stop streams and release video writers
         for stream in self.streams:

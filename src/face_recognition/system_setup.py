@@ -120,6 +120,7 @@ class FaceSetup:
             index: Camera index (for multi-camera setup)
         """
         args.cam_type = cam_type
+        args.camera_index = index if index is not None else 0
 
         # Handle ROI configuration
         if hasattr(args, 'roi') and args.roi is not None:
@@ -135,32 +136,27 @@ class FaceSetup:
         else:
             args.line_points = None
 
-        # Handle match_threshold configuration (can be single value or list)
-        if hasattr(args, 'match_threshold') and isinstance(args.match_threshold, list):
-            if index is not None and index < len(args.match_threshold):
+        # Handle match_threshold configuration
+        if hasattr(args, 'match_threshold') and args.match_threshold is not None:
+            if index is not None and isinstance(args.match_threshold, (list, tuple)) and len(args.match_threshold) > index:
                 args.match_threshold = args.match_threshold[index]
-            else:
-                # Use default if list is too short
-                args.match_threshold = 0.3
-                logger.warning(f"match_threshold list is too short for camera index {index}, using default 0.3")
-
-        # Handle camera_names configuration
-        if hasattr(args, 'camera_names') and args.camera_names is not None:
-            if index is not None and isinstance(args.camera_names, (list, tuple)) and len(args.camera_names) > index:
-                args.camera_name = args.camera_names[index]
-            else:
-                args.camera_name = f"Camera_{index}" if index is not None else "Camera_0"
         else:
-            args.camera_name = f"Camera_{index}" if index is not None else "Camera_0"
+            # Default threshold if not specified
+            args.match_threshold = 0.3
 
-        # Handle camera_ids configuration
-        if hasattr(args, 'camera_ids') and args.camera_ids is not None:
-            if index is not None and isinstance(args.camera_ids, (list, tuple)) and len(args.camera_ids) > index:
-                args.camera_id = args.camera_ids[index]
-            else:
-                args.camera_id = str(index) if index is not None else "0"
+        # Handle camera_name configuration
+        if hasattr(args, 'camera_name') and args.camera_name is not None:
+            if index is not None and isinstance(args.camera_name, (list, tuple)) and len(args.camera_name) > index:
+                args.camera_name = args.camera_name[index]
         else:
-            args.camera_id = str(index) if index is not None else "0"
+            args.camera_name = "Unknown"
+
+        # Handle camera_id configuration
+        if hasattr(args, 'camera_id') and args.camera_id is not None:
+            if index is not None and isinstance(args.camera_id, (list, tuple)) and len(args.camera_id) > index:
+                args.camera_id = args.camera_id[index]
+        else:
+            args.camera_id = None
 
         # Initialize stream and engine
         stream_handler = StreamHandler(vid_path, args.logger)
