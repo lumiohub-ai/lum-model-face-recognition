@@ -14,6 +14,9 @@ from .visualize import Visualization
 from .stream_handler import StreamHandler
 from .entry_logger import EntryLogger
 
+# Initialize camera processor for dashboard streaming
+from .camera_processor import setup_cameras as init_camera_processor
+
 
 class FaceSetup:
     """Handles system configuration and initialization for the face recognition system."""
@@ -38,6 +41,13 @@ class FaceSetup:
         self.config_path = config_path
         self.client_slug = kwargs.get('client_slug', 'default_client')
         self.FR_SLUG = os.getenv("FR_SLUG", "face-recognition")
+
+        # Initialize camera processor for dashboard streaming
+        try:
+            init_camera_processor()
+            logger.info("Camera processor initialized for dashboard streaming")
+        except Exception as e:
+            logger.warning(f"Failed to initialize camera processor: {e}")
 
         # Configure logger (pass client_slug directly)
         self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True), self.client_slug)

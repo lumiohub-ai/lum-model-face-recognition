@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from loguru import logger
 import datetime
 import pytz  # For timezone support
+import threading
 
 # Local imports
 from .engine import FaceEngine
@@ -50,6 +51,25 @@ class HBFace:
 
         # Get timezone from config, default to UTC if not specified
         self.timezone = getattr(self.config, 'timezone', 'UTC')
+
+        # Start dashboard in background thread
+        self._start_dashboard_thread()
+
+    def _start_dashboard_thread(self) -> None:
+        """Start the FastAPI dashboard in a background thread."""
+        try:
+            # Import and start dashboard
+            from .backend import run_server
+
+            dashboard_thread = threading.Thread(target=run_server, daemon=True, name="DashboardThread")
+            dashboard_thread.start()
+
+            dashboard_port = os.getenv("DASHBOARD_PORT", "5001")
+            logger.info(f"Dashboard started in background thread on http://0.0.0.0:{dashboard_port}")
+
+        except Exception as e:
+            logger.warning(f"Failed to start dashboard: {e}")
+            logger.warning("Face recognition will continue without dashboard")
 
     def run(self) -> None:
         """Run the face recognition system and process video streams."""
@@ -168,10 +188,9 @@ class HBFace:
 
         # Add timestamp to the frame
         self._add_timestamp(frame_annotated)
-        # self.entry_logger.`send_annotated_frame`(frame_annotated, engine.args.cam_type)
 
         # Send annotated frame to API
-        # self.entry_logger.send_annotated_frame(frame_annotated, camera_idx, engine.args.cam_type)
+        self.entry_logger.send_annotated_frame(frame_annotated, engine.args.cam_type, engine.args.camera_id)
 
         return frame_annotated
 

@@ -10,6 +10,8 @@ import requests
 from typing import Optional, Dict ,List, Any
 from datetime import datetime, timezone
 
+from .camera_processor import get_camera_processor
+
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
 
@@ -64,6 +66,9 @@ class EntryLogger:
 
         self.new_users, self.deleted_users, self.name_to_id = self.get_all_users()
         self.person_status = self.get_last_status()
+
+        # Get camera processor instance for dashboard streaming
+        self.camera_processor = get_camera_processor()
 
 
     def get_all_users(self):
@@ -480,20 +485,32 @@ class EntryLogger:
 
         return person_status
 
-    def send_annotated_frame(self, frame, camera_index, camera_type):
-        """Send annotated frame to the API.
+    def send_annotated_frame(self, frame, camera_type, camera_id):
+        """Send annotated frame to the API and push to dashboard stream.
 
         Args:
             frame: Annotated frame to send
-            camera_index: Camera index (0, 1, 2, etc.)
+            camera_id: Camera index (0, 1, 2, etc.)
             camera_type: Camera type (IN/OUT)
         Returns:
             Response object if successful, None otherwise
         """
-        if not self.token:
-            raise ValueError("Not authenticated. Please login first.")
+        # Push frame to dashboard stream (non-blocking)
+        if self.camera_processor is not None:
+            try:
+                # Use camera_id as the stream identifier for the dashboard
+                stream_id = f"camera_{camera_id}"
+                self.camera_processor.put_frame(stream_id, frame)
+            except Exception as e:
+                self.args.logger.debug(f"Failed to push frame to dashboard: {e}")
 
-        url = self.base_url + f'/{self.client_slug}/cameras/{camera_index}/{camera_type}'
+        # Continue with API upload (optional - disable if not needed)
+        # If you don't need to upload frames to external API, you can skip this
+        if not self.token:
+            self.args.logger.debug("Not authenticated for API upload, skipping")
+            return None
+
+        url = self.base_url + f'/{self.client_slug}/cameras/{camera_id}/{camera_type}'
         headers = {
             'Authorization': f'Bearer {self.token}'
         }
@@ -512,10 +529,10 @@ class EntryLogger:
             response = requests.post(url, headers=headers, files=files)
 
             if response.status_code not in [200, 201]:
-                self.args.logger.warning(f"Failed to send annotated frame with status {response.status_code}: {response.text}")
+                # self.args.logger.debug(f"API upload failed with status {response.status_code}: {response.text}")
                 return None
             return response
         except requests.exceptions.RequestException as e:
-            self.args.logger.error(f"Send annotated frame request failed: {str(e)}")
+            self.args.logger.debug(f"API upload request failed: {str(e)}")
             return None
 
