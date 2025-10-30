@@ -226,6 +226,13 @@ class FaceSetup:
 
         # Set default values
         args.save_video = getattr(args, "save_video", True)
+        args.save_recognized_frame = getattr(args, "save_recognized_frame", True)
+        args.record_always = getattr(args, "record_always", True)
+        args.show = getattr(args, "show", True)
+        args.debug = getattr(args, "debug", True)
+        args.production = getattr(args, "production", True)
+        args.partial_match_threshold = getattr(args, "partial_match_threshold", 0.15)
+        args.multi_camera = getattr(args, "multi_camera", True)
 
         # Add logger to args
         args.logger = logger

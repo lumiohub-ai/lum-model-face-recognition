@@ -55,7 +55,9 @@ class EntryLogger:
         if not os.path.exists(self.log_file_path) or os.path.getsize(self.log_file_path) == 0:
             self.args.logger.bind(is_csv=True).info("name,status,time,date")
 
-        self.base_url = args.api_host + 'api'
+        # Get API host from environment variable with fallback to args if set
+        api_host = os.getenv("API_HOST", getattr(args, 'api_host', "http://localhost:7091/"))
+        self.base_url = api_host + 'api'
         self.session = requests.Session()
         self.email = args.email
         self.password = args.password
