@@ -3,23 +3,24 @@
 import pickle
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, Any, List
 
 
 class FaceRecognition:
     """Face recognition class for managing face embeddings and performing identity matching.
-    
-    This class handles loading and updating face embeddings database, and provides 
+
+    This class handles loading and updating face embeddings database, and provides
     methods to recognize faces based on similarity comparison.
     """
     def __init__(self, args) -> None:
         """Initialize the face recognition system.
-        
+
         Args:
             args: Configuration arguments containing parameters for face recognition
         """
         self.args = args
-        self.db_names, self.db_embs = self.load_embeddings()      
+        self.db_names, self.db_embs = self.load_embeddings()
+        self._rebuild_name_index()      
 
     def load_embeddings(self):
         """Load face embeddings from the database file.
@@ -36,7 +37,27 @@ class FaceRecognition:
 
 
         return db_names, db_embs
-    
+
+    def _rebuild_name_index(self) -> None:
+        """Rebuild the name-to-index mapping for O(1) lookups.
+
+        This should be called whenever db_names is modified (add/delete operations).
+        """
+        self.name_to_index: Dict[str, int] = {
+            name: idx for idx, name in enumerate(self.db_names)
+        }
+
+    def get_index_by_name(self, name: str) -> Optional[int]:
+        """Get the database index for a given name in O(1) time.
+
+        Args:
+            name: Person's name to look up
+
+        Returns:
+            Index in the database, or None if not found
+        """
+        return self.name_to_index.get(name)
+
     def update_pkl(self):
         """Update the pickle file with the current embeddings and names."""
         data = {
@@ -195,25 +216,27 @@ class FaceRecognition:
 
         return recognition_info
 
-    def compute_similarities(self, face_embs):
+    def compute_similarities(self, face_embs: np.ndarray) -> np.ndarray:
         """Compute cosine similarities between input face embeddings and database embeddings.
-        
+
         Args:
-            face_embs: Face embeddings to compare
-            
+            face_embs: Face embeddings to compare (shape: [n_faces, embedding_dim])
+
         Returns:
-            Matrix of similarity scores
+            Matrix of similarity scores (shape: [n_faces, n_database_faces])
         """
         return cosine_similarity(face_embs, self.db_embs)
 
-    def get_best_match(self, similarities):
+    def get_best_match(self, similarities: np.ndarray) -> Tuple[int, float]:
         """Find the best matching face embedding from the database.
-        
+
         Args:
-            similarities: Matrix of similarity scores
-            
+            similarities: Matrix of similarity scores (shape: [n_faces, n_database_faces])
+
         Returns:
-            Tuple containing the index of the best match and its similarity score
+            Tuple of (best_match_index, similarity_score)
+            - best_match_index: Index of the best matching person in the database
+            - similarity_score: Cosine similarity score (0.0-1.0)
         """
         max_sim_indices = np.argmax(similarities, axis=1)
         max_sim_values = np.max(similarities, axis=1)
@@ -223,7 +246,7 @@ class FaceRecognition:
 
         return best_match_db_idx, best_similarity
 
-    def get_matched_frame_number(self, similarities, best_match_idx, frame_nums):
+    def get_matched_frame_number(self, similarities: np.ndarray, best_match_idx: int, frame_nums: List[int]) -> int:
         """
         Get the frame number (from user-provided list) that had the highest similarity
         to the best matched database entry.

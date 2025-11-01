@@ -1,11 +1,12 @@
 """Face database creation module for generating and saving face embeddings."""
 
 import os
+import pickle
+
 import cv2
 import numpy as np
-import pickle
-import argparse
-from insightface.app import FaceAnalysis
+from insightface.app import FaceAnalysis  # type: ignore
+from loguru import logger
 
 class Database:
     """Face database creator for generating and managing face embeddings.
@@ -42,9 +43,9 @@ class Database:
 
         # Check if input directory exists
         if not os.path.exists(input_dir):
-            print(f"❌ Input directory '{input_dir}' does not exist")
+            logger.error(f"Input directory '{input_dir}' does not exist")
             return None
-        
+
         # Process each image in the directory
         for file in os.listdir(input_dir):
             if not file.lower().endswith(('.jpg', '.jpeg', '.png')):
@@ -53,7 +54,7 @@ class Database:
             img_path = os.path.join(input_dir, file)
             img = cv2.imread(img_path)
             if img is None:
-                print(f"❌ Cannot read {file}")
+                logger.warning(f"Cannot read {file}")
                 continue
 
             # Convert to RGB for InsightFace
@@ -71,13 +72,13 @@ class Database:
                 name = os.path.splitext(file)[0]
                 known_embeddings.append(emb)
                 class_names.append(name)
-                print(f"✅ Detected {name} in {file}")
+                logger.info(f"Detected {name} in {file}")
 
             else:
-                print(f"⚠️ No face detected in {file}")
+                logger.warning(f"No face detected in {file}")
 
         if not known_embeddings:
-            print("⚠️ No faces detected in any image")
+            logger.warning("No faces detected in any image")
             return None
 
         # Create data dictionary
@@ -89,6 +90,6 @@ class Database:
         # Save to output file
         with open(output_file, 'wb') as f:
             pickle.dump(data, f)
-        print(f"✅ Saved face embeddings to {output_file}")
+        logger.info(f"Saved face embeddings to {output_file}")
         
         return data

@@ -1,4 +1,4 @@
-from face_recognition import HBFace
+from face_recognition import HBFace  # Main entry point - now using refactored modular architecture
 import os
 from dotenv import load_dotenv
 
@@ -11,6 +11,8 @@ out_camera = os.getenv("HB_OUT")
 email = os.getenv("SA_EMAIL")
 password = os.getenv("SA_PASSWORD")
 client_slug = os.getenv("HB_CLIENTSLUG")
+
+print("New version")
 
 face_engine_multi = HBFace(
     cam_types=["IN", "OUT"], # camera

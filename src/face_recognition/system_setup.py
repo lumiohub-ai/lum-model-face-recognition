@@ -9,13 +9,13 @@ from datetime import datetime
 from typing import List, Optional, Union, Any
 
 # Local imports
-from .engine import FaceEngine
-from .visualize import Visualization
-from .stream_handler import StreamHandler
-from .entry_logger import EntryLogger
+from .core.engine import FaceEngine
+from .dashboard.visualizer import Visualization
+from .video.stream_handler import StreamHandler
+from .logging.entry_logger import EntryLogger
 
 # Initialize camera processor for dashboard streaming
-from .camera_processor import setup_cameras as init_camera_processor
+from .dashboard.camera_processor import setup_cameras as init_camera_processor
 
 
 class FaceSetup:

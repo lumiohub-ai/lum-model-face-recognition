@@ -6,6 +6,9 @@ services:
       dockerfile: Dockerfile
     network_mode: host
     volumes:
+      # Source code directories (hot-reload without rebuild)
+      - ./modules:/app/face-recognition/modules
+      # Configuration and data directories
       - ./data:/app/face-recognition/data
       - ./configs:/app/face-recognition/configs
       - ./examples:/app/face-recognition/examples
