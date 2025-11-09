@@ -113,8 +113,10 @@ class FrameProcessor:
                     save_recognized_callback,
                     save_recognized_enabled
                 )
-            elif recognized_status in ('unrecognized', 'partial_match'):
-                self._handle_unrecognized_person(image, camera_type)
+            elif recognized_status == 'unrecognized':
+                # Only send if image is valid (not None)
+                if image is not None:
+                    self._handle_unrecognized_person(image, camera_type)
 
     def _handle_recognized_person(
         self,

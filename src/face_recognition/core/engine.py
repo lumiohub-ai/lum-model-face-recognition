@@ -406,11 +406,6 @@ class FaceEngine:
                 f"[{timestamp}] UNRECOGNIZED | Track ID: {track_id} | "
                 f"Best Match: {name} ({sim:.2f}) | Camera: {camera_name}"
             )
-        elif recognized_status == 'partial_match':
-            self.args.logger.info(
-                f"[{timestamp}] PARTIAL_MATCH | Track ID: {track_id} | "
-                f"Best Match: {name} ({sim:.2f}) | Camera: {camera_name}"
-            )
 
     def _get_recognition_image(
         self,
@@ -433,6 +428,13 @@ class FaceEngine:
             return self.track_manager.get_track_frame(track_id, matched_frame_num)
 
         elif recognized_status == 'unrecognized':
+            # If no valid frontal frame was found, skip sending
+            if matched_frame_num is None:
+                self.args.logger.debug(
+                    f"Skipping unrecognized face {track_id} - no valid frontal frames found"
+                )
+                return None
+
             image = self.track_manager.get_track_crop(track_id, matched_frame_num)
 
             # Validate landmarks for unrecognized faces
@@ -441,8 +443,7 @@ class FaceEngine:
 
             return image
 
-        else:  # partial_match
-            return self.track_manager.get_track_crop(track_id, matched_frame_num)
+        return None
 
     def _validate_unrecognized_face_landmarks(
         self,

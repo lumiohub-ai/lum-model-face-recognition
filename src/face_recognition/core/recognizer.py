@@ -197,8 +197,6 @@ class FaceRecognition:
         recognized = 'unrecognized'
         if best_similarity >= self.args.match_threshold:
             recognized = 'recognized'
-        elif best_similarity >= self.args.partial_match_threshold:
-            recognized = 'partial_match'
 
         # Choose matched frame based on recognition status
         if recognized == 'unrecognized' and landmarks_dict:
@@ -256,7 +254,7 @@ class FaceRecognition:
 
         return frame_nums[best_query_idx]
 
-    def get_most_frontal_frame(self, landmarks_dict: Dict[int, np.ndarray], frame_nums: list) -> int:
+    def get_most_frontal_frame(self, landmarks_dict: Dict[int, np.ndarray], frame_nums: list) -> Optional[int]:
         """Get the frame number with the most frontal face based on landmarks.
         Only considers frames with valid frontal faces.
 
@@ -265,9 +263,9 @@ class FaceRecognition:
             frame_nums: List of available frame numbers
 
         Returns:
-            Frame number with the highest frontality score
+            Frame number with the highest frontality score, or None if no valid frontal faces found
         """
-        best_frame_num = frame_nums[0]  # Default to first frame
+        best_frame_num = None
         best_frontality_score = -1.0
 
         for frame_num in frame_nums:

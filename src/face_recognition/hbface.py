@@ -236,7 +236,7 @@ class HBFace:
         """Process remaining tracks after video stream ends."""
         for engine in self.engines:
             persons_recognized = engine.recognize_removed_tracks([], last_frame=True)
-            # Log any final recognized persons (unrecognized/partial_match already logged in engine.py)
+            # Log any final recognized persons
             for name, (track_id, appear_time, recognized, image, recognition_info) in persons_recognized.items():
                 status = engine.args.cam_type
                 camera_name = engine.args.camera_name
@@ -247,11 +247,9 @@ class HBFace:
                     if self.engines[0].args.save_recognized_frame and recorded:
                         self.save_recognized_frame(name, image, status)
                 elif recognized == 'unrecognized':
-                    # Send to API (already logged in engine.py before validation)
-                    self.entry_logger.send_unrecognized_face(face = image, status=status)
-                else:
-                    # partial_match - send to API (already logged in engine.py before validation)
-                    self.entry_logger.send_unrecognized_face(face = image, status=status)
+                    # Send to API only if image is valid (None check)
+                    if image is not None:
+                        self.entry_logger.send_unrecognized_face(face=image, status=status)
 
     def save_recognized_frame(self, name: str, image: NDArray, status: str) -> None:
         """Save recognized frame to the specified directory.
