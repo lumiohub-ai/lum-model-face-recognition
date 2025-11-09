@@ -1,6 +1,8 @@
-"""REST API for face recognition model management."""
+"""REST API for face recognition model management using FastAPI."""
 
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Dict, List, Optional
 import logging
 import os
 import json
@@ -13,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from face_recognition.database import Database
 from face_recognition.engine import FaceEngine
 
-app = Flask(__name__)
+app = FastAPI(title="Face Recognition API", version="1.0.0")
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -24,75 +26,85 @@ logger = logging.getLogger(__name__)
 active_engines = {}
 
 
-@app.route('/api/v1/embeddings/update', methods=['POST'])
-def update_embeddings():
+# Pydantic models for request/response validation
+class UserData(BaseModel):
+    id: int
+    full_name: str
+    external_id: Optional[str] = None
+    image_urls: List[str]
+
+
+class EmbeddingUpdateRequest(BaseModel):
+    action: str  # 'add_user', 'update_user', 'delete_user'
+    client_slug: str
+    user_data: UserData
+
+
+class RebuildRequest(BaseModel):
+    client_slug: str
+
+
+class HealthResponse(BaseModel):
+    status: str
+    active_clients: List[str]
+    total_embeddings: Dict[str, int]
+
+
+@app.post("/api/v1/embeddings/update")
+async def update_embeddings(request: EmbeddingUpdateRequest):
     """Handle incremental embedding updates for individual users."""
     try:
-        data = request.json
-        action = data.get('action')  # 'add_user', 'update_user', 'delete_user'
-        client_slug = data.get('client_slug')
-        user_data = data.get('user_data')
-
-        if not all([action, client_slug, user_data]):
-            return jsonify({'error': 'Missing required fields: action, client_slug, user_data'}), 400
-
-        logger.info(f"📥 Received {action} request for client {client_slug}, user: {user_data.get('full_name')}")
+        logger.info(f"📥 Received {request.action} request for client {request.client_slug}, user: {request.user_data.full_name}")
 
         # Get or create engine for this client
-        engine = _get_or_create_engine(client_slug)
+        engine = _get_or_create_engine(request.client_slug)
 
-        if action == 'add_user':
+        if request.action == 'add_user':
             new_users = [{
-                'name': user_data['full_name'],
-                'image_path': json.dumps(user_data['image_urls']),  # JSON array of GCS URLs
+                'name': request.user_data.full_name,
+                'image_path': json.dumps(request.user_data.image_urls),  # JSON array of GCS URLs
             }]
             engine.update_database(new_users=new_users, deleted_users=[])
-            logger.info(f"✅ Added user {user_data['full_name']} to database")
+            logger.info(f"✅ Added user {request.user_data.full_name} to database")
 
-        elif action == 'update_user':
+        elif request.action == 'update_user':
             # Delete old embeddings, add new ones
-            deleted_users = [user_data['full_name']]
+            deleted_users = [request.user_data.full_name]
             new_users = [{
-                'name': user_data['full_name'],
-                'image_path': json.dumps(user_data['image_urls']),
+                'name': request.user_data.full_name,
+                'image_path': json.dumps(request.user_data.image_urls),
             }]
             engine.update_database(new_users=new_users, deleted_users=deleted_users)
-            logger.info(f"✅ Updated user {user_data['full_name']} embeddings")
+            logger.info(f"✅ Updated user {request.user_data.full_name} embeddings")
 
-        elif action == 'delete_user':
-            deleted_users = [user_data['full_name']]
+        elif request.action == 'delete_user':
+            deleted_users = [request.user_data.full_name]
             engine.update_database(new_users=[], deleted_users=deleted_users)
-            logger.info(f"✅ Deleted user {user_data['full_name']} from database")
+            logger.info(f"✅ Deleted user {request.user_data.full_name} from database")
         else:
-            return jsonify({'error': f'Invalid action: {action}'}), 400
+            raise HTTPException(status_code=400, detail=f'Invalid action: {request.action}')
 
-        return jsonify({
+        return {
             'success': True,
-            'message': f'Successfully processed {action} for {user_data["full_name"]}',
+            'message': f'Successfully processed {request.action} for {request.user_data.full_name}',
             'embedding_count': len(engine.face_recognition.db_embs),
-            'client_slug': client_slug
-        })
+            'client_slug': request.client_slug
+        }
 
     except Exception as e:
         logger.error(f"❌ Error updating embeddings: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/v1/embeddings/rebuild', methods=['POST'])
-def rebuild_database():
+@app.post("/api/v1/embeddings/rebuild")
+async def rebuild_database(request: RebuildRequest):
     """Rebuild entire face database for a client."""
     try:
-        data = request.json
-        client_slug = data.get('client_slug')
-
-        if not client_slug:
-            return jsonify({'error': 'client_slug required'}), 400
-
-        logger.info(f"🔨 Rebuilding database for {client_slug}")
+        logger.info(f"🔨 Rebuilding database for {request.client_slug}")
 
         # For now, just reload existing pickle file
         # In production, you would fetch all users from backend API here
-        engine = _get_or_create_engine(client_slug)
+        engine = _get_or_create_engine(request.client_slug)
 
         # Reload embeddings from pickle file
         engine.face_recognition.db_names, engine.face_recognition.db_embs = \
@@ -100,32 +112,32 @@ def rebuild_database():
 
         logger.info(f"✅ Reloaded database with {len(engine.face_recognition.db_embs)} embeddings")
 
-        return jsonify({
+        return {
             'success': True,
-            'message': f'Rebuilt database for {client_slug}',
+            'message': f'Rebuilt database for {request.client_slug}',
             'embedding_count': len(engine.face_recognition.db_embs),
             'database_path': engine.face_recognition.args.db_path
-        })
+        }
 
     except Exception as e:
         logger.error(f"❌ Error rebuilding database: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/v1/health', methods=['GET'])
-def health_check():
+@app.get("/api/v1/health", response_model=HealthResponse)
+async def health_check():
     """Health check endpoint."""
-    return jsonify({
-        'status': 'healthy',
-        'active_clients': list(active_engines.keys()),
-        'total_embeddings': {
+    return HealthResponse(
+        status='healthy',
+        active_clients=list(active_engines.keys()),
+        total_embeddings={
             client: len(engine.face_recognition.db_embs)
             for client, engine in active_engines.items()
         }
-    })
+    )
 
 
-def _get_or_create_engine(client_slug):
+def _get_or_create_engine(client_slug: str) -> FaceEngine:
     """Get existing engine or create new one for client."""
     if client_slug not in active_engines:
         logger.info(f"🔧 Creating new FaceEngine for client: {client_slug}")
@@ -134,7 +146,7 @@ def _get_or_create_engine(client_slug):
     return active_engines[client_slug]
 
 
-def _create_args_for_client(client_slug):
+def _create_args_for_client(client_slug: str) -> argparse.Namespace:
     """Create configuration args for a client's face engine."""
     args = argparse.Namespace()
     args.client_slug = client_slug
@@ -177,8 +189,10 @@ def _create_args_for_client(client_slug):
 
 
 if __name__ == '__main__':
+    import uvicorn
+
     port = int(os.getenv('FR_PORT', '8000'))
     debug = os.getenv('DEBUG', 'false').lower() == 'true'
 
     logger.info(f"🚀 Starting Face Recognition API on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    uvicorn.run(app, host='0.0.0.0', port=port, log_level='info')
