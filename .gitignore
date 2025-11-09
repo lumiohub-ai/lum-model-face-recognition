@@ -311,4 +311,4 @@ logs/**
 models/**
 recorded_videos/**
 compose.override.yml
-volumes/**
+volumes/**modules/yolo_tracking/
