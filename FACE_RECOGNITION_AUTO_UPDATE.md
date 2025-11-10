@@ -286,14 +286,36 @@ face-recognition:
 
 ### 1. Test API with Jupyter Notebook
 
-Use `notebooks/test_fr_api.ipynb` to test the face recognition API:
+Use `notebooks/api.ipynb` for comprehensive testing:
 
+**Face Recognition Model Update Tests (Cells 31-44):**
+- **Cell 31-32**: Setup and Health Check
+- **Cell 33-34**: Add User to FR Model
+- **Cell 35-36**: Update User Embeddings
+- **Cell 37-38**: Delete User from FR Model
+- **Cell 39-40**: Rebuild Entire Database
+- **Cell 41-42**: End-to-End Integration Test
+
+**Unrecognized Faces Tests (Cells 45-49):**
+- **Cell 45-46**: Setup for Unrecognized Faces
+- **Cell 47**: Upload Unrecognized Face
+- **Cell 48**: List and Verify Signed URLs
+- **Cell 49**: Retention Cleanup Testing
+
+Quick example - Health Check:
 ```python
 import requests
 
-# Update embeddings
+FR_API_BASE = "http://localhost:8000"
+
+# Check health
+response = requests.get(f"{FR_API_BASE}/api/v1/health")
+print(response.json())
+# Output: {"status": "healthy", "active_clients": ["humblebee"], "total_embeddings": {"humblebee": 150}}
+
+# Add user
 response = requests.post(
-    'http://localhost:8000/api/v1/embeddings/update',
+    f'{FR_API_BASE}/api/v1/embeddings/update',
     json={
         'action': 'add_user',
         'client_slug': 'humblebee',
@@ -304,10 +326,6 @@ response = requests.post(
         }
     }
 )
-print(response.json())
-
-# Check health
-response = requests.get('http://localhost:8000/api/v1/health')
 print(response.json())
 ```
 
@@ -332,7 +350,24 @@ print(response.json())
 
 ### 3. Test Unrecognized Faces
 
-Use `notebooks/api.ipynb` - Section "Unrecognized Faces API Tests" to test the unrecognized face upload functionality which is preserved in this integration.
+Use `notebooks/api.ipynb` - **Cells 45-49 "Unrecognized Faces API Tests"**:
+
+```python
+# Cell 45-46: Setup
+UNREC_API_BASE = "http://localhost:7091"
+UNREC_SLUG = "humblebee"
+
+# Cell 47: Upload unrecognized face
+upload_unrecognized_face(image_path="/path/to/face.jpg")
+
+# Cell 48: List and verify signed URLs
+list_and_verify_unrecognized_faces(limit=5)
+
+# Cell 49: Test retention cleanup (create faces with old dates)
+create_test_unrecognized_face_with_date(days_old=95, label="TEST")
+```
+
+This tests the complete unrecognized faces workflow including signed URL generation and retention cleanup.
 
 ## Key Features
 
@@ -366,6 +401,10 @@ Use `notebooks/api.ipynb` - Section "Unrecognized Faces API Tests" to test the u
 - [x] Refactored codebase integration (feat/refactor merged)
 - [x] Multi-client support
 - [x] Unrecognized faces API preserved
+- [x] Comprehensive testing notebook with 50 cells
+  - Backend API tests (cells 0-30)
+  - FR model update tests (cells 31-44)
+  - Unrecognized faces tests (cells 45-49)
 
 ### ⏳ Future Enhancements
 - [ ] PostgreSQL LISTEN directly in FR service (alternative to HTTP)
@@ -430,10 +469,16 @@ For questions about this integration:
 
 ## Changelog
 
-### 2025-11-10 (Latest)
+### 2025-11-10 (Latest Update)
+- **Added comprehensive testing notebook** (`notebooks/api.ipynb` with 50 cells)
+  - Face Recognition Model Update Tests (cells 31-44)
+  - Unrecognized Faces Tests (cells 45-49) - RESTORED
+- Updated documentation with detailed notebook cell references
+- Ready for AI team testing and development
+
+### 2025-11-10 (Earlier)
 - Merged `feat/refactor` branch with refactored codebase structure
 - Updated `src/web/api.py` to use new imports from refactored modules
-- Preserved unrecognized faces API testing in `notebooks/api.ipynb`
 - Documented complete integration for AI team handoff
 
 ### 2025-11-09
