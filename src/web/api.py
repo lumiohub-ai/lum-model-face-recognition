@@ -12,8 +12,8 @@ import argparse
 # Add parent directory to path to import face_recognition modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from face_recognition.database import Database
-from face_recognition.engine import FaceEngine
+from face_recognition.storage import Database
+from face_recognition.core import FaceEngine
 
 app = FastAPI(title="Face Recognition API", version="1.0.0")
 logging.basicConfig(
