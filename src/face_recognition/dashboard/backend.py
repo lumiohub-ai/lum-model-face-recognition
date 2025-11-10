@@ -3,16 +3,19 @@ FastAPI backend - Production-ready video streaming server for face recognition d
 Supports global deployment with CORS, async streaming, and proper error handling
 """
 import asyncio
-import cv2
-import time
 import os
+import time
+from contextlib import asynccontextmanager
 from typing import List
-from fastapi import FastAPI, Response, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+
+import cv2
+import uvicorn
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from contextlib import asynccontextmanager
-import uvicorn
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from loguru import logger
+
 from .camera_processor import setup_cameras
 
 # Cleanup task
@@ -24,8 +27,8 @@ async def lifespan(app: FastAPI):
     global cleanup_task
 
     # Startup
-    print("🚀 Starting FastAPI dashboard server...")
-    print(f"📊 Dashboard: http://0.0.0.0:{os.getenv('DASHBOARD_PORT', '5000')}")
+    logger.info("🚀 Starting FastAPI dashboard server...")
+    logger.info(f"📊 Dashboard: http://0.0.0.0:{os.getenv('DASHBOARD_PORT', '5000')}")
 
     # Start background cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup())
@@ -33,7 +36,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    print("🛑 Shutting down dashboard server...")
+    logger.info("🛑 Shutting down dashboard server...")
     if cleanup_task:
         cleanup_task.cancel()
         try:
@@ -80,7 +83,7 @@ async def periodic_cleanup():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"Error in cleanup task: {e}")
+            logger.error(f"Error in cleanup task: {e}", exc_info=True)
 
 
 async def generate_stream(camera_id: str):
@@ -96,12 +99,16 @@ async def generate_stream(camera_id: str):
     max_failures = int(os.getenv("MAX_STREAM_FAILURES", "50"))
 
     try:
+        target_fps = int(os.getenv("TARGET_FPS", "30"))
+        frame_delay = 1.0 / target_fps
+        jpeg_quality = int(os.getenv("JPEG_QUALITY", "85"))
+
         while consecutive_failures < max_failures:
             frame = camera_processor.get_frame(camera_id)
 
             if frame is None:
                 consecutive_failures += 1
-                await asyncio.sleep(0.1)  # Non-blocking wait
+                await asyncio.sleep(0.01)  # Reduced from 0.1 for faster retry
                 continue
 
             consecutive_failures = 0  # Reset on successful frame
@@ -110,7 +117,7 @@ async def generate_stream(camera_id: str):
             ret, buffer = cv2.imencode(
                 '.jpg',
                 frame,
-                [cv2.IMWRITE_JPEG_QUALITY, int(os.getenv("JPEG_QUALITY", "85"))]
+                [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
             )
 
             if not ret:
@@ -122,12 +129,12 @@ async def generate_stream(camera_id: str):
                    buffer.tobytes() + b'\r\n')
 
             # Target FPS control
-            await asyncio.sleep(1.0 / int(os.getenv("TARGET_FPS", "30")))
+            await asyncio.sleep(frame_delay)
 
     except asyncio.CancelledError:
-        print(f"Stream cancelled for camera: {camera_id}")
+        logger.debug(f"Stream cancelled for camera: {camera_id}")
     except Exception as e:
-        print(f"Error in stream generation for {camera_id}: {e}")
+        logger.error(f"Error in stream generation for {camera_id}: {e}", exc_info=True)
 
 
 @app.get("/", response_class=FileResponse)
@@ -137,11 +144,24 @@ async def index():
     Returns:
         HTML dashboard page
     """
-    # frontend.html is in project root, go up two levels from src/face_recognition/
-    frontend_path = os.path.join(os.path.dirname(__file__), "../..", "frontend.html")
+    # Look for frontend.html in multiple possible locations
+    possible_paths = [
+        os.getenv("FRONTEND_PATH", "/app/face-recognition/frontend.html"),  # Docker path
+        os.path.join(os.path.dirname(__file__), "../..", "frontend.html"),  # Relative from source
+        "frontend.html",  # Current directory
+    ]
 
-    if not os.path.exists(frontend_path):
-        raise HTTPException(status_code=404, detail="Frontend not found")
+    frontend_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            frontend_path = path
+            break
+
+    if not frontend_path:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frontend not found. Searched: {possible_paths}"
+        )
 
     return FileResponse(frontend_path)
 
@@ -237,25 +257,3 @@ def run_server():
         log_level="error",  # Only show errors to reduce log clutter
         access_log=False,
     )
-
-
-def main():
-    """Run the FastAPI server with uvicorn (for standalone execution)"""
-    port = int(os.getenv("DASHBOARD_PORT", "5001"))
-    host = os.getenv("DASHBOARD_HOST", "0.0.0.0")
-    workers = int(os.getenv("WORKERS", "1"))
-
-    uvicorn.run(
-        "backend:app",
-        host=host,
-        port=port,
-        workers=workers,
-        log_level="info",
-        access_log=True,
-        proxy_headers=True,  # Important for deployment behind reverse proxy
-        forwarded_allow_ips="*",  # Trust proxy headers (configure for production)
-    )
-
-
-if __name__ == "__main__":
-    main()

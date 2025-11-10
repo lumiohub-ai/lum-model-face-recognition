@@ -19,16 +19,18 @@ class CameraProcessor:
     the face recognition pipeline and the streaming server in the same process.
     """
 
-    def __init__(self, max_frame_age: float = 2.0):
+    def __init__(self, max_frame_age: float = 2.0, store_compressed: bool = True):
         """Initialize the camera processor.
 
         Args:
             max_frame_age: Maximum age of frames in seconds before they're considered stale
+            store_compressed: If True, store frames as compressed JPEG to save memory
         """
         self.max_frame_age = max_frame_age
+        self.store_compressed = store_compressed
         self.frame_queues: Dict[str, Tuple[np.ndarray, float]] = {}
         self.locks: Dict[str, Lock] = defaultdict(Lock)
-        logger.info("CameraProcessor initialized with in-memory frame storage")
+        logger.info(f"CameraProcessor initialized with in-memory frame storage (compressed={store_compressed})")
 
     def put_frame(self, camera_id: str, frame: np.ndarray) -> bool:
         """Store a frame for a specific camera.
@@ -44,15 +46,20 @@ class CameraProcessor:
             if frame is None or frame.size == 0:
                 return False
 
-            # Encode frame as JPEG to save memory
-            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if not ret:
-                logger.warning(f"Failed to encode frame for camera {camera_id}")
-                return False
+            # Store frame (compressed or raw depending on setting)
+            if self.store_compressed:
+                # Encode frame as JPEG to save memory
+                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if not ret:
+                    logger.warning(f"Failed to encode frame for camera {camera_id}")
+                    return False
 
-            # Store compressed frame with timestamp
-            with self.locks[camera_id]:
-                self.frame_queues[camera_id] = (buffer, time.time())
+                with self.locks[camera_id]:
+                    self.frame_queues[camera_id] = (buffer, time.time())
+            else:
+                # Store raw frame for faster streaming (no decode/re-encode)
+                with self.locks[camera_id]:
+                    self.frame_queues[camera_id] = (frame.copy(), time.time())
 
             return True
 
@@ -74,15 +81,19 @@ class CameraProcessor:
                 if camera_id not in self.frame_queues:
                     return None
 
-                buffer, timestamp = self.frame_queues[camera_id]
+                data, timestamp = self.frame_queues[camera_id]
 
                 # Check if frame is too old
                 if time.time() - timestamp > self.max_frame_age:
                     logger.debug(f"Frame for camera {camera_id} is stale")
                     return None
 
-                # Decode JPEG back to frame
-                frame = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+                # Decode JPEG if compressed, otherwise return raw frame
+                if self.store_compressed:
+                    frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                else:
+                    frame = data
+
                 return frame
 
         except Exception as e:
@@ -128,7 +139,8 @@ def setup_cameras() -> CameraProcessor:
     """
     global _camera_processor_instance
     if _camera_processor_instance is None:
-        _camera_processor_instance = CameraProcessor()
+        # Disable compression for faster streaming (avoid double JPEG encoding)
+        _camera_processor_instance = CameraProcessor(store_compressed=False)
     return _camera_processor_instance
 
 
