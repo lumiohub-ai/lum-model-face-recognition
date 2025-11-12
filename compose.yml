@@ -6,11 +6,15 @@ services:
       dockerfile: Dockerfile
     network_mode: host
     volumes:
+      # Source code directories (hot-reload without rebuild)
+      - ./modules:/app/face-recognition/modules
+      # Configuration and data directories
       - ./data:/app/face-recognition/data
       - ./configs:/app/face-recognition/configs
       - ./examples:/app/face-recognition/examples
       - ./volumes/storage/face-recognition/logs:/app/volumes/storage/face-recognition/logs
       - ./volumes/storage/face-recognition/data:/app/volumes/storage/face-recognition/data
+      - ./frontend.html:/app/face-recognition/frontend.html
     working_dir: /app/face-recognition
     environment:
       - FR_SLUG=${FR_SLUG:-"face-recognition"}
@@ -19,7 +23,13 @@ services:
       - HB_IN=${HB_IN:-"rtsp://username:password@camera_ip:554/stream"}
       - HB_IN_MANAGEMENT=${HB_IN_MANAGEMENT:-"rtsp://username:password@camera_ip:554/stream"}
       - HB_OUT=${HB_OUT:-"rtsp://username:password@camera_ip:554/stream"}
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-5001}
+      - DASHBOARD_HOST=${DASHBOARD_HOST:-0.0.0.0}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - JPEG_QUALITY=${JPEG_QUALITY:-85}
+      - TARGET_FPS=${TARGET_FPS:-30}
     ports:
       - ${FR_PORT:-5000}:${FR_PORT:-5000}
+      - ${DASHBOARD_PORT:-5001}:${DASHBOARD_PORT:-5001}
     env_file:
       - .env

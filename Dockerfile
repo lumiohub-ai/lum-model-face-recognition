@@ -67,13 +67,15 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 
-RUN	--mount=type=cache,target=/root/.cache,sharing=locked \
-	/opt/conda/bin/pip install --timeout 600 ./modules/insightface && \
-	/opt/conda/bin/pip install --timeout 600 ./modules/yolo_tracking && \
-	/opt/conda/bin/pip install --timeout 600 . && \
-	/opt/conda/bin/pip install --timeout 600 -r ./requirements.txt
+# Configure pip to use alternative PyPI mirrors with fallback
+RUN /opt/conda/bin/pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    /opt/conda/bin/pip config set global.extra-index-url "https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/"
 
-
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/insightface && \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/yolo_tracking && \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 . && \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 -r ./requirements.txt
 ## Here is the base image:
 FROM ${BASE_IMAGE} AS base
 

@@ -11,8 +11,9 @@ import datetime
 import pytz  # For timezone support
 
 # Local imports
-from .engine import FaceEngine
+from .core.engine import FaceEngine
 from .system_setup import FaceSetup
+from .video.frame_processor import FrameProcessor
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
@@ -51,6 +52,9 @@ class HBFace:
         # Get timezone from config, default to UTC if not specified
         self.timezone = getattr(self.config, 'timezone', 'UTC')
 
+        # Initialize frame processor
+        self.frame_processor = FrameProcessor(self.entry_logger, self.timezone)
+
     def run(self) -> None:
         """Run the face recognition system and process video streams."""
         try:
@@ -88,8 +92,17 @@ class HBFace:
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
 
+        except cv2.error as e:
+            logger.error(f"OpenCV error during processing: {e}", exc_info=True)
+            raise
+
+        except OSError as e:
+            logger.error(f"File system error during processing: {e}", exc_info=True)
+            raise
+
         except Exception as e:
-            logger.error(f"Error during processing: {e}")
+            logger.error(f"Unexpected error during processing: {e}", exc_info=True)
+            raise
 
         finally:
             self._cleanup()
@@ -140,59 +153,32 @@ class HBFace:
 
         persons_recognized = engine.recognize_removed_tracks(removed_tracks, last_frame=False)
 
-        # Log recognized persons (unrecognized/partial_match already logged in engine.py)
-        for name, (track_id, appear_time, recognized, image, recognition_info) in persons_recognized.items():
-            status = engine.args.cam_type
-            camera_name = engine.args.camera_name
-            camera_id = engine.args.camera_id
+        # Process recognition results using FrameProcessor
+        self.frame_processor.process_recognition_results(
+            persons_recognized,
+            camera_type=engine.args.cam_type,
+            camera_name=engine.args.camera_name,
+            camera_id=engine.args.camera_id,
+            save_recognized_callback=self.save_recognized_frame,
+            save_recognized_enabled=engine.args.save_recognized_frame
+        )
 
-            if recognized == 'recognized':
-                recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name, camera_id)
-                logger.info(f"Person recognized: {name}, recorded={recorded}, save_enabled={engine.args.save_recognized_frame}")
-                if engine.args.save_recognized_frame and recorded:
-                    logger.info(f"Calling save_recognized_frame for {name}")
-                    self.save_recognized_frame(name, image, status)
-            elif recognized == 'unrecognized':
-                # Send to API (already logged in engine.py before validation)
-                self.entry_logger.send_unrecognized_face(face = image, status=status)
-            else:
-                # partial_match - send to API (already logged in engine.py before validation)
-                self.entry_logger.send_unrecognized_face(face = image, status=status)
+        # Annotate frame with visualizations
+        self.frame_processor.annotate_frame(
+            frame_annotated,
+            line_points=engine.args.line_points,
+            add_timestamp=True,
+            add_entries=True
+        )
 
-        # Draw counting line if configured
-        if engine.args.line_points:
-            cv2.line(frame_annotated, engine.args.line_points[0], engine.args.line_points[1], (0, 255, 0), 3)
-
-        # Add visualization of recognized entries
-        self.entry_logger.visualize_entries(frame_annotated)
-
-        # Add timestamp to the frame
-        self._add_timestamp(frame_annotated)
-        # self.entry_logger.`send_annotated_frame`(frame_annotated, engine.args.cam_type)
-
-        # Send annotated frame to API
-        # self.entry_logger.send_annotated_frame(frame_annotated, camera_idx, engine.args.cam_type)
+        # Dashboard streaming disabled
+        # self.frame_processor.send_frame_to_dashboard(
+        #     frame_annotated,
+        #     engine.args.cam_type,
+        #     engine.args.camera_id
+        # )
 
         return frame_annotated
-
-    def _add_timestamp(self, frame: NDArray) -> None:
-        """Add timestamp to the frame.
-
-        Args:
-            frame: Frame to add timestamp to
-        """
-        try:
-            # Get current time in the configured timezone
-            tz = pytz.timezone(self.engines[0].args.timezone)
-            current_time = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-
-            # Add timestamp to the top-left corner
-            text = f"{current_time}"
-            cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                      0.7, (0, 255, 0), 2, cv2.LINE_AA)
-
-        except Exception as e:
-            logger.error(f"Error adding timestamp: {e}")
 
     def _display_frames(self, frames: List[NDArray]) -> None:
         """Display processed frames if configured to show output.
@@ -245,7 +231,7 @@ class HBFace:
         """Process remaining tracks after video stream ends."""
         for engine in self.engines:
             persons_recognized = engine.recognize_removed_tracks([], last_frame=True)
-            # Log any final recognized persons (unrecognized/partial_match already logged in engine.py)
+            # Log any final recognized persons
             for name, (track_id, appear_time, recognized, image, recognition_info) in persons_recognized.items():
                 status = engine.args.cam_type
                 camera_name = engine.args.camera_name
@@ -256,11 +242,9 @@ class HBFace:
                     if self.engines[0].args.save_recognized_frame and recorded:
                         self.save_recognized_frame(name, image, status)
                 elif recognized == 'unrecognized':
-                    # Send to API (already logged in engine.py before validation)
-                    self.entry_logger.send_unrecognized_face(face = image, status=status)
-                else:
-                    # partial_match - send to API (already logged in engine.py before validation)
-                    self.entry_logger.send_unrecognized_face(face = image, status=status)
+                    # Send to API only if image is valid (None check)
+                    if image is not None:
+                        self.entry_logger.send_unrecognized_face(face=image, status=status)
 
     def save_recognized_frame(self, name: str, image: NDArray, status: str) -> None:
         """Save recognized frame to the specified directory.
@@ -270,22 +254,31 @@ class HBFace:
             image: Image of the recognized face
             status: Status of the recognition (e.g., "entry", "exit")
         """
-        # Use absolute path that matches Docker volume mount
-        recognized_dir = os.path.join(f"/app/volumes/storage/{self.FR_SLUG}/data/{self.client_slug}", f"recognized_frames/")
-        if not os.path.exists(recognized_dir):
-            os.makedirs(recognized_dir)
+        # Use storage configuration for base path (TODO: refactor to use StorageConfig from config.py)
+        storage_base_path = os.getenv("STORAGE_BASE_PATH", "/app/volumes/storage")
+        recognized_dir = os.path.join(storage_base_path, self.FR_SLUG, "data", self.client_slug, "recognized_frames")
 
-        # Create status subdirectory if it doesn't exist
-        status_dir = os.path.join(recognized_dir, status)
-        if not os.path.exists(status_dir):
-            os.makedirs(status_dir)
+        try:
+            if not os.path.exists(recognized_dir):
+                os.makedirs(recognized_dir, exist_ok=True)
 
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{name}_{timestamp}.jpg"
-        save_path = os.path.join(status_dir, filename)
+            # Create status subdirectory if it doesn't exist
+            status_dir = os.path.join(recognized_dir, status)
+            if not os.path.exists(status_dir):
+                os.makedirs(status_dir, exist_ok=True)
 
-        # Add error handling for cv2.imwrite
-        cv2.imwrite(save_path, image)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{name}_{timestamp}.jpg"
+            save_path = os.path.join(status_dir, filename)
+
+            # Add error handling for cv2.imwrite
+            success = cv2.imwrite(save_path, image)
+            if not success:
+                logger.error(f"Failed to save recognized frame for {name} at {save_path}")
+            else:
+                logger.debug(f"Saved recognized frame for {name} at {save_path}")
+        except OSError as e:
+            logger.error(f"Error saving recognized frame for {name}: {e}")
 
 
     def _cleanup(self) -> None:

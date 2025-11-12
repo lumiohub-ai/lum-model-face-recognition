@@ -1,37 +1,26 @@
 # Device settings
 gpu_id: 0  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
 
-# Database settings
-db_path: 'data/embeddings/hb_korea.pkl' # Must be in pkl format
-video_path: "data/videos/sample.mp4"  # Path to the input video file or RTSP stream
-
 # Face recognition settings
 match_threshold: 0.3  # Threshold for face similarity matching (can be a list for per-camera thresholds)
 partial_match_threshold: 0.15  # Threshold for partial face matches
-# Other settings
-show: True  # Show the output video with annotations
-save_video: True  # Save the output video with annotations
-record_always: True  # Always record the video
+
+show: False  # Show the output video with annotations (disabled for headless/Docker environments)
+save_video: False  # Save the output video with annotations
+record_always: False  # Always record the video
+save_recognized_frame: True  # Save individual frames when faces are recognized
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
-txt_path: "results/results.txt"  # Path to save the recorded
 
 # ROI settings
-roi: null  # Enable region of interest (ROI) mode
-line_points: null # Define the ROI line points (e.g., [(0, 0), (1280, 720)])
-
 # Other settings
 timezone: "UTC"  # Timezone for tracking times
 debug: True  # Enable debug mode for detailed logging
-log_file: "data/logs/debug.log"  # Path to save the debug log file
 
 # Production settings
 multi_camera: True  # Enable multi-camera mode
 production: True # Enable production mode for optimized performance
-# If production is True, it will send data to the server
-
-api_host: "http://localhost:7091/"
 
 # System settings
 max_track_lifetime_seconds: 30
