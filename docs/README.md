@@ -4,291 +4,54 @@
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/bybatkhuu/model.python-template/2.build-publish.yml?logo=GitHub)](https://github.com/bybatkhuu/model.python-template/actions/workflows/2.build-publish.yml)
 [![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/bybatkhuu/model.python-template?logo=GitHub&color=blue)](https://github.com/bybatkhuu/model.python-template/releases)
 
-## 📋 Table of Contents
 
-- [✨ Features](#-features)
-- [🛠 Installation](#-installation)
-  - [Prerequisites](#prerequisites)
-  - [Download Repository](#download-or-clone-the-repository)
-  - [Package Installation](#install-the-package)
-- [🐳 Docker Setup](#-docker-setup)
-  - [Prerequisites for Docker](#prerequisites-for-docker)
-  - [Building the Docker Image](#building-the-docker-image)
-  - [Running the Docker Container](#running-the-docker-container)
-- [⚙️ Configuration](docs/configurations.md)
-- [🚸 Usage/Examples](#-usageexamples)
-- [📊 Evaluation](docs/evaluation.md)
-- [📊 Eval Metrics](docs/evalmetrics.md)
-- [🖥️ NVIDIA Jetson Nano setup](docs/jetson_nano.md)
-- [📚 Documentation](#-documentation)
-- [Video Recording using ffmpeg](#video-recording-using-ffmpeg)
-- [📑 Research References](#--research-references)
+# Installation Guide
+### 1. Clone the Repository
+```bash
+git clone --recursive so.model-face-recognition
+cd so.model-face-recognition```
 
+### 2. Prepare Configuration Files
 
-## ✨ Features
-
-- Face Detection/Tracking
-- Face-Recognition
-- Counter
-- Desk presence Detection
-- NVIDIA Jetson converter
-
----
-
-## 🛠 Installation
-
-### 1. 🚧 Prerequisites
-
-- Install **Python (>= v3.10)** and **pip (>= 25.0.1)**:
-    - *[RECOMMENDED][Python virutal environment] [venv](https://docs.python.org/3/library/venv.html)*
-    - *[Miniconda (v3)](https://www.anaconda.com/docs/getting-started/miniconda/install)*
-
-- *[OPTIONAL]* For **GPU (NVIDIA)**:
-    - **NVIDIA CUDA (>= v12.6)**
-
-[OPTIONAL] For **DEVELOPMENT** environment:
-
-- Install [**git**](https://git-scm.com/downloads)
-- Setup an [**SSH key**](https://docs.github.com/en/github/authenticating-to-github/connecting-to-github-with-ssh) ([video tutorial](https://www.youtube.com/watch?v=snCP3c7wXw0))
-
-### 2. 📥 Download or clone the repository
-
-[TIP] Skip this step, if you're going to install the package directly from **GitHub** repository.
-
-**2.1.** Prepare projects directory (if not exists):
-
-```sh
-# Create projects directory:
-mkdir -pv ~/workspaces/projects
-
-# Enter into projects directory:
-cd ~/workspaces/projects
-```
-
-**2.2.** Follow one of the below options **[A]**, **[B]** or **[C]**:
-
-**OPTION A.** Clone the repository:
-
-```sh
-git clone https://github.com/humblebeeintel/face-recognition.git && \
-    cd face-recognition
-```
-
-**OPTION B.** Clone the repository (for **DEVELOPMENT**: git + ssh key):
-
-```sh
-git git@github.com:humblebeeintel/face-recognition.git && \
-    cd face-recognition
-```
-
-**OPTION C.** Download source code:
-
-1. Download archived **zip** file from [**releases**](https://github.com/humblebeeintel/face-recognition).
-2. Extract it into the projects directory.
-
-### 3. 📦 Install the package
-
-Install for **DEVELOPMENT** environment:
-
-```sh
-bash scripts/setup.sh
-
-source myenv/bin/activate
-```
-
-### 4. 📥 Download databases and models
-
-1. Download models from here: [LINK](https://drive.google.com/drive/folders/140jyB_uM2PF9-CBVtQCR4hFJJ4Ql0TFs?usp=sharing)
-
-2. Download database from here: [LINK](https://drive.google.com/drive/folders/1A6s3MBQvj1PXJDmGKSL4R0ZR6Sc-iicw?usp=sharing)
-
-3. Place put them in the main directory of the repository 
-
-## 🐳 Docker Setup
-
-### Prerequisites for Docker
-
-1. Install Docker:
-   - [Docker Engine](https://docs.docker.com/engine/install/) for Linux
-   - [Docker Desktop](https://docs.docker.com/desktop/) for Windows/macOS
-
-2. For GPU support, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
-
-### Clone submodules
+Copy example configuration templates:
 
 ```bash
-git submodule update --init --recursive
+cp templates/compose/compose.override.dev.yml compose.override.dev.yml
+cp .env.example .env
 ```
+### 3. Update Environment Variables
+Open .env and update the following:
 
-### Building the Docker Image
-
-1. From the project root directory, build the Docker image:
-
-```sh
-# Basic build
-docker build -t face-recognition:latest .
-
-# Build with specific tag
-docker build -t face-recognition:v1.0.0 .
-```
-
-### Running the Docker Container
-
-#### Basic Usage:
-
-```sh
-# Run with GPU support
-docker run --rm -it --gpus all face-recognition:latest
-```
-
-#### Running Examples with commands:
-
-```sh
-# Run a test example
-docker run --rm -it \
-  --gpus all \
-  -v $(pwd)/data:/usr/src/vision-app/data \
-  -v $(pwd)/configs:/usr/src/vision-app/configs \
-  face-recognition:latest \
-  python examples/test.py
-```
-
-##### For Production Run:
-
-```sh
-# Run with access to host webcam
-docker run --rm -it \
-  --gpus all \
-  -v $(pwd):/usr/src/vision-app \
-  face-recognition:latest \
-  python examples/clients/ilhan.py
-```
-
-##### Development Mode:
-
-```sh
-# Run in development mode with source code mounted
-docker run --rm -it \
-  --gpus all \
-  -v $(pwd):/usr/src/vision-app \
-  face-recognition:latest \
-  bash
-```
-
-## 🐳 Docker Setup
-
-### Prerequisites for Docker
-
-1. Install Docker:
-   - [Docker Engine](https://docs.docker.com/engine/install/) for Linux
-   - [Docker Desktop](https://docs.docker.com/desktop/) for Windows/macOS
-
-2. For GPU support, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
-
-### Building the Docker Image
-
-1. From the project root directory, build the Docker image:
-
-```sh
-# Basic build
-docker build -t face-recognition:latest .
-
-# Build with specific tag
-docker build -t face-recognition:v1.0.0 .
-```
-
-### Running the Docker Container
-
-#### Basic Usage:
-
-```sh
-# Run with GPU support
-docker run --rm -it --gpus all face-recognition:latest
-```
-
-#### Running Examples with commands:
-
-```sh
-# Run a test example
-docker run --rm -it \
-  --gpus all \
-  -v $(pwd)/data:/usr/src/vision-app/data \
-  -v $(pwd)/configs:/usr/src/vision-app/configs \
-  face-recognition:latest \
-  python examples/test.py
-```
-
-##### For Production Run:
-
-```sh
-# Run with access to host webcam
-docker run --rm -it \
-  --gpus all \
-  -v $(pwd):/usr/src/vision-app \
-  face-recognition:latest \
-  python examples/clients/ilhan.py
-```
-
-##### Development Mode:
-
-```sh
-# Run in development mode with source code mounted
-docker run --rm -it \
-  --gpus all \
-  -v $(pwd):/usr/src/vision-app \
-  face-recognition:latest \
-  bash
-```
-
----
-## 🚸 Usage/Examples
-
-#### For running a face recognition application, use the following command:
-
+- Set input source (RTSP or video path)
 ```bash
-python examples/test.py
+HB_IN = rtsp://your_camera_stream
+```
+- Adjust any other variables as needed for your local environment.
+
+### 4. Update Client and Configuration Files
+
+Edit examples/clients/main.py to match your client configuration.
+Update the api_host field in configs/config.yaml to point to your API endpoint.
+
+### 5. Add Face Embeddings5. Add Face Embeddings
+Place your face embedding file (main.pkl) in: ```volumes/src/embeddings/```
+
+# Build and Run the Application
+
+## Build Docker Containers
+
+ ```bash
+ ./compose.sh build
+```
+## Run the Application
+```bash
+./compose.sh test -l
 ```
 
-**For arguments passed to the class, reference the config.yaml file where all parameters can be configured.**
-
-```python
-from face_recognition import HBFace
-
-# RTSP streams for IN and OUT cameras
-in_camera = 'hb-videos/in.mp4' 
-out_camera = 'hb-videos/out.mp4'
-
-# Initialize HBFace for multi-camera setup
-face_engine_multi = HBFace(
-    cam_types=["IN", "OUT"],
-    video_path=[in_camera, out_camera],
-    multi_camera=True,
-    show=True,  # Disable display, just process and save
-    match_threshold=0.5,
-    db_path='data/embeddings/hb-kor-camera.pkl',
-)
-
-# Run the face recognition system
-face_engine_multi.run()
+## Stop Containers
+```bash
+./compose.sh stop
 ```
----
-
-## ⚙️ Configuration
-
-Please refer to [this page](docs/configurations.md).
-
----
-## 📊 Evaluation
-
-Please refer to [this page](docs/evaluation.md).
-
----
-## 🖥️ NVIDIA Jetson Nano Setup
-
-Please refer to [this page](docs/jetson_nano).
-
----
-
 
 
 ## 📚 Documentation
