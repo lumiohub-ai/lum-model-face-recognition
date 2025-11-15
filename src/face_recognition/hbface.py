@@ -13,7 +13,6 @@ import pytz  # For timezone support
 # Local imports
 from .core.engine import FaceEngine
 from .system_setup import FaceSetup
-from .dashboard.manager import DashboardManager
 from .video.frame_processor import FrameProcessor
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -52,10 +51,6 @@ class HBFace:
 
         # Get timezone from config, default to UTC if not specified
         self.timezone = getattr(self.config, 'timezone', 'UTC')
-
-        # Initialize and start dashboard
-        self.dashboard_manager = DashboardManager.from_env()
-        self.dashboard_manager.start()
 
         # Initialize frame processor
         self.frame_processor = FrameProcessor(self.entry_logger, self.timezone)
@@ -176,12 +171,12 @@ class HBFace:
             add_entries=True
         )
 
-        # Send annotated frame to dashboard
-        self.frame_processor.send_frame_to_dashboard(
-            frame_annotated,
-            engine.args.cam_type,
-            engine.args.camera_id
-        )
+        # Dashboard streaming disabled
+        # self.frame_processor.send_frame_to_dashboard(
+        #     frame_annotated,
+        #     engine.args.cam_type,
+        #     engine.args.camera_id
+        # )
 
         return frame_annotated
 

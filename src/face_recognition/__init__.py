@@ -23,7 +23,7 @@ from .config import constants
 from .logging import setup_structured_logging, EntryLogger, CSVLogger
 
 # Dashboard
-from .dashboard import DashboardManager, CameraProcessor, Visualization
+from .dashboard import CameraProcessor, Visualization
 
 # Storage
 from .storage import Database, CloudStorageManager
@@ -56,7 +56,6 @@ __all__ = [
     "CSVLogger",
 
     # Dashboard
-    "DashboardManager",
     "CameraProcessor",
     "Visualization",
 
