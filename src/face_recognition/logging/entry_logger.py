@@ -130,7 +130,11 @@ class EntryLogger:
         previous_status = self.person_status.get(name)
         recorded = False
 
-        # If status is the same as before, do nothing
+        # Send location data to API every time person is recognized (if in production mode)
+        if self.args.production:
+            self._send_location_data(name, status, appear_time, camera_name)
+
+        # If status is the same as before, do nothing else
         if previous_status == status.upper():
             timestamp = appear_time.strftime("%Y-%m-%d %H:%M:%S")
             logger.debug(
@@ -148,7 +152,7 @@ class EntryLogger:
         today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
 
-        # Send data to API if in production mode
+        # Send attendance data to API if in production mode
         if self.args.production:
             self._send_data_to_api(name, status, camera_id)
 
@@ -207,6 +211,34 @@ class EntryLogger:
         response = self.api_client.create_attendance_record(user_id, status, camera_id)
         if response is None:
             logger.warning(f"Failed to create attendance record for {name}")
+
+    def _send_location_data(
+        self,
+        name: str,
+        status: str,
+        appear_time: datetime,
+        camera_name: str
+    ) -> None:
+        """Send user location data to the API.
+
+        Args:
+            name: Name of the person
+            status: Entry/exit status (IN/OUT)
+            appear_time: Time when the person appeared
+            camera_name: Name of the camera that detected the person
+        """
+        # Generate timestamp in ISO 8601 format with milliseconds
+        timestamp = appear_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        response = self.api_client.send_user_location(
+            user_name=name,
+            camera_name=camera_name,
+            timestamp=timestamp,
+            status=status
+        )
+
+        if response is None:
+            logger.warning(f"Failed to send location data for {name}")
 
     def send_unrecognized_face(self, face: np.ndarray, status: str) -> Optional[Any]:
         """Send unrecognized face image to the API.
