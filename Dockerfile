@@ -71,6 +71,12 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
 RUN /opt/conda/bin/pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
     /opt/conda/bin/pip config set global.extra-index-url "https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/"
 
+# Install PyTorch separately from official index (more reliable for large files)
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 \
+        torch~=2.6.0 torchvision~=0.21.0 \
+        --index-url https://download.pytorch.org/whl/cu122
+
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
     /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/insightface && \
     /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/yolo_tracking && \
