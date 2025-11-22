@@ -9,6 +9,7 @@ import cv2
 import gcsfs
 import numpy as np
 import pytz
+import requests
 from shapely.geometry import LineString
 from loguru import logger
 
@@ -16,6 +17,7 @@ from .detector import FaceDetector
 from .tracker import FaceTracker
 from .track_manager import TrackManager
 from .recognizer import FaceRecognition  # FaceRecognition is the class name in recognizer.py
+from ..services.redis_pubsub import RedisSubscriber
 
 
 class FaceEngine:
@@ -63,6 +65,18 @@ class FaceEngine:
             f"{self.face_recognition.args.db_path}"
         )
 
+        # Start Redis subscriber for real-time embedding updates
+        self.redis_subscriber = None
+        if getattr(args, 'use_pgvector', False):
+            try:
+                self.redis_subscriber = RedisSubscriber(
+                    client_slug=self.client_slug,
+                    on_update=self._on_embedding_update
+                )
+                self.redis_subscriber.start()
+            except Exception as e:
+                args.logger.warning(f"Failed to start Redis subscriber: {e}")
+
     def _setup_data_collection_folder(self) -> None:
         """Set up folder for storing collected face data and recognition results."""
         self.data_collection_path = os.path.join(
@@ -71,6 +85,26 @@ class FaceEngine:
         )
         if not os.path.exists(self.data_collection_path):
             os.makedirs(self.data_collection_path)
+
+    def _on_embedding_update(self, action: str, user_name: str) -> None:
+        """Callback for Redis embedding update events.
+
+        Args:
+            action: Action type ('add_user', 'update_user', 'delete_user')
+            user_name: Name of the user affected
+        """
+        try:
+            self.args.logger.info(f"🔄 Reloading embeddings due to {action} for {user_name}")
+
+            # Reload embeddings from pgvector database
+            self.face_recognition.reload_embeddings()
+
+            self.args.logger.info(
+                f"✅ Embeddings reloaded successfully. "
+                f"Total: {len(self.face_recognition.db_embs)}"
+            )
+        except Exception as e:
+            self.args.logger.error(f"❌ Failed to reload embeddings: {e}")
 
     def compute_embeddings(self, image: np.ndarray, alpha: float = 0.9) -> Optional[np.ndarray]:
         """Compute face embeddings for a given image.
@@ -94,23 +128,59 @@ class FaceEngine:
             List of face embeddings, or None if no faces are found
         """
         try:
-            url_list = json.loads(main_url)
+            # Check if main_url is None or empty
+            if not main_url:
+                self.args.logger.warning("No image URL provided (None or empty)")
+                return None
 
-            if not isinstance(url_list, list):
+            # Try to parse as JSON (for array of URLs), otherwise treat as single URL
+            try:
+                url_list = json.loads(main_url)
+                if not isinstance(url_list, list):
+                    url_list = [main_url]
+            except (json.JSONDecodeError, TypeError):
+                # If it's not JSON, treat it as a plain URL string
                 url_list = [main_url]
 
             embeddings = []
             for url in url_list:
                 prefix = "https://storage.googleapis.com/"
                 if url.startswith(prefix):
-                    image_path = url[len(prefix):]
+                    # Use HTTP request for signed URLs with retry logic
+                    max_retries = 3
+                    img_bytes = None
 
-                    with self.fs.open(image_path, 'rb') as f:
-                        img_bytes = f.read()
+                    for attempt in range(max_retries):
+                        try:
+                            response = requests.get(url, timeout=30, verify=True)
+                            response.raise_for_status()
+                            img_bytes = response.content
+                            break  # Success, exit retry loop
+                        except requests.exceptions.SSLError as e:
+                            if attempt < max_retries - 1:
+                                self.args.logger.warning(
+                                    f"SSL error (attempt {attempt + 1}/{max_retries}), retrying..."
+                                )
+                                continue
+                            else:
+                                self.args.logger.warning(
+                                    f"Failed to fetch image after {max_retries} attempts: {e}"
+                                )
+                                break
+                        except requests.exceptions.RequestException as e:
+                            self.args.logger.warning(f"Failed to fetch image: {e}")
+                            break
+
+                    if img_bytes is None:
+                        continue
 
                     # Decode image from bytes to OpenCV image
                     img_array = np.frombuffer(img_bytes, np.uint8)
                     image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+                    if image is None:
+                        self.args.logger.warning("Failed to decode image")
+                        continue
 
                     embedding = self.compute_embeddings(image)
 
@@ -142,10 +212,25 @@ class FaceEngine:
                 continue
 
             for emb in embedding:
+                # Add to in-memory cache
                 self.face_recognition.db_names.append(user['name'])
                 self.face_recognition.db_embs = np.append(
                     self.face_recognition.db_embs, [emb], axis=0
                 )
+
+                # Save to pgvector database if enabled
+                if self.face_recognition.use_pgvector and self.face_recognition.pgvector_store:
+                    try:
+                        self.face_recognition.pgvector_store.add_embedding(
+                            user_id=user.get('id', user['name']),
+                            user_name=user['name'],
+                            image_url=user.get('image_path', ''),
+                            embedding=emb,
+                            external_id=user.get('external_id'),
+                            metadata={'source': 'backend_sync'}
+                        )
+                    except Exception as e:
+                        self.args.logger.error(f"Failed to save embedding to pgvector: {e}")
 
             self.args.logger.info(
                 f"Added {user['name']} to the database with {len(embedding)} images."
@@ -158,10 +243,19 @@ class FaceEngine:
         for name in deleted_users:
             index = self.face_recognition.get_index_by_name(name)
             if index is not None:
+                # Delete from in-memory cache
                 self.face_recognition.db_names.pop(index)
                 self.face_recognition.db_embs = np.delete(
                     self.face_recognition.db_embs, index, axis=0
                 )
+
+                # Delete from pgvector database if enabled
+                if self.face_recognition.use_pgvector and self.face_recognition.pgvector_store:
+                    try:
+                        self.face_recognition.pgvector_store.delete_user_embeddings(name)
+                    except Exception as e:
+                        self.args.logger.error(f"Failed to delete from pgvector: {e}")
+
                 # Rebuild index after deletion
                 self.face_recognition._rebuild_name_index()
                 self.args.logger.info(f"Deleted {name} from the database.")

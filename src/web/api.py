@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from face_recognition.storage import Database
 from face_recognition.core import FaceEngine
+from face_recognition.services.redis_pubsub import RedisPublisher
 
 app = FastAPI(title="Face Recognition API", version="1.0.0")
 logging.basicConfig(
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # Store active engine instances per client
 active_engines = {}
+
+# Initialize Redis publisher
+redis_publisher = RedisPublisher()
 
 
 # Pydantic models for request/response validation
@@ -67,6 +71,11 @@ async def update_embeddings(request: EmbeddingUpdateRequest):
             engine.update_database(new_users=new_users, deleted_users=[])
             logger.info(f"✅ Added user {request.user_data.full_name} to database")
 
+            # Publish Redis event
+            redis_publisher.publish_embedding_update(
+                request.client_slug, 'add_user', request.user_data.full_name
+            )
+
         elif request.action == 'update_user':
             # Delete old embeddings, add new ones
             deleted_users = [request.user_data.full_name]
@@ -77,10 +86,20 @@ async def update_embeddings(request: EmbeddingUpdateRequest):
             engine.update_database(new_users=new_users, deleted_users=deleted_users)
             logger.info(f"✅ Updated user {request.user_data.full_name} embeddings")
 
+            # Publish Redis event
+            redis_publisher.publish_embedding_update(
+                request.client_slug, 'update_user', request.user_data.full_name
+            )
+
         elif request.action == 'delete_user':
             deleted_users = [request.user_data.full_name]
             engine.update_database(new_users=[], deleted_users=deleted_users)
             logger.info(f"✅ Deleted user {request.user_data.full_name} from database")
+
+            # Publish Redis event
+            redis_publisher.publish_embedding_update(
+                request.client_slug, 'delete_user', request.user_data.full_name
+            )
         else:
             raise HTTPException(status_code=400, detail=f'Invalid action: {request.action}')
 
@@ -137,6 +156,148 @@ async def health_check():
     )
 
 
+# ============================================================================
+# pgvector Sync Endpoints (NEW)
+# ============================================================================
+
+class UserSyncRequest(BaseModel):
+    """Request model for user sync operations."""
+    client_slug: str
+    user_data: Dict  # Contains: id, full_name, external_id, image_urls
+
+
+class UserDeleteRequest(BaseModel):
+    """Request model for user deletion."""
+    client_slug: str
+    user_id: str
+
+
+class RebuildPgVectorRequest(BaseModel):
+    """Request model for pgvector rebuild."""
+    client_slug: str
+    users: Optional[List[Dict]] = None  # If None, fetch from backend
+
+
+@app.post("/api/v1/sync/add_user")
+async def sync_add_user(request: UserSyncRequest):
+    """Add user embeddings to pgvector database.
+
+    Called by backend when a new user is created.
+    """
+    try:
+        logger.info(f"📥 Sync add_user for {request.client_slug}: {request.user_data.get('full_name')}")
+
+        from face_recognition.services.embedding_sync import EmbeddingSyncService
+
+        sync_service = EmbeddingSyncService(
+            client_slug=request.client_slug,
+            gpu_id=int(os.getenv('GPU_ID', '0'))
+        )
+
+        result = sync_service.handle_user_created(request.user_data)
+
+        return {
+            'success': True,
+            'result': result,
+            'message': f"Added {result['embeddings_added']} embeddings for user {result['user_name']}"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in sync_add_user: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/sync/update_user")
+async def sync_update_user(request: UserSyncRequest):
+    """Update user embeddings in pgvector database.
+
+    Called by backend when a user is updated (name change, images added/removed).
+    """
+    try:
+        logger.info(f"📥 Sync update_user for {request.client_slug}: {request.user_data.get('full_name')}")
+
+        from face_recognition.services.embedding_sync import EmbeddingSyncService
+
+        sync_service = EmbeddingSyncService(
+            client_slug=request.client_slug,
+            gpu_id=int(os.getenv('GPU_ID', '0'))
+        )
+
+        result = sync_service.handle_user_updated(request.user_data)
+
+        return {
+            'success': True,
+            'result': result,
+            'message': f"Updated {result['embeddings_added']} embeddings for user {result['user_name']}"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in sync_update_user: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/sync/delete_user")
+async def sync_delete_user(request: UserDeleteRequest):
+    """Delete user embeddings from pgvector database.
+
+    Called by backend when a user is deleted.
+    """
+    try:
+        logger.info(f"📥 Sync delete_user for {request.client_slug}: {request.user_id}")
+
+        from face_recognition.services.embedding_sync import EmbeddingSyncService
+
+        sync_service = EmbeddingSyncService(
+            client_slug=request.client_slug,
+            gpu_id=int(os.getenv('GPU_ID', '0'))
+        )
+
+        result = sync_service.handle_user_deleted(request.user_id)
+
+        return {
+            'success': True,
+            'result': result,
+            'message': f"Deleted {result['embeddings_deleted']} embeddings for user {request.user_id}"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in sync_delete_user: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/sync/rebuild")
+async def sync_rebuild(request: RebuildPgVectorRequest):
+    """Rebuild all embeddings for a client from backend API.
+
+    This fetches all users from backend and rebuilds the pgvector database.
+    """
+    try:
+        logger.info(f"🔨 Sync rebuild for {request.client_slug}")
+
+        from face_recognition.services.embedding_sync import EmbeddingSyncService
+
+        sync_service = EmbeddingSyncService(
+            client_slug=request.client_slug,
+            gpu_id=int(os.getenv('GPU_ID', '0'))
+        )
+
+        # If users provided, use them. Otherwise fetch from backend
+        if request.users:
+            result = sync_service.rebuild_all(request.users)
+        else:
+            result = sync_service.rebuild_all_from_backend()
+
+        return {
+            'success': True,
+            'result': result,
+            'message': f"Rebuilt {result['total_embeddings_added']} embeddings for {result['successful']} users"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in sync_rebuild: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _get_or_create_engine(client_slug: str) -> FaceEngine:
     """Get existing engine or create new one for client."""
     if client_slug not in active_engines:
@@ -151,25 +312,36 @@ def _create_args_for_client(client_slug: str) -> argparse.Namespace:
     args = argparse.Namespace()
     args.client_slug = client_slug
 
-    # Determine database path
-    fr_slug = os.getenv('FR_SLUG', 'face-recognition')
-    base_path = f'/app/volumes/storage/{fr_slug}/data'
-    args.db_path = f'{base_path}/{client_slug}/face_db.pkl'
+    # pgvector or pickle mode
+    args.use_pgvector = os.getenv('USE_PGVECTOR', 'false').lower() == 'true'
 
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(args.db_path), exist_ok=True)
+    if not args.use_pgvector:
+        # Legacy pickle mode
+        fr_slug = os.getenv('FR_SLUG', 'face-recognition')
+        base_path = f'/app/volumes/storage/{fr_slug}/data'
+        args.db_path = f'{base_path}/{client_slug}/main.pkl'
 
-    # Create empty pickle if doesn't exist
-    if not os.path.exists(args.db_path):
-        logger.warning(f"⚠️ Database not found at {args.db_path}, creating empty one")
-        import pickle
-        import numpy as np
-        with open(args.db_path, 'wb') as f:
-            pickle.dump({'embeddings': np.array([]), 'names': []}, f)
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(args.db_path), exist_ok=True)
+
+        # Create empty pickle if doesn't exist
+        if not os.path.exists(args.db_path):
+            logger.warning(f"⚠️ Database not found at {args.db_path}, creating empty one")
+            import pickle
+            import numpy as np
+            with open(args.db_path, 'wb') as f:
+                pickle.dump({'embeddings': np.array([]), 'names': []}, f)
+    else:
+        # pgvector mode - no pickle file needed
+        args.db_path = None
+        logger.info(f"✅ Using pgvector mode for {client_slug}")
 
     # GPU configuration
     args.gpu_id = int(os.getenv('GPU_ID', '0'))
     args.device = 'cuda' if os.getenv('USE_GPU', 'true').lower() == 'true' else 'cpu'
+
+    # Recognition configuration
+    args.match_threshold = float(os.getenv('MATCH_THRESHOLD', '0.3'))
 
     # Other configurations
     args.timezone = os.getenv('TIMEZONE', 'UTC')

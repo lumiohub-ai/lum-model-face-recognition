@@ -314,6 +314,9 @@ class FaceSetup:
         args.partial_match_threshold = getattr(args, "partial_match_threshold", 0.15)
         args.multi_camera = getattr(args, "multi_camera", True)
 
+        # Check if pgvector mode is enabled
+        args.use_pgvector = os.getenv("USE_PGVECTOR", "false").lower() == "true"
+
         # Add logger to args
         args.logger = logger
 

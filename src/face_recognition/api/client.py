@@ -132,8 +132,9 @@ class APIClient:
                 for user in users
                 if user.get("full_name")
             }
+            # Use 'image_url' field from backend API (not 'image_path')
             path_dict = {
-                user.get("id"): user.get("image_path")
+                user.get("id"): user.get("image_url")
                 for user in users
                 if user.get("id")
             }
@@ -149,12 +150,21 @@ class APIClient:
 
             for user in name_to_id:
                 if user['name'] not in current_users:
+                    image_path = next(
+                        (item['path'] for item in id_to_path if item['id'] == user['id']),
+                        None
+                    )
+
+                    # Skip users without image URLs
+                    if not image_path:
+                        logger.warning(
+                            f"Skipping user '{user['name']}' - no image_url provided by backend API"
+                        )
+                        continue
+
                     new_users.append({
                         'name': user['name'],
-                        'image_path': next(
-                            (item['path'] for item in id_to_path if item['id'] == user['id']),
-                            None
-                        )
+                        'image_path': image_path
                     })
 
             for user in current_users:

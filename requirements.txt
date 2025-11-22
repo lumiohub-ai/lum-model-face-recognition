@@ -1,5 +1,3 @@
-torch~=2.6.0
-torchvision~=0.21.0
 tqdm~=4.67.1
 scikit-learn~=1.6.1
 opencv-python-headless~=4.12.0.88
@@ -25,3 +23,14 @@ gcsfs~=2025.3.2
 fastapi~=0.115.0
 uvicorn[standard]~=0.32.0
 python-multipart~=0.0.9
+# pgvector Database dependencies
+psycopg2-binary~=2.9.9
+sqlalchemy~=2.0.23
+pgvector~=0.2.4
+# Redis for Pub/Sub
+redis~=5.0.1
+# GCS image fetching
+google-cloud-storage~=2.14.0
+# WebRTC streaming
+aiortc~=1.9.0
+aiohttp~=3.9.0
