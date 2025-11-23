@@ -441,6 +441,60 @@ class APIClient:
             'line_points': line_points_list if any(line_points_list) else None,
         }
 
+    def send_user_location(
+        self,
+        user_name: str,
+        camera_name: str,
+        timestamp: str,
+        status: str
+    ) -> Optional[requests.Response]:
+        """Send user location data to the API.
+
+        Args:
+            user_name: Full name of the user
+            camera_name: Name of the camera that detected the user
+            timestamp: ISO 8601 formatted timestamp
+            status: User status ('IN' or 'OUT')
+
+        Returns:
+            Response object if successful, None otherwise
+        """
+        if not self.auth.is_authenticated():
+            logger.error("Not authenticated. Cannot send location data.")
+            return None
+
+        if status.upper() not in ['IN', 'OUT']:
+            logger.warning(
+                f"Invalid status '{status}'. Status must be either 'IN' or 'OUT'"
+            )
+            return None
+
+        url = f"{self.base_url}/org/{self.client_slug}/user-locations"
+        headers = {"Authorization": f"Bearer {self.token}"}
+
+        data = {
+            "user_name": user_name,
+            "camera_name": camera_name,
+            "timestamp": timestamp,
+            "status": status.lower()
+        }
+
+        try:
+            response = self.session.post(url, headers=headers, json=data)
+
+            if response.status_code not in [200, 201]:
+                logger.error(
+                    f"Send location failed with status {response.status_code}: "
+                    f"{response.text}"
+                )
+                return None
+
+            return response
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Send location request failed: {str(e)}")
+            return None
+
     def upload_annotated_frame(
         self,
         frame: np.ndarray,
