@@ -53,6 +53,32 @@ class APIClient:
         """Get the authenticated session."""
         return self.auth.get_session()
 
+    def _handle_token_expiry(self, response: requests.Response, retry_callback) -> requests.Response:
+        """Handle token expiration by refreshing and retrying the request.
+
+        Args:
+            response: The response that potentially has a 401 error
+            retry_callback: Function to retry the request after token refresh
+
+        Returns:
+            The response from the retry, or the original response if refresh fails
+        """
+        if response.status_code == 401:
+            logger.warning("Received 401 Unauthorized - token may have expired, attempting refresh...")
+
+            # Refresh the token
+            if self.auth.refresh_token():
+                # Update the token reference
+                self.token = self.auth.get_token()
+
+                # Retry the request
+                logger.info("Retrying request with refreshed token...")
+                return retry_callback()
+            else:
+                logger.error("Token refresh failed, cannot retry request")
+
+        return response
+
     def get_org_unique_id(self) -> Optional[str]:
         """Fetch the unique_id of the organization matching this client's slug.
 
@@ -63,14 +89,18 @@ class APIClient:
             logger.error("Not authenticated")
             return None
 
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Accept": "application/json",
-        }
         url = f"{self.base_url}/organizations"
 
+        def make_request():
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/json",
+            }
+            return self.session.get(url, headers=headers, timeout=10)
+
         try:
-            response = self.session.get(url, headers=headers, timeout=10)
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
             response.raise_for_status()
         except Exception as e:
             logger.warning(f"[get_org_unique_id] Request failed: {e}")
@@ -116,10 +146,14 @@ class APIClient:
         if not self.auth.is_authenticated():
             raise ValueError("Not authenticated. Please login first.")
 
-        response = self.session.get(
-            f"{self.base_url}/org/{self.client_slug}/users",
-            params={"page": page, "limit": limit, "status": "active"}
-        )
+        def make_request():
+            return self.session.get(
+                f"{self.base_url}/org/{self.client_slug}/users",
+                params={"page": page, "limit": limit, "status": "active"}
+            )
+
+        response = make_request()
+        response = self._handle_token_expiry(response, make_request)
 
         new_users = []
         deleted_users = []
@@ -198,11 +232,15 @@ class APIClient:
             logger.error("Not authenticated")
             return []
 
-        headers = {"Authorization": f"Bearer {self.token}"}
         url = f"{self.base_url}/org/{self.client_slug}/users/{status.lower()}"
 
+        def make_request():
+            headers = {"Authorization": f"Bearer {self.token}"}
+            return self.session.get(url, headers=headers)
+
         try:
-            response = self.session.get(url, headers=headers)
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
             if response.status_code != 200:
                 logger.error(
                     f"Failed to fetch {status} users with status "
@@ -254,12 +292,16 @@ class APIClient:
             "timestamp": timestamp
         }
 
-        try:
-            response = self.session.post(
+        def make_request():
+            return self.session.post(
                 f"{self.base_url}/org/{self.client_slug}/attendance-records",
                 json=record_data,
                 headers={"Content-Type": "application/json"}
             )
+
+        try:
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
 
             if response.status_code not in [200, 201]:
                 logger.error(
@@ -300,7 +342,6 @@ class APIClient:
             return None
 
         url = self.base_url + f'/org/{self.client_slug}/unrecognized-faces'
-        headers = {'Authorization': f'Bearer {self.token}'}
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         data = {'detection_time': timestamp}
@@ -314,16 +355,17 @@ class APIClient:
             logger.error("Image encoding failed")
             return None
 
-        # Convert to byte stream
-        image_bytes = io.BytesIO(encoded_image.tobytes())
-
-        # Prepare file payload
-        files = [
-            ('images', ('cropped_face.jpg', image_bytes, 'image/jpeg')),
-        ]
+        def make_request():
+            headers = {'Authorization': f'Bearer {self.token}'}
+            # Prepare file payload - create fresh BytesIO for each retry
+            files = [
+                ('images', ('cropped_face.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg')),
+            ]
+            return requests.post(url, headers=headers, files=files, data=data)
 
         try:
-            response = requests.post(url, headers=headers, files=files, data=data)
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
 
             if response.status_code not in [200, 201]:
                 logger.error(
@@ -354,8 +396,12 @@ class APIClient:
 
         url = f"{self.base_url}/org/{self.client_slug}/cameras"
 
+        def make_request():
+            return self.session.get(url)
+
         try:
-            response = self.session.get(url)
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
             response.raise_for_status()
 
             cameras = response.json()
@@ -470,7 +516,6 @@ class APIClient:
             return None
 
         url = f"{self.base_url}/org/{self.client_slug}/user-locations"
-        headers = {"Authorization": f"Bearer {self.token}"}
 
         data = {
             "user_name": user_name,
@@ -479,8 +524,13 @@ class APIClient:
             "status": status.lower()
         }
 
+        def make_request():
+            headers = {"Authorization": f"Bearer {self.token}"}
+            return self.session.post(url, headers=headers, json=data)
+
         try:
-            response = self.session.post(url, headers=headers, json=data)
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
 
             if response.status_code not in [200, 201]:
                 logger.error(
@@ -516,21 +566,22 @@ class APIClient:
             return None
 
         url = self.base_url + f'/{self.client_slug}/cameras/{camera_id}/{camera_type}'
-        headers = {'Authorization': f'Bearer {self.token}'}
 
         success, encoded_image = cv2.imencode('.jpg', frame)
         if not success:
             logger.error("Image encoding failed")
             return None
 
-        image_bytes = io.BytesIO(encoded_image.tobytes())
-
-        files = [
-            ('images', ('annotated_frame.jpg', image_bytes, 'image/jpeg')),
-        ]
+        def make_request():
+            headers = {'Authorization': f'Bearer {self.token}'}
+            files = [
+                ('images', ('annotated_frame.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg')),
+            ]
+            return requests.post(url, headers=headers, files=files)
 
         try:
-            response = requests.post(url, headers=headers, files=files)
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
 
             if response.status_code not in [200, 201]:
                 return None

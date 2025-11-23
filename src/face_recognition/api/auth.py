@@ -88,3 +88,22 @@ class AuthenticationService:
             Access token if authenticated, None otherwise
         """
         return self.token
+
+    def refresh_token(self) -> bool:
+        """Refresh the authentication token by logging in again.
+
+        Returns:
+            True if token refresh was successful, False otherwise
+        """
+        logger.info("Refreshing authentication token...")
+        try:
+            new_token = self.login()
+            if new_token:
+                logger.info("Token refreshed successfully")
+                return True
+            else:
+                logger.error("Token refresh failed")
+                return False
+        except Exception as e:
+            logger.error(f"Token refresh failed: {e}")
+            return False
