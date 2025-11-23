@@ -173,6 +173,10 @@ ENV LANG=en_US.UTF-8 \
 	LANGUAGE=en_US.UTF-8 \
 	LC_ALL=en_US.UTF-8
 
+# SSL configuration for runtime (needed for InsightFace model downloads)
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
 COPY --from=builder --chown=${UID}:${GID} /opt/conda /opt/conda
 
 
