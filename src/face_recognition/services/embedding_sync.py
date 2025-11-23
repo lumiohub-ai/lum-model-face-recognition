@@ -29,7 +29,11 @@ class EmbeddingSyncService:
             gpu_id: GPU device ID for face detection
         """
         self.client_slug = client_slug
-        self.detector = FaceDetector(gpu_id=gpu_id)
+
+        # Get face detection padding from environment (default: 20%)
+        padding_percent = float(os.getenv('FACE_DETECTION_PADDING', '20.0'))
+        self.detector = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
+
         self.store = PgVectorStore(client_slug)
         self.image_fetcher = ImageFetcher()
 
@@ -143,8 +147,9 @@ class EmbeddingSyncService:
 
         logger.info(f"Updating user: {user_id} -> {new_name}")
 
-        # Simple approach: Delete all existing embeddings and re-add
-        # TODO: Implement differential update (only add new images)
+        # Strategy: Delete all existing embeddings and re-add with updated data
+        # This ensures complete consistency with backend state.
+        # Differential updates could be added as optimization if needed.
         self.store.delete_all_for_user(user_id)
 
         # Re-add all embeddings

@@ -6,16 +6,30 @@ from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 from loguru import logger
 
+from .validators import validate_client_slug, validate_schema_name
+
 
 class DatabaseConfig:
     """PostgreSQL database configuration with pgvector support."""
 
     def __init__(self):
-        """Initialize database configuration from environment variables."""
+        """Initialize database configuration from environment variables.
+
+        Raises:
+            ValueError: If required environment variables are not set
+        """
         self.host = os.getenv('POSTGRES_HOST', 'localhost')
         self.port = int(os.getenv('POSTGRES_PORT', 5433))
         self.user = os.getenv('POSTGRES_USER', 'face_recognition')
-        self.password = os.getenv('POSTGRES_PASSWORD', 'face_recognition_pass')
+
+        # SECURITY: Require password to be explicitly set (no default)
+        self.password = os.getenv('POSTGRES_PASSWORD')
+        if not self.password:
+            raise ValueError(
+                "POSTGRES_PASSWORD environment variable is required. "
+                "Please set a secure password in your environment."
+            )
+
         self.database = os.getenv('POSTGRES_DB', 'face_embeddings')
 
         # Build connection string
@@ -56,8 +70,16 @@ class DatabaseConfig:
 
         Args:
             client_slug: Organization slug (e.g., 'humblebee', 'dev')
+
+        Raises:
+            ValueError: If client_slug contains invalid characters
         """
-        schema_name = f"org_{client_slug}"
+        # SECURITY: Validate client_slug to prevent SQL injection
+        validated_slug = validate_client_slug(client_slug)
+        schema_name = f"org_{validated_slug}"
+
+        # Double-check the schema name itself
+        validate_schema_name(schema_name)
 
         try:
             with self.engine.begin() as conn:
@@ -114,16 +136,24 @@ class DatabaseConfig:
             client_slug: Organization slug
             cascade: If True, drop all objects in schema
 
+        Raises:
+            ValueError: If client_slug contains invalid characters
+
         Warning:
             This will delete all data for the client!
         """
-        schema_name = f"org_{client_slug}"
+        # SECURITY: Validate client_slug to prevent SQL injection
+        validated_slug = validate_client_slug(client_slug)
+        schema_name = f"org_{validated_slug}"
+
+        # Double-check the schema name itself
+        validate_schema_name(schema_name)
 
         try:
             with self.engine.begin() as conn:
                 cascade_str = "CASCADE" if cascade else ""
                 conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} {cascade_str}"))
-                logger.warning(f"⚠️ Schema dropped: {schema_name}")
+                logger.warning(f"Schema dropped: {schema_name}")
 
         except Exception as e:
             logger.error(f"Failed to drop schema {schema_name}: {e}")

@@ -45,8 +45,12 @@ class FaceEngine:
         # Initialize cloud storage
         self.fs = gcsfs.GCSFileSystem(token=os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
 
+        # Get face detection padding from args or environment (default: 20%)
+        padding_percent = getattr(args, 'face_padding', None) or \
+                         float(os.getenv('FACE_DETECTION_PADDING', '20.0'))
+
         # Initialize specialized components
-        self.detector = FaceDetector(gpu_id=args.gpu_id)
+        self.detector = FaceDetector(gpu_id=args.gpu_id, padding_percent=padding_percent)
         self.tracker = FaceTracker(gpu_id=args.gpu_id)
         self.track_manager = TrackManager(
             timezone=self.timezone,
@@ -161,6 +165,9 @@ class FaceEngine:
                                 self.args.logger.warning(
                                     f"SSL error (attempt {attempt + 1}/{max_retries}), retrying..."
                                 )
+                                # Exponential backoff: 0.5s, 1s, 1.5s
+                                import time
+                                time.sleep(0.5 * (attempt + 1))
                                 continue
                             else:
                                 self.args.logger.warning(
@@ -188,7 +195,7 @@ class FaceEngine:
                         embeddings.append(embedding)
 
             if len(embeddings) <= 0:
-                self.args.logger.warning(f"No face found in the image for {url}")
+                self.args.logger.warning(f"No face found in the image")
                 return None
             else:
                 return embeddings

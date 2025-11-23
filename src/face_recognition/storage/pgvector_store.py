@@ -6,6 +6,7 @@ import numpy as np
 from sqlalchemy import text
 from loguru import logger
 from .db_config import DatabaseConfig
+from .validators import validate_client_slug, validate_schema_name
 
 
 class PgVectorStore:
@@ -20,13 +21,22 @@ class PgVectorStore:
 
         Args:
             client_slug: Organization slug (e.g., 'humblebee', 'dev')
+
+        Raises:
+            ValueError: If client_slug contains invalid characters
         """
-        self.client_slug = client_slug
-        self.schema_name = f"org_{client_slug}"
+        # SECURITY: Validate client_slug to prevent SQL injection
+        validated_slug = validate_client_slug(client_slug)
+        self.client_slug = validated_slug
+        self.schema_name = f"org_{validated_slug}"
+
+        # Double-check the schema name itself
+        validate_schema_name(self.schema_name)
+
         self.db_config = DatabaseConfig()
 
-        # Ensure schema exists
-        self.db_config.init_schema(client_slug)
+        # Ensure schema exists (init_schema also validates)
+        self.db_config.init_schema(self.client_slug)
         logger.info(f"PgVectorStore initialized for: {self.schema_name}")
 
     def add_embedding(

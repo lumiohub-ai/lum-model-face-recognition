@@ -23,6 +23,7 @@ gcsfs~=2025.3.2
 fastapi~=0.115.0
 uvicorn[standard]~=0.32.0
 python-multipart~=0.0.9
+slowapi~=0.1.9  # Rate limiting for API endpoints
 # pgvector Database dependencies
 psycopg2-binary~=2.9.9
 sqlalchemy~=2.0.23

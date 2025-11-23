@@ -115,7 +115,7 @@ class ImageFetcher:
             return None
 
     def _fetch_from_http(self, url: str) -> Optional[np.ndarray]:
-        """Fetch from HTTP/HTTPS URL.
+        """Fetch from HTTP/HTTPS URL with SSL retry logic.
 
         Args:
             url: HTTP/HTTPS URL
@@ -123,13 +123,46 @@ class ImageFetcher:
         Returns:
             np.ndarray: Image in BGR format, or None if failed
         """
-        try:
-            # Download image
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
+        max_retries = 3
+        img_bytes = None
 
+        # Retry loop for handling intermittent SSL errors
+        for attempt in range(max_retries):
+            try:
+                # Download image with SSL verification
+                response = requests.get(url, timeout=30, verify=True)
+                response.raise_for_status()
+                img_bytes = response.content
+                break  # Success, exit retry loop
+
+            except requests.exceptions.SSLError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"SSL error (attempt {attempt + 1}/{max_retries}), retrying... {url}"
+                    )
+                    # Add small delay before retry
+                    import time
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    continue
+                else:
+                    logger.error(f"Failed to fetch after {max_retries} SSL retry attempts: {url}")
+                    return None
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"HTTP request failed for {url}: {e}")
+                return None
+
+            except Exception as e:
+                logger.error(f"Unexpected error fetching {url}: {e}")
+                return None
+
+        if img_bytes is None:
+            logger.error(f"Failed to fetch image bytes from {url}")
+            return None
+
+        try:
             # Convert to OpenCV format
-            image = Image.open(BytesIO(response.content))
+            image = Image.open(BytesIO(img_bytes))
             image_np = np.array(image)
 
             # Convert RGB to BGR (OpenCV format)
@@ -140,7 +173,7 @@ class ImageFetcher:
             return image_np
 
         except Exception as e:
-            logger.error(f"Failed to fetch from HTTP {url}: {e}")
+            logger.error(f"Failed to process image from {url}: {e}")
             return None
 
     def _fetch_from_local(self, file_path: str) -> Optional[np.ndarray]:

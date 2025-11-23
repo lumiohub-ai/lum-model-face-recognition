@@ -1,6 +1,6 @@
 """REST API for face recognition model management using FastAPI."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import logging
@@ -8,6 +8,9 @@ import os
 import json
 import sys
 import argparse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Add parent directory to path to import face_recognition modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -16,7 +19,13 @@ from face_recognition.storage import Database
 from face_recognition.core import FaceEngine
 from face_recognition.services.redis_pubsub import RedisPublisher
 
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Face Recognition API", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -55,59 +64,60 @@ class HealthResponse(BaseModel):
 
 
 @app.post("/api/v1/embeddings/update")
-async def update_embeddings(request: EmbeddingUpdateRequest):
+@limiter.limit("30/minute")  # Limit to 30 updates per minute per IP
+async def update_embeddings(request: Request, data: EmbeddingUpdateRequest):
     """Handle incremental embedding updates for individual users."""
     try:
-        logger.info(f"📥 Received {request.action} request for client {request.client_slug}, user: {request.user_data.full_name}")
+        logger.info(f"📥 Received {data.action} request for client {data.client_slug}, user: {data.user_data.full_name}")
 
         # Get or create engine for this client
-        engine = _get_or_create_engine(request.client_slug)
+        engine = _get_or_create_engine(data.client_slug)
 
-        if request.action == 'add_user':
+        if data.action == 'add_user':
             new_users = [{
-                'name': request.user_data.full_name,
-                'image_path': json.dumps(request.user_data.image_urls),  # JSON array of GCS URLs
+                'name': data.user_data.full_name,
+                'image_path': json.dumps(data.user_data.image_urls),  # JSON array of GCS URLs
             }]
             engine.update_database(new_users=new_users, deleted_users=[])
-            logger.info(f"✅ Added user {request.user_data.full_name} to database")
+            logger.info(f"✅ Added user {data.user_data.full_name} to database")
 
             # Publish Redis event
             redis_publisher.publish_embedding_update(
-                request.client_slug, 'add_user', request.user_data.full_name
+                data.client_slug, 'add_user', data.user_data.full_name
             )
 
-        elif request.action == 'update_user':
+        elif data.action == 'update_user':
             # Delete old embeddings, add new ones
-            deleted_users = [request.user_data.full_name]
+            deleted_users = [data.user_data.full_name]
             new_users = [{
-                'name': request.user_data.full_name,
-                'image_path': json.dumps(request.user_data.image_urls),
+                'name': data.user_data.full_name,
+                'image_path': json.dumps(data.user_data.image_urls),
             }]
             engine.update_database(new_users=new_users, deleted_users=deleted_users)
-            logger.info(f"✅ Updated user {request.user_data.full_name} embeddings")
+            logger.info(f"✅ Updated user {data.user_data.full_name} embeddings")
 
             # Publish Redis event
             redis_publisher.publish_embedding_update(
-                request.client_slug, 'update_user', request.user_data.full_name
+                data.client_slug, 'update_user', data.user_data.full_name
             )
 
-        elif request.action == 'delete_user':
-            deleted_users = [request.user_data.full_name]
+        elif data.action == 'delete_user':
+            deleted_users = [data.user_data.full_name]
             engine.update_database(new_users=[], deleted_users=deleted_users)
-            logger.info(f"✅ Deleted user {request.user_data.full_name} from database")
+            logger.info(f"✅ Deleted user {data.user_data.full_name} from database")
 
             # Publish Redis event
             redis_publisher.publish_embedding_update(
-                request.client_slug, 'delete_user', request.user_data.full_name
+                data.client_slug, 'delete_user', data.user_data.full_name
             )
         else:
-            raise HTTPException(status_code=400, detail=f'Invalid action: {request.action}')
+            raise HTTPException(status_code=400, detail=f'Invalid action: {data.action}')
 
         return {
             'success': True,
-            'message': f'Successfully processed {request.action} for {request.user_data.full_name}',
+            'message': f'Successfully processed {data.action} for {data.user_data.full_name}',
             'embedding_count': len(engine.face_recognition.db_embs),
-            'client_slug': request.client_slug
+            'client_slug': data.client_slug
         }
 
     except Exception as e:
@@ -116,7 +126,8 @@ async def update_embeddings(request: EmbeddingUpdateRequest):
 
 
 @app.post("/api/v1/embeddings/rebuild")
-async def rebuild_database(request: RebuildRequest):
+@limiter.limit("5/hour")  # Limit rebuild operations to 5 per hour per IP
+async def rebuild_database(http_request: Request, request: RebuildRequest):
     """Rebuild entire face database for a client."""
     try:
         logger.info(f"🔨 Rebuilding database for {request.client_slug}")
@@ -144,7 +155,8 @@ async def rebuild_database(request: RebuildRequest):
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)
-async def health_check():
+@limiter.limit("30/minute")  # Limit health checks to 30 per minute per IP
+async def health_check(request: Request):
     """Health check endpoint."""
     return HealthResponse(
         status='healthy',
@@ -179,7 +191,8 @@ class RebuildPgVectorRequest(BaseModel):
 
 
 @app.post("/api/v1/sync/add_user")
-async def sync_add_user(request: UserSyncRequest):
+@limiter.limit("60/minute")  # Limit to 60 user additions per minute per IP
+async def sync_add_user(http_request: Request, request: UserSyncRequest):
     """Add user embeddings to pgvector database.
 
     Called by backend when a new user is created.
@@ -208,7 +221,8 @@ async def sync_add_user(request: UserSyncRequest):
 
 
 @app.post("/api/v1/sync/update_user")
-async def sync_update_user(request: UserSyncRequest):
+@limiter.limit("60/minute")  # Limit to 60 user updates per minute per IP
+async def sync_update_user(http_request: Request, request: UserSyncRequest):
     """Update user embeddings in pgvector database.
 
     Called by backend when a user is updated (name change, images added/removed).
@@ -237,7 +251,8 @@ async def sync_update_user(request: UserSyncRequest):
 
 
 @app.post("/api/v1/sync/delete_user")
-async def sync_delete_user(request: UserDeleteRequest):
+@limiter.limit("60/minute")  # Limit to 60 user deletions per minute per IP
+async def sync_delete_user(http_request: Request, request: UserDeleteRequest):
     """Delete user embeddings from pgvector database.
 
     Called by backend when a user is deleted.
@@ -266,7 +281,8 @@ async def sync_delete_user(request: UserDeleteRequest):
 
 
 @app.post("/api/v1/sync/rebuild")
-async def sync_rebuild(request: RebuildPgVectorRequest):
+@limiter.limit("2/hour")  # Limit rebuild operations to 2 per hour per IP (very resource intensive)
+async def sync_rebuild(http_request: Request, request: RebuildPgVectorRequest):
     """Rebuild all embeddings for a client from backend API.
 
     This fetches all users from backend and rebuilds the pgvector database.
