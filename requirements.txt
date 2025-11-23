@@ -19,7 +19,19 @@ filterpy~=1.4.5
 onnxruntime-gpu~=1.21.0
 dotenv~=0.9.9
 gcsfs~=2025.3.2
-# Dashboard server dependencies
+# API server dependencies
 fastapi~=0.115.0
 uvicorn[standard]~=0.32.0
 python-multipart~=0.0.9
+slowapi~=0.1.9  # Rate limiting for API endpoints
+# pgvector Database dependencies
+psycopg2-binary~=2.9.9
+sqlalchemy~=2.0.23
+pgvector~=0.2.4
+# Redis for Pub/Sub
+redis~=5.0.1
+# GCS image fetching
+google-cloud-storage~=2.14.0
+# WebRTC streaming
+aiortc~=1.9.0
+aiohttp~=3.9.0

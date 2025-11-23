@@ -1,4 +1,34 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: fr-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: fr-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-face_recognition}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-face_recognition_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-face_embeddings}
+    ports:
+      - ${POSTGRES_PORT:-5434}:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   face-recognition:
     image: humblebeeintel/face-recognition
     build:
@@ -19,7 +49,7 @@ services:
     environment:
       - FR_SLUG=${FR_SLUG:-"face-recognition"}
       - NVIDIA_VISIBLE_DEVICES=all
-      - PYTHONPATH=/app/${FR_SLUG}
+      - PYTHONPATH=/app/face-recognition/src:/app/${FR_SLUG}
       - HB_IN=${HB_IN:-"rtsp://username:password@camera_ip:554/stream"}
       - HB_IN_MANAGEMENT=${HB_IN_MANAGEMENT:-"rtsp://username:password@camera_ip:554/stream"}
       - HB_OUT=${HB_OUT:-"rtsp://username:password@camera_ip:554/stream"}
@@ -28,8 +58,70 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - JPEG_QUALITY=${JPEG_QUALITY:-85}
       - TARGET_FPS=${TARGET_FPS:-30}
+      # pgvector Database Configuration
+      - POSTGRES_HOST=${POSTGRES_HOST:-localhost}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5434}
+      - POSTGRES_USER=${POSTGRES_USER:-face_recognition}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-face_recognition_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-face_embeddings}
+      # Redis Configuration
+      - REDIS_HOST=${REDIS_HOST:-localhost}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      # GCS Configuration
+      - GCS_CREDENTIALS_PATH=${GCS_CREDENTIALS_PATH:-/app/keys/gcs-service-account.json}
+      - GCS_BUCKET=${GCS_BUCKET:-hbai-general-data}
+      # Backend API Configuration
+      - SO_BACKEND_API_URL=${SO_BACKEND_API_URL:-http://localhost:7091}
+      # Feature Flags
+      - USE_PGVECTOR=${USE_PGVECTOR:-true}
+      # Recognition Config
+      - MATCH_THRESHOLD=${MATCH_THRESHOLD:-0.3}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-512}
+      - FACE_DETECTION_PADDING=${FACE_DETECTION_PADDING:-20.0}
     ports:
       - ${FR_PORT:-5000}:${FR_PORT:-5000}
       - ${DASHBOARD_PORT:-5001}:${DASHBOARD_PORT:-5001}
     env_file:
       - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  face-recognition-api:
+    image: humblebeeintel/face-recognition
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fr-api
+    command: ["bash", "-c", "uvicorn src.web.api:app --host 0.0.0.0 --port 5000"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./src:/app/face-recognition/src
+      - ./keys:/app/keys
+      - face_recognition_models:/var/lib/face-recognition/models
+    env_file:
+      - .env
+    environment:
+      - FR_SLUG=${FR_SLUG:-face-recognition}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-face_recognition}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-face_recognition_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-face_embeddings}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - USE_PGVECTOR=${USE_PGVECTOR:-true}
+      - MATCH_THRESHOLD=${MATCH_THRESHOLD:-0.3}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-512}
+      - FACE_DETECTION_PADDING=${FACE_DETECTION_PADDING:-20.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  face_recognition_models:

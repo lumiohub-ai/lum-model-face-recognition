@@ -309,10 +309,14 @@ class FaceSetup:
         args.save_recognized_frame = getattr(args, "save_recognized_frame", True)
         args.record_always = getattr(args, "record_always", True)
         args.show = getattr(args, "show", True)
-        args.debug = getattr(args, "debug", True)
+        # SECURITY: Default to production mode (debug=False)
+        args.debug = getattr(args, "debug", False)
         args.production = getattr(args, "production", True)
         args.partial_match_threshold = getattr(args, "partial_match_threshold", 0.15)
         args.multi_camera = getattr(args, "multi_camera", True)
+
+        # Check if pgvector mode is enabled
+        args.use_pgvector = os.getenv("USE_PGVECTOR", "false").lower() == "true"
 
         # Add logger to args
         args.logger = logger

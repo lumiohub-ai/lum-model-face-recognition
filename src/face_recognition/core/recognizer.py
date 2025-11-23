@@ -19,12 +19,21 @@ class FaceRecognition:
             args: Configuration arguments containing parameters for face recognition
         """
         self.args = args
-        self.db_names, self.db_embs = self.load_embeddings()
+        self.use_pgvector = getattr(args, 'use_pgvector', False)
+        self.pgvector_store = None
+
+        if self.use_pgvector:
+            from ..storage.pgvector_store import PgVectorStore
+            self.pgvector_store = PgVectorStore(args.client_slug)
+            self.db_names, self.db_embs = self.load_embeddings_from_pgvector()
+        else:
+            self.db_names, self.db_embs = self.load_embeddings()
+
         self._rebuild_name_index()      
 
     def load_embeddings(self):
-        """Load face embeddings from the database file.
-        
+        """Load face embeddings from the database file (pickle mode).
+
         Returns:
             Tuple containing lists of names and their corresponding face embeddings
         """
@@ -35,8 +44,18 @@ class FaceRecognition:
         db_names = data['names']
         db_names = [name.split('_')[0] for name in db_names]
 
-
         return db_names, db_embs
+
+    def load_embeddings_from_pgvector(self):
+        """Load face embeddings from pgvector database.
+
+        Returns:
+            Tuple containing lists of names and their corresponding face embeddings
+        """
+        names, embeddings = self.pgvector_store.get_all_embeddings()
+        # Names already processed by pgvector_store
+        self.args.logger.info(f"Loaded {len(names)} embeddings from pgvector")
+        return names, embeddings
 
     def _rebuild_name_index(self) -> None:
         """Rebuild the name-to-index mapping for O(1) lookups.
@@ -59,7 +78,14 @@ class FaceRecognition:
         return self.name_to_index.get(name)
 
     def update_pkl(self):
-        """Update the pickle file with the current embeddings and names."""
+        """Update the pickle file with the current embeddings and names.
+
+        Note: This method is deprecated when using pgvector mode.
+        """
+        if self.use_pgvector:
+            self.args.logger.warning("update_pkl() called in pgvector mode - ignoring")
+            return
+
         data = {
             'embeddings': self.db_embs,
             'names': self.db_names
@@ -67,6 +93,19 @@ class FaceRecognition:
         with open(self.args.db_path, 'wb') as f:
             pickle.dump(data, f)
         self.args.logger.info(f"Updated {self.args.db_path} with {len(self.db_embs)} embeddings")
+
+    def reload_embeddings(self):
+        """Reload embeddings from storage (pgvector or pickle).
+
+        This method can be called to refresh the in-memory embeddings cache.
+        """
+        if self.use_pgvector:
+            self.db_names, self.db_embs = self.load_embeddings_from_pgvector()
+        else:
+            self.db_names, self.db_embs = self.load_embeddings()
+
+        self._rebuild_name_index()
+        self.args.logger.info(f"Reloaded {len(self.db_embs)} embeddings")
 
     def is_face_frontal_and_valid(self, landmarks: np.ndarray, min_frontality_threshold: float = 0.5) -> bool:
         """Check if face has all visible keypoints and meets minimum frontality requirements.
@@ -191,6 +230,21 @@ class FaceRecognition:
             frame_nums = valid_frame_nums
 
         similarities = self.compute_similarities(face_embs)
+
+        # Handle empty database - no embeddings to match against
+        if len(self.db_embs) == 0:
+            matched_frame_num = frame_nums[0] if len(frame_nums) > 0 else 0
+            if landmarks_dict:
+                matched_frame_num = self.get_most_frontal_frame(landmarks_dict, frame_nums)
+
+            return {
+                'name': 'unknown',
+                'similarity': 0.0,
+                'matched_frame_num': matched_frame_num,
+                'recognized': 'unrecognized',
+                'best_match_idx': -1,
+            }
+
         best_match_idx, best_similarity = self.get_best_match(similarities)
         matched_name = self.db_names[best_match_idx].split('_')[0]
 
@@ -223,6 +277,10 @@ class FaceRecognition:
         Returns:
             Matrix of similarity scores (shape: [n_faces, n_database_faces])
         """
+        # Handle empty database - return empty similarity matrix
+        if len(self.db_embs) == 0:
+            return np.empty((len(face_embs), 0), dtype=np.float32)
+
         return cosine_similarity(face_embs, self.db_embs)
 
     def get_best_match(self, similarities: np.ndarray) -> Tuple[int, float]:

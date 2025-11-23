@@ -16,17 +16,22 @@ class FaceDetector:
     This class handles face detection and embedding computation.
     """
 
-    def __init__(self, gpu_id: int = 0, model_name: str = 'buffalo_l'):
+    def __init__(self, gpu_id: int = 0, model_name: str = 'buffalo_l', padding_percent: float = 20.0):
         """Initialize the face detector.
 
         Args:
             gpu_id: GPU device ID to use for detection
             model_name: Name of the InsightFace model to use
+            padding_percent: Percentage of padding to add around images before detection (0-100)
         """
         self.gpu_id = gpu_id
         self.model_name = model_name
+        self.padding_percent = max(0.0, min(100.0, padding_percent))  # Clamp between 0-100
         self.model: Optional[FaceAnalysis] = None
         self._initialize_model()
+
+        if self.padding_percent > 0:
+            logger.info(f"Face detection padding enabled: {self.padding_percent}%")
 
     def _initialize_model(self) -> None:
         """Initialize the InsightFace detection model."""
@@ -37,6 +42,37 @@ class FaceDetector:
                 self.model.prepare(ctx_id=self.gpu_id)
 
         logger.info(f"Initialized InsightFace model '{self.model_name}' on GPU {self.gpu_id}")
+
+    def _add_padding(self, image: np.ndarray) -> np.ndarray:
+        """Add padding around the image to improve face detection.
+
+        Args:
+            image: Input image array (BGR format)
+
+        Returns:
+            Padded image with border added
+        """
+        if self.padding_percent <= 0:
+            return image
+
+        h, w = image.shape[:2]
+
+        # Calculate padding size based on percentage of image dimensions
+        pad_h = int(h * self.padding_percent / 100)
+        pad_w = int(w * self.padding_percent / 100)
+
+        # Add padding using border replication (extends edge pixels)
+        # This is better than black/white borders as it looks more natural
+        padded = cv2.copyMakeBorder(
+            image,
+            top=pad_h,
+            bottom=pad_h,
+            left=pad_w,
+            right=pad_w,
+            borderType=cv2.BORDER_REPLICATE
+        )
+
+        return padded
 
     def detect(self, image: np.ndarray) -> List:
         """Detect faces in an image.
@@ -50,7 +86,11 @@ class FaceDetector:
         if self.model is None:
             raise RuntimeError("Model not initialized")
 
-        faces = self.model.get(image)
+        # Apply padding to improve detection of faces near edges
+        padded_image = self._add_padding(image)
+
+        # Detect faces on padded image
+        faces = self.model.get(padded_image)
         return faces
 
     def compute_embedding(
@@ -115,3 +155,7 @@ class FaceDetector:
             })
 
         return face_features
+'''
+
+
+'''
