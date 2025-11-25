@@ -1,22 +1,29 @@
+# Core
 tqdm~=4.67.1
 scikit-learn~=1.6.1
-opencv-python-headless~=4.12.0.88
-pillow~=10.4.0
-PyYAML~=6.0.2
+# opencv-python-headless~=4.12.0.88  # Removed: comes with ultralytics (opencv-python)
+
+# Person Tracking (YOLOv8)
+# ultralytics>=8.0.0  # Removed: installed from wheels separately
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+# scipy>=1.10.0  # Removed: comes with ultralytics
+# pillow~=10.4.0  # Removed: comes with ultralytics
+# PyYAML~=6.0.2  # Removed: comes with ultralytics
 requests~=2.32.3
-matplotlib~=3.10.0
-psutil~=6.1.1
+# matplotlib~=3.10.0  # Removed: comes with ultralytics
+# psutil~=6.1.1  # Removed: comes with ultralytics
 shapely~=2.0.7
 requests_toolbelt~=1.0.0
 loguru~=0.7.3
 pytz~=2022.7.1
-pandas~=2.2.3
+# pandas~=2.2.3  # Removed: comes with ultralytics
 gdown~=5.2.0
 ftfy~=6.3.1
 regex~=2024.11.6
 lap~=0.5.12
 filterpy~=1.4.5
-onnxruntime-gpu~=1.21.0
+# onnxruntime-gpu~=1.21.0  # Removed: installed from wheels separately
 dotenv~=0.9.9
 gcsfs~=2025.3.2
 # API server dependencies

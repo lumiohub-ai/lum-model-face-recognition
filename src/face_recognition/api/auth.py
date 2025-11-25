@@ -23,6 +23,11 @@ class AuthenticationService:
         self.email = email
         self.password = password
         self.session = requests.Session()
+        # Disable SSL verification for development (if HTTPS is used)
+        self.session.verify = False
+        # Suppress InsecureRequestWarning
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self.token: Optional[str] = None
 
     def login(self) -> Optional[str]:

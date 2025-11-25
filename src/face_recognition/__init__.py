@@ -11,6 +11,7 @@ This package provides a comprehensive face recognition system with:
 
 from .__version__ import __version__
 from .hbface import HBFace
+from .smart_office_engine import SmartOfficeEngine
 
 # Core components
 from .core import FaceEngine, FaceDetector, FaceTracker, FaceRecognizer, TrackManager
@@ -35,8 +36,9 @@ from .video import StreamHandler, FrameProcessor
 from .api import APIClient, AuthenticationService
 
 __all__ = [
-    # Main entry point
+    # Main entry points
     "HBFace",
+    "SmartOfficeEngine",
 
     # Core
     "FaceEngine",

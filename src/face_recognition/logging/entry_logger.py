@@ -44,6 +44,9 @@ class EntryLogger:
             args, 'max_track_lifetime_seconds', 120
         )
 
+        # Track last seen location (camera) for each person
+        self.person_last_camera: Dict[str, str] = {}
+
         # Initialize API client
         api_host = os.getenv("API_HOST", getattr(args, 'api_host', "http://localhost:7091/"))
         self.api_client = APIClient(
@@ -128,18 +131,21 @@ class EntryLogger:
             bool: True if the status was recorded, False if unchanged
         """
         previous_status = self.person_status.get(name)
+        previous_camera = self.person_last_camera.get(name)
         recorded = False
+        location_changed = previous_camera != camera_name
 
-        # Send location data to API every time person is recognized (if in production mode)
-        if self.args.production:
+        # Send location data to API if location (camera) changed (if in production mode)
+        if self.args.production and location_changed:
             self._send_location_data(name, status, appear_time, camera_name)
+            self.person_last_camera[name] = camera_name
 
         # If status is the same as before, do nothing else
         if previous_status == status.upper():
             timestamp = appear_time.strftime("%Y-%m-%d %H:%M:%S")
             logger.debug(
                 f"[{timestamp}] {name} | Status: {status} | "
-                f"Camera: {camera_name} (unchanged)"
+                f"Camera: {camera_name} ({'location changed' if location_changed else 'unchanged'})"
             )
             return recorded
 

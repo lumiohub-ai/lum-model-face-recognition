@@ -77,11 +77,23 @@ RUN --mount=type=cache,target=/root/.cache,sharing=locked \
     /opt/conda/bin/pip install --no-index --find-links=./wheels \
         torch torchvision
 
+# Install large packages from local wheels (offline installation with all dependencies)
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/insightface && \
-    /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/yolo_tracking && \
-    /opt/conda/bin/pip install --timeout 1200 --retries 5 . && \
-    /opt/conda/bin/pip install --timeout 1200 --retries 5 -r ./requirements.txt
+    /opt/conda/bin/pip install --no-index --find-links=./wheels \
+        onnxruntime-gpu==1.21.0 ultralytics
+
+# Install local modules (allow network for build dependencies like setuptools)
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install --timeout 300 --retries 3 \
+        ./modules/insightface \
+        ./modules/yolo_tracking \
+        .
+
+# Install remaining requirements from local wheels (prefer local, fallback to network)
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install --timeout 300 --retries 3 \
+        --find-links=./wheels \
+        -r ./requirements.txt
 ## Here is the base image:
 FROM ${BASE_IMAGE} AS base
 

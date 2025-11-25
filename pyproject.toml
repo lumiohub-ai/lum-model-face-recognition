@@ -28,7 +28,7 @@ dynamic = ["version", "dependencies"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["face_recognition*"]
+include = ["face_recognition*", "person_tracking*"]
 namespaces = false
 
 [tool.setuptools.dynamic]
