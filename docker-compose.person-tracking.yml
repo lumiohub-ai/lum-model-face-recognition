@@ -89,6 +89,8 @@ services:
       PYTHONUNBUFFERED: 1
       # Development: Disable Python bytecode caching
       PYTHONDONTWRITEBYTECODE: 1
+      # Development: Prioritize mounted source over installed package
+      PYTHONPATH: /app/face-recognition/src:/app/face-recognition:${PYTHONPATH}
 
       # Disable SSL verification for model downloads (InsightFace)
       REQUESTS_CA_BUNDLE: ""

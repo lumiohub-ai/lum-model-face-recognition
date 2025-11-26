@@ -187,6 +187,36 @@ class IdentityManager:
         identity = self.locked_identities.get(track_id)
         return identity['name'] if identity else None
 
+    def find_track_by_identity(self, identity_name: str, exclude_track_id: Optional[int] = None) -> Optional[int]:
+        """
+        Find an existing track with the given locked identity.
+
+        Used for re-identification: when a person leaves and returns,
+        we can find their previous track_id based on face match.
+
+        Args:
+            identity_name: Name to search for
+            exclude_track_id: Track ID to exclude from search
+
+        Returns:
+            Track ID with matching identity, or None
+        """
+        for track_id, identity_data in self.locked_identities.items():
+            if exclude_track_id is not None and track_id == exclude_track_id:
+                continue
+            if identity_data['name'] == identity_name:
+                return track_id
+        return None
+
+    def get_all_locked_identities(self) -> Dict[int, Dict]:
+        """
+        Get all currently locked identities.
+
+        Returns:
+            Dict mapping track_id -> identity_data
+        """
+        return self.locked_identities.copy()
+
     def unlock_identity(self, track_id: int) -> None:
         """
         Unlock identity for a track (force re-recognition).

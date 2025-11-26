@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 # check=skip=SecretsUsedInArgOrEnv
 
-ARG BASE_IMAGE=nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+# ARG BASE_IMAGE=nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu20.04
+ARG BASE_IMAGE=nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu20.04@sha256:131e238d724ee145317f10d6c8eba0d301439c6c8764b02473510e7035756e81
+
+
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG FR_SLUG="face-recognition"
@@ -47,7 +50,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=private \
 	/bin/bash "/root/.cache/${_MINICONDA_FILENAME}" -b -u -p /opt/conda && \
 	/opt/conda/condabin/conda update -y conda && \
 	/opt/conda/condabin/conda install -y python=${PYTHON_VERSION} pip && \
-	/opt/conda/bin/pip install --timeout 60 -U pip
+	/opt/conda/bin/pip install --timeout 60 -U pip certifi
 
 COPY setup.py setup.cfg pyproject.toml requirements.txt ./
 COPY src ./src
@@ -71,8 +74,13 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
 
 # Install PyTorch from local wheels (OFFLINE - no network)
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --no-cache-dir --no-index --find-links=./wheels \
+    /opt/conda/bin/pip install --no-index --find-links=./wheels \
         torch torchvision
+
+# Install onnx and protobuf first (dependencies of onnxruntime-gpu)
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install  --no-index --find-links=./wheels \
+        protobuf onnx
 
 # Install large packages from local wheels (OFFLINE - no network)
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
@@ -86,10 +94,9 @@ RUN --mount=type=cache,target=/root/.cache,sharing=locked \
         --trusted-host pypi.org --trusted-host files.pythonhosted.org \
         -r ./requirements.txt
 
-# Install local modules (may need network for build-only dependencies like setuptools/wheel)
+# Install local modules without dependencies (deps already installed from requirements.txt)
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --no-cache-dir \
-        --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+    /opt/conda/bin/pip install --no-cache-dir --no-deps \
         ./modules/insightface \
         ./modules/yolo_tracking \
         .

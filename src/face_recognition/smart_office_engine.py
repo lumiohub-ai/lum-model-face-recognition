@@ -113,8 +113,9 @@ class CameraEngine:
         # Person Tracking (per-camera for isolated state)
         self.person_tracker = PersonTracker(
             tracker_type='botsort',
-            max_age=120,
-            min_hits=3
+            max_age=60,
+            min_hits=3,
+            iou_threshold=0.5  # Increased from default 0.3 for more stable tracking
         )
 
         # Track Manager
@@ -175,8 +176,6 @@ class CameraEngine:
         detected_phones = []
         if self.enable_phone_detection and self.phone_detector:
             detected_phones = self.phone_detector.detect_phones(frame)
-            if detected_phones:
-                logger.info(f"Camera {self.camera_name}: Detected {len(detected_phones)} phone(s) in frame {frame_num}")
 
         # Step 4: Process each active track
         for track in active_tracks:
@@ -184,6 +183,15 @@ class CameraEngine:
             bbox = track['bbox']
             keypoints = track.get('keypoints')
             confidence = track.get('confidence', 0.0)
+
+            # Check if this is a new track (person entered frame)
+            prev_state = self.state_manager.get_state(track_id)
+            if prev_state is None:
+                # Color based on camera type: Green for IN, Red for OUT
+                if self.cam_type == "IN":
+                    logger.opt(colors=True).info(f"<green>→ Track {track_id} ENTERED frame [IN]</green>")
+                else:
+                    logger.opt(colors=True).info(f"<red>→ Track {track_id} ENTERED frame [OUT]</red>")
 
             # Store track data
             self.track_manager.add_track_detection(
@@ -194,7 +202,7 @@ class CameraEngine:
                 confidence=confidence
             )
 
-            # Face recognition
+            # Face recognition with early re-identification
             identity = None
             identity_locked = False
             identity_confidence = 0.0
@@ -204,11 +212,27 @@ class CameraEngine:
                 result = self._recognize_face(frame, bbox)
 
                 if result['face_detected']:
+                    # EARLY RE-ID: If this is a new track and face is recognized,
+                    # check if this person already has an active track
+                    if prev_state is None and result.get('recognized'):
+                        recognized_name = result.get('name')
+                        existing_track = self._find_track_with_identity(recognized_name, exclude_track_id=track_id)
+
+                        if existing_track is not None:
+                            # RE-IDENTIFICATION: This person already has an active track!
+                            # Merge this new track into the existing one
+                            logger.warning(
+                                f"🔄 RE-ID: Track {track_id} merged into Track {existing_track} "
+                                f"(returning person: {recognized_name})"
+                            )
+                            self._merge_tracks(source_track_id=track_id, target_track_id=existing_track)
+                            continue
+
+                    # Normal identity voting
                     self.identity_manager.update_identity(track_id, result)
                     face_image = result.get('face_image')
 
-            # Get identity status
-            prev_state = self.state_manager.get_state(track_id)
+            # Get identity status (reuse prev_state from above)
 
             if self.identity_manager.is_identity_locked(track_id):
                 locked = self.identity_manager.get_locked_identity(track_id)
@@ -218,7 +242,22 @@ class CameraEngine:
 
                 # Check if this is the FIRST time identity is locked
                 if prev_state and not prev_state.identity_locked:
+                    # Check for duplicate tracks (same person with different track_id)
+                    existing_track = self._find_track_with_identity(identity, exclude_track_id=track_id)
+
+                    if existing_track is not None:
+                        # DUPLICATE DETECTED: Merge this track into existing one
+                        logger.warning(f"🔗 Track {track_id} merged into Track {existing_track} (same person: {identity})")
+                        self._merge_tracks(source_track_id=track_id, target_track_id=existing_track)
+                        # Skip further processing for this track (it's been merged)
+                        continue
+
                     # Identity just locked - emit recognition event for immediate logging
+                    logger.opt(colors=True).info(f"<blue>🔒 Track {track_id} recognized as '{identity}' [{self.cam_type}]</blue>")
+
+                    # Get best quality person image as proof (full frame with bbox)
+                    proof_image = self._get_best_person_image(track_id)
+
                     recognized_persons.append({
                         'track_id': track_id,
                         'name': identity,
@@ -229,6 +268,7 @@ class CameraEngine:
                         'camera_id': self.camera_id,
                         'status': self.cam_type,  # IN or OUT
                         'face_image': face_image,
+                        'proof_image': proof_image,  # Best quality person crop
                     })
             else:
                 voting = self.identity_manager.get_voting_status(track_id)
@@ -249,12 +289,14 @@ class CameraEngine:
                     )
 
                     if spatial_result['using_phone']:
-                        logger.debug(f"Track {track_id}: Phone usage detected (spatial score passed)")
                         is_using = self.phone_usage_filter.update(track_id, spatial_result)
                         if is_using:
                             using_phone = True
                             phone_confidence = self.phone_usage_filter.get_usage_confidence(track_id)
-                            logger.info(f"Track {track_id}: Phone usage CONFIRMED (filter passed)")
+                            # Log phone usage event (only once when confirmed)
+                            if prev_state and not prev_state.using_phone:
+                                identity_str = f"{identity}" if identity else f"Track {track_id}"
+                                logger.opt(colors=True).info(f"<yellow>📱 {identity_str} using phone [{self.cam_type}]</yellow>")
                             break
 
                 if not using_phone:
@@ -282,15 +324,25 @@ class CameraEngine:
                     'frame': frame.copy()
                 }
 
-        # Step 4: Process removed tracks
+        # Step 5: Process removed tracks (person left frame)
         for track in removed_tracks:
             track_id = track['track_id']
 
             # Get state before cleanup
             state = self.state_manager.get_state(track_id)
 
+            # Log person exit
+            if state:
+                identity_str = f"'{state.identity}'" if state.identity_locked else f"Track {track_id}"
+                # Color based on camera type: Green for IN, Red/Magenta for OUT
+                if self.cam_type == "IN":
+                    logger.opt(colors=True).info(f"<green>← {identity_str} LEFT frame [IN]</green>")
+                else:
+                    logger.opt(colors=True).info(f"<magenta>← {identity_str} LEFT frame [OUT]</magenta>")
+
             # If person was NOT recognized (identity never locked), send unrecognized person image
             if state and not state.identity_locked:
+                logger.info(f"📸 Sending unrecognized person image for Track {track_id}")
                 person_image = self._get_best_person_image(track_id)
                 if person_image is not None and person_image.size > 0:
                     # Add to recognized_persons list for API submission
@@ -462,6 +514,79 @@ class CameraEngine:
                 return crop_data
 
         return None
+
+    def _find_track_with_identity(self, identity_name: str, exclude_track_id: Optional[int] = None) -> Optional[int]:
+        """Find an existing track with the given identity.
+
+        Args:
+            identity_name: Name of the identity to search for
+            exclude_track_id: Track ID to exclude from search
+
+        Returns:
+            Track ID with matching identity, or None if not found
+        """
+        all_states = self.state_manager.get_all_states()
+
+        for state in all_states:
+            # Skip the excluded track
+            if exclude_track_id is not None and state.track_id == exclude_track_id:
+                continue
+
+            # Check if this track has the same locked identity
+            if state.identity_locked and state.identity == identity_name:
+                # Verify track is still active (not just in state history)
+                track_info = self.person_tracker.get_track_info(state.track_id)
+                if track_info is not None:
+                    return state.track_id
+
+        return None
+
+    def _merge_tracks(self, source_track_id: int, target_track_id: int) -> None:
+        """Merge source track into target track.
+
+        Transfers all data from source track to target track and removes source.
+
+        Args:
+            source_track_id: Track to merge (will be deleted)
+            target_track_id: Target track to merge into (will be kept)
+        """
+        # Transfer track data from source to target
+        source_data = self.track_manager.get_track_data(source_track_id)
+        if source_data:
+            target_data = self.track_manager.get_track_data(target_track_id)
+            if target_data:
+                # Merge detection history
+                if 'detections' in source_data and 'detections' in target_data:
+                    target_data['detections'].extend(source_data['detections'])
+
+                # Merge keypoints history (handle both dict and list formats)
+                if 'keypoints' in source_data and 'keypoints' in target_data:
+                    source_kp = source_data['keypoints']
+                    target_kp = target_data['keypoints']
+                    # If both are dicts, merge them
+                    if isinstance(source_kp, dict) and isinstance(target_kp, dict):
+                        target_kp.update(source_kp)
+                    # If both are lists, extend
+                    elif isinstance(source_kp, list) and isinstance(target_kp, list):
+                        target_kp.extend(source_kp)
+
+        # Transfer crop history
+        if source_track_id in self.track_manager.track_crop_history:
+            source_crops = self.track_manager.track_crop_history[source_track_id]
+            if target_track_id not in self.track_manager.track_crop_history:
+                self.track_manager.track_crop_history[target_track_id] = {}
+            self.track_manager.track_crop_history[target_track_id].update(source_crops)
+
+        # Remove source track from all managers
+        self.track_manager.remove_track(source_track_id)
+        self.state_manager.remove_person(source_track_id)
+        self.identity_manager.reset_track(source_track_id)
+        if self.enable_phone_detection:
+            self.phone_usage_filter.reset_track(source_track_id)
+
+        # Remove from person_tracker's active_tracks
+        if source_track_id in self.person_tracker.active_tracks:
+            del self.person_tracker.active_tracks[source_track_id]
 
     def reset(self) -> None:
         """Reset all tracking state."""
@@ -846,9 +971,7 @@ class SmartOfficeEngine:
                         logger.info("Quit requested via keyboard")
                         self.running = False
 
-                # Log stats periodically
-                if self.total_frames % 300 == 0:
-                    self._log_stats()
+
 
         except Exception as e:
             logger.error(f"Error during processing: {e}")
@@ -865,6 +988,7 @@ class SmartOfficeEngine:
         camera_name = person['camera_name']
         camera_id = person['camera_id']
         face_image = person.get('face_image')
+        proof_image = person.get('proof_image')
 
         if person['recognized'] and name:
             # Log recognized person
@@ -873,7 +997,8 @@ class SmartOfficeEngine:
                 status=status,
                 appear_time=appear_time,
                 camera_name=camera_name,
-                camera_id=camera_id
+                camera_id=camera_id,
+                proof_image=proof_image
             )
 
             if recorded:
@@ -937,10 +1062,13 @@ class SmartOfficeEngine:
             # Skip tracks that are not in active_tracks (person not currently detected)
             # track_info is None means the track is not in person_tracker.active_tracks
             if track_info is None:
+                logger.debug(f"Track {state.track_id}: Skipping (not in active_tracks)")
                 continue
 
-            # Also skip if track age > 0 (not detected in current frame)
-            if track_info.get('age', 0) > 0:
+            # Remove bbox immediately when person not detected in current frame (age > 0)
+            age = track_info.get('age', 0)
+            if age > 0:
+                logger.debug(f"Track {state.track_id}: Skipping bbox (age={age}, not in current frame)")
                 continue
 
             track_data = engine.track_manager.get_track_data(state.track_id)
@@ -975,17 +1103,6 @@ class SmartOfficeEngine:
         )
 
         return annotated
-
-    def _log_stats(self) -> None:
-        """Log performance statistics."""
-        elapsed = time.time() - self.start_time
-        fps = self.total_frames / elapsed if elapsed > 0 else 0
-
-        logger.info(
-            f"Stats | Frames: {self.total_frames} | "
-            f"FPS: {fps:.1f} | "
-            f"Runtime: {elapsed:.0f}s"
-        )
 
     def _cleanup(self) -> None:
         """Clean up resources."""

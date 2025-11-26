@@ -116,7 +116,8 @@ class EntryLogger:
         status: str,
         appear_time: datetime,
         camera_name: str = "Unknown",
-        camera_id: Optional[int] = None
+        camera_id: Optional[int] = None,
+        proof_image: Optional[np.ndarray] = None
     ) -> bool:
         """Log a person's entry or exit.
 
@@ -126,6 +127,7 @@ class EntryLogger:
             appear_time: Time when the person appeared
             camera_name: Name of the camera that detected the person
             camera_id: ID of the camera that detected the person
+            proof_image: Optional annotated frame with person bbox as proof
 
         Returns:
             bool: True if the status was recorded, False if unchanged
@@ -160,7 +162,7 @@ class EntryLogger:
 
         # Send attendance data to API if in production mode
         if self.args.production:
-            self._send_data_to_api(name, status, camera_id)
+            self._send_data_to_api(name, status, camera_id, proof_image)
 
         # Log status change with color coding for console
         self._log_status_to_console(name, status, today_time)
@@ -196,7 +198,8 @@ class EntryLogger:
         self,
         name: str,
         status: str,
-        camera_id: Optional[int] = None
+        camera_id: Optional[int] = None,
+        proof_image: Optional[np.ndarray] = None
     ) -> None:
         """Send person entry/exit data to the API.
 
@@ -204,6 +207,7 @@ class EntryLogger:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
             camera_id: ID of the camera that detected the person
+            proof_image: Optional annotated frame with person bbox as proof
         """
         user_id = next(
             (int(i['id']) for i in self.name_to_id if i['name'] == name),
@@ -214,7 +218,9 @@ class EntryLogger:
             logger.warning(f'User with name {name} not found in the database')
             return
 
-        response = self.api_client.create_attendance_record(user_id, status, camera_id)
+        response = self.api_client.create_attendance_record(
+            user_id, status, camera_id, proof_image
+        )
         if response is None:
             logger.warning(f"Failed to create attendance record for {name}")
 

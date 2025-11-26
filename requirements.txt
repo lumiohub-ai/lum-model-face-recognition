@@ -1,6 +1,10 @@
 # Core
 tqdm~=4.67.1
 scikit-learn~=1.6.1
+scikit-image~=0.24.0
+easydict~=1.13
+albumentations~=1.4.0
+prettytable~=3.12.0
 # opencv-python-headless~=4.12.0.88  # Removed: comes with ultralytics (opencv-python)
 
 # Person Tracking (YOLOv8)
@@ -17,7 +21,7 @@ shapely~=2.0.7
 requests_toolbelt~=1.0.0
 loguru~=0.7.3
 pytz~=2022.7.1
-# pandas~=2.2.3  # Removed: comes with ultralytics
+pandas~=2.2.3
 gdown~=5.2.0
 ftfy~=6.3.1
 regex~=2024.11.6

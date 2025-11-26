@@ -259,7 +259,8 @@ class APIClient:
         self,
         user_id: int,
         status: str,
-        camera_id: Optional[int] = None
+        camera_id: Optional[int] = None,
+        proof_image: Optional[np.ndarray] = None
     ) -> Optional[requests.Response]:
         """Create an attendance record.
 
@@ -267,6 +268,7 @@ class APIClient:
             user_id: ID of the user to create record for
             status: Either 'IN' or 'OUT'
             camera_id: ID of the camera that detected the person
+            proof_image: Optional annotated frame with person bbox as proof
 
         Returns:
             Response object if successful, None otherwise
@@ -292,12 +294,35 @@ class APIClient:
             "timestamp": timestamp
         }
 
+        # Encode proof_image if provided
+        encoded_image = None
+        if proof_image is not None and proof_image.size > 0:
+            success, encoded = cv2.imencode('.jpg', proof_image)
+            if success:
+                encoded_image = encoded
+            else:
+                logger.warning("Failed to encode proof_image, sending record without image")
+
         def make_request():
-            return self.session.post(
-                f"{self.base_url}/org/{self.client_slug}/attendance-records",
-                json=record_data,
-                headers={"Content-Type": "application/json"}
-            )
+            if encoded_image is not None:
+                # Send as multipart/form-data with image file
+                headers = {"Authorization": f"Bearer {self.token}"}
+                files = [
+                    ('proof_image', ('proof.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg')),
+                ]
+                return self.session.post(
+                    f"{self.base_url}/org/{self.client_slug}/attendance-records",
+                    data=record_data,
+                    files=files,
+                    headers=headers
+                )
+            else:
+                # Send as JSON without image
+                return self.session.post(
+                    f"{self.base_url}/org/{self.client_slug}/attendance-records",
+                    json=record_data,
+                    headers={"Content-Type": "application/json"}
+                )
 
         try:
             response = make_request()
