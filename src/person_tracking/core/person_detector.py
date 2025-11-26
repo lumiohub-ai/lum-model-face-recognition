@@ -11,6 +11,12 @@ from numpy.typing import NDArray
 from ultralytics import YOLO
 from loguru import logger
 import torch
+import ssl
+import urllib3
+
+# Disable SSL verification for model downloads (development only)
+ssl._create_default_https_context = ssl._create_unverified_context
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class PersonDetector:

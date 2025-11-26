@@ -16,6 +16,7 @@ import os
 import sys
 import time
 import signal
+import yaml
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -79,6 +80,7 @@ class CameraEngine:
         self.stream_url = camera_config['stream_url']
         self.application = camera_config.get('application', 'FaceRecognision')
         self.match_threshold = camera_config.get('match_threshold', 0.3)
+        self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
         self.roi = camera_config.get('roi')
         self.line_points = camera_config.get('line_points')
 
@@ -173,6 +175,8 @@ class CameraEngine:
         detected_phones = []
         if self.enable_phone_detection and self.phone_detector:
             detected_phones = self.phone_detector.detect_phones(frame)
+            if detected_phones:
+                logger.info(f"Camera {self.camera_name}: Detected {len(detected_phones)} phone(s) in frame {frame_num}")
 
         # Step 4: Process each active track
         for track in active_tracks:
@@ -245,10 +249,12 @@ class CameraEngine:
                     )
 
                     if spatial_result['using_phone']:
+                        logger.debug(f"Track {track_id}: Phone usage detected (spatial score passed)")
                         is_using = self.phone_usage_filter.update(track_id, spatial_result)
                         if is_using:
                             using_phone = True
                             phone_confidence = self.phone_usage_filter.get_usage_confidence(track_id)
+                            logger.info(f"Track {track_id}: Phone usage CONFIRMED (filter passed)")
                             break
 
                 if not using_phone:
@@ -268,18 +274,42 @@ class CameraEngine:
                 phone_confidence=phone_confidence
             )
 
-            # Store face image for later use (unrecognized faces)
+            # Store face image and person bbox for later use (unrecognized faces)
             if face_image is not None:
-                self.track_manager.track_crop_history.setdefault(track_id, {})[frame_num] = face_image
+                self.track_manager.track_crop_history.setdefault(track_id, {})[frame_num] = {
+                    'face': face_image,
+                    'bbox': bbox,
+                    'frame': frame.copy()
+                }
 
-        # Step 4: Process removed tracks (cleanup only, logging already done at identity lock)
+        # Step 4: Process removed tracks
         for track in removed_tracks:
             track_id = track['track_id']
+
+            # Get state before cleanup
+            state = self.state_manager.get_state(track_id)
+
+            # If person was NOT recognized (identity never locked), send unrecognized person image
+            if state and not state.identity_locked:
+                person_image = self._get_best_person_image(track_id)
+                if person_image is not None and person_image.size > 0:
+                    # Add to recognized_persons list for API submission
+                    recognized_persons.append({
+                        'track_id': track_id,
+                        'name': None,
+                        'recognized': False,
+                        'confidence': 0.0,
+                        'appear_time': state.first_seen,
+                        'camera_name': self.camera_name,
+                        'camera_id': self.camera_id,
+                        'status': self.cam_type,
+                        'face_image': person_image,  # Actually person image, but API expects this key
+                    })
 
             # Remove track data
             self.track_manager.remove_track(track_id)
 
-            # Clean up state managers (no duplicate API calls)
+            # Clean up state managers
             self.state_manager.remove_person(track_id)
             self.identity_manager.reset_track(track_id)
             if self.enable_phone_detection:
@@ -356,13 +386,81 @@ class CameraEngine:
                 'face_image': face_image
             }
 
-    def _get_best_face_image(self, track_id: int) -> Optional[np.ndarray]:
-        """Get the best face image from track history."""
+    def _get_best_person_image(self, track_id: int) -> Optional[np.ndarray]:
+        """Get the best quality person image from track history.
+
+        Uses face quality criteria to select best frame, but returns full person crop.
+
+        Selection criteria (based on face):
+        1. Face size >= min_face_size
+        2. Not blurry (Laplacian variance check)
+        3. Most frontal (largest face area = closest to camera)
+
+        Returns:
+            Best quality person crop from bbox, or None if no suitable frames found
+        """
         crops = self.track_manager.track_crop_history.get(track_id, {})
-        if crops:
-            # Return the most recent crop
-            latest_frame = max(crops.keys())
-            return crops[latest_frame]
+        if not crops:
+            return None
+
+        min_face_size = getattr(self, 'min_face_size', 150)
+        blur_threshold = 100.0  # Laplacian variance threshold
+
+        best_frame_num = None
+        best_score = -1
+
+        for frame_num, crop_data in crops.items():
+            # Handle both old format (direct face crop) and new format (dict)
+            if isinstance(crop_data, dict):
+                face_crop = crop_data.get('face')
+            else:
+                face_crop = crop_data  # Backward compatibility
+
+            if face_crop is None or face_crop.size == 0:
+                continue
+
+            # Check 1: Face size (height and width must be >= min_face_size)
+            h, w = face_crop.shape[:2]
+            if h < min_face_size or w < min_face_size:
+                continue
+
+            # Check 2: Blur detection using Laplacian variance
+            gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY) if len(face_crop.shape) == 3 else face_crop
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+            if laplacian_var < blur_threshold:
+                continue  # Too blurry
+
+            # Score: Combine face size (frontal indicator) and sharpness
+            # Larger face = more frontal, higher Laplacian = sharper
+            size_score = (h * w) / (min_face_size ** 2)  # Normalized by min size
+            sharpness_score = laplacian_var / blur_threshold
+
+            total_score = size_score * 0.6 + sharpness_score * 0.4
+
+            if total_score > best_score:
+                best_score = total_score
+                best_frame_num = frame_num
+
+        # If we found a best frame, extract person crop from that frame
+        if best_frame_num is not None:
+            crop_data = crops[best_frame_num]
+            if isinstance(crop_data, dict):
+                frame = crop_data.get('frame')
+                bbox = crop_data.get('bbox')
+
+                if frame is not None and bbox is not None:
+                    # Crop person from frame using bbox
+                    x1, y1, x2, y2 = map(int, bbox)
+                    person_crop = frame[y1:y2, x1:x2]
+                    return person_crop
+                else:
+                    # Fallback to face crop if frame/bbox not available
+                    return crop_data.get('face')
+            else:
+                # Old format - return face crop
+                return crop_data
+
         return None
 
     def reset(self) -> None:
@@ -444,9 +542,13 @@ class SmartOfficeEngine:
             c.get('application') == 'PhoneUsageDetection'
             for c in self.camera_configs
         )
+
+        # Load phone detection config from config file
+        phone_config = self._load_phone_detection_config()
+
         self.shared_phone_detector = PhoneDetector(
-            model_size='n',
-            confidence_threshold=0.4
+            model_size=phone_config.get('model_size', 'n'),
+            confidence_threshold=phone_config.get('confidence_threshold', 0.4)
         ) if needs_phone_detection else None
 
         if self.shared_phone_detector:
@@ -545,6 +647,48 @@ class SmartOfficeEngine:
             return [tuple(line_points[0]), tuple(line_points[1])]
         return None
 
+    def _load_phone_detection_config(self) -> Dict[str, Any]:
+        """Load phone detection configuration from config file.
+
+        Returns:
+            Dictionary with phone detection config (model_size, confidence_threshold)
+        """
+        config_path = Path('configs/person_tracking/config.yaml')
+
+        # Default values
+        default_config = {
+            'model_size': 'n',
+            'confidence_threshold': 0.4
+        }
+
+        try:
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+
+                # Get phone detection config from first camera (shared across all)
+                if config and 'cameras' in config and len(config['cameras']) > 0:
+                    camera_config = config['cameras'][0]
+                    phone_config = camera_config.get('phone_detection', {})
+
+                    result = {
+                        'model_size': phone_config.get('model_size', default_config['model_size']),
+                        'confidence_threshold': phone_config.get('confidence_threshold', default_config['confidence_threshold'])
+                    }
+
+                    logger.info(
+                        f"Loaded phone detection config from {config_path}: "
+                        f"model_size={result['model_size']}, threshold={result['confidence_threshold']}"
+                    )
+                    return result
+            else:
+                logger.warning(f"Config file not found: {config_path}, using defaults")
+
+        except Exception as e:
+            logger.error(f"Error loading phone detection config: {e}, using defaults")
+
+        return default_config
+
     def _init_face_recognizer(self) -> FaceRecognition:
         """Initialize face recognizer with pgvector."""
         # Create args object for FaceRecognition
@@ -619,6 +763,7 @@ class SmartOfficeEngine:
         args.password = password
         args.logger = logger
         args.db_names = self.face_recognizer.db_names
+        args.production = True  # Enable API submissions
 
         return EntryLogger(args=args)
 
@@ -786,6 +931,18 @@ class SmartOfficeEngine:
 
         person_states = []
         for state in states:
+            # Get track info to check if person is currently visible
+            track_info = engine.person_tracker.get_track_info(state.track_id)
+
+            # Skip tracks that are not in active_tracks (person not currently detected)
+            # track_info is None means the track is not in person_tracker.active_tracks
+            if track_info is None:
+                continue
+
+            # Also skip if track age > 0 (not detected in current frame)
+            if track_info.get('age', 0) > 0:
+                continue
+
             track_data = engine.track_manager.get_track_data(state.track_id)
             bbox = engine.track_manager.get_latest_bbox(state.track_id)
             keypoints = None

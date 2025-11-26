@@ -2,7 +2,13 @@
 
 from typing import Optional
 import requests
+import ssl
+import urllib3
 from loguru import logger
+
+# Disable SSL verification globally for development
+ssl._create_default_https_context = ssl._create_unverified_context
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class AuthenticationService:

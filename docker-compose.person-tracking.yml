@@ -44,7 +44,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: humblebeeintel/person-tracking:latest
+      # Development: faster builds with caching
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: humblebeeintel/person-tracking:dev
     container_name: person-tracking-app
     network_mode: host
     environment:
@@ -77,29 +80,38 @@ services:
       REDIS_PORT: ${REDIS_PORT:-6379}
 
       # Logging
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
 
       # Backend API (optional)
       SO_BACKEND_API_URL: ${SO_BACKEND_API_URL:-}
+
+      # Development: Enable Python unbuffered output for real-time logs
+      PYTHONUNBUFFERED: 1
+      # Development: Disable Python bytecode caching
+      PYTHONDONTWRITEBYTECODE: 1
+
+      # Disable SSL verification for model downloads (InsightFace)
+      REQUESTS_CA_BUNDLE: ""
+      CURL_CA_BUNDLE: ""
 
       # Performance
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
     volumes:
+      # Development: Mount source code for hot reload (if supported)
+      - ./src:/app/face-recognition/src
       # Configuration
       - ./configs/person_tracking:/app/face-recognition/configs/person_tracking
-
       # Output storage
       - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
-
       # Logs
       - ./logs/person-tracking:/var/log/face-recognition
-
       # Credentials (if needed)
       - ./credentials:/app/face-recognition/credentials
-
       # Model cache (persist downloaded models)
       - model-cache:/root/.cache
+      # InsightFace models (pre-downloaded to avoid SSL errors)
+      - ./insightface_models/buffalo_l:/home/fr-user/.insightface/models/buffalo_l:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,7 +124,11 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    restart: unless-stopped
+    # Development: don't auto-restart on crash to see errors
+    restart: "no"
+    # Development: Show logs in color
+    tty: true
+    stdin_open: true
 
   # Optional: API service for querying events
   person-tracking-api:

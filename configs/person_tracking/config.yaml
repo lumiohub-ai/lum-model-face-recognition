@@ -35,7 +35,7 @@ cameras:
     # Phone Detection (YOLOv8)
     phone_detection:
       model_size: "n"            # n/s/m/l/x (n=nano, fastest)
-      confidence_threshold: 0.4   # 0.0-1.0
+      confidence_threshold: 0.25  # 0.0-1.0 (lowered for better detection)
 
     # Phone Usage Logic
     phone_usage:
@@ -53,7 +53,7 @@ cameras:
 
     # Performance
     performance:
-      target_fps: 12              # target frames per second
+      target_fps: 17              # target frames per second
       resize_width: 1280          # resize for performance (null = no resize)
       batch_size: 1               # batch size for inference
 

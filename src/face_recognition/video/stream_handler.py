@@ -1,5 +1,6 @@
 """Video stream handling module for processing camera streams and video files."""
 
+import os
 import cv2
 import threading
 import queue
@@ -25,7 +26,16 @@ class StreamHandler:
         self.src = src
         self.is_video = self.is_video_file(src)
         self.logger = logger
-        self.cap = cv2.VideoCapture(src)
+
+        # Configure RTSP options for better compatibility
+        if isinstance(src, str) and src.startswith('rtsp://'):
+            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            # Set RTSP transport to TCP (more reliable than UDP)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # Additional FFmpeg options for RTSP
+            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|rtsp_flags;prefer_tcp'
+        else:
+            self.cap = cv2.VideoCapture(src)
         self.stopped = False
         self.lock = threading.Lock()
         self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame
@@ -69,7 +79,13 @@ class StreamHandler:
         attempt_count = 1
 
         while True:  # Infinite reconnection loop
-            self.cap = cv2.VideoCapture(self.src)
+            # Configure RTSP options for better compatibility
+            if isinstance(self.src, str) and self.src.startswith('rtsp://'):
+                self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|rtsp_flags;prefer_tcp'
+            else:
+                self.cap = cv2.VideoCapture(self.src)
             ret, _ = self.cap.read()
             if ret:
                 self.logger.warning(f"Successfully reconnected to stream: {self.src}")

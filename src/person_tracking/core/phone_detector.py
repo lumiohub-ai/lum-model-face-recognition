@@ -11,6 +11,12 @@ from numpy.typing import NDArray
 from ultralytics import YOLO
 from loguru import logger
 import torch
+import ssl
+import urllib3
+
+# Disable SSL verification for model downloads (development only)
+ssl._create_default_https_context = ssl._create_unverified_context
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class PhoneDetector:
@@ -119,8 +125,10 @@ class PhoneDetector:
                             'class_name': 'cell phone'
                         }
                         phones.append(phone)
+                        logger.debug(f"Phone detected: conf={conf:.2f}, bbox={bbox.tolist()}")
 
-            logger.debug(f"Detected {len(phones)} phone(s) in frame")
+            if len(phones) > 0:
+                logger.info(f"Detected {len(phones)} phone(s) in frame")
             return phones
 
         except Exception as e:

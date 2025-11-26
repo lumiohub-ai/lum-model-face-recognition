@@ -2,10 +2,15 @@
 
 import contextlib
 import os
+import ssl
 from typing import List, Optional
 
 import cv2
 import numpy as np
+
+# Disable SSL verification for InsightFace model downloads
+ssl._create_default_https_context = ssl._create_unverified_context
+
 from insightface.app import FaceAnalysis  # type: ignore
 from loguru import logger
 

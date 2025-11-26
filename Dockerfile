@@ -53,6 +53,7 @@ COPY setup.py setup.cfg pyproject.toml requirements.txt ./
 COPY src ./src
 COPY modules ./modules
 COPY wheels ./wheels
+COPY insightface_models ./insightface_models
 
 # --- Make TLS sane in the Conda env ---
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
@@ -68,32 +69,40 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 
-# Configure pip to use alternative PyPI mirrors with fallback
-RUN /opt/conda/bin/pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
-    /opt/conda/bin/pip config set global.extra-index-url "https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/"
-
-# Install PyTorch from local wheels (offline installation)
+# Install PyTorch from local wheels (OFFLINE - no network)
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --no-index --find-links=./wheels \
+    /opt/conda/bin/pip install --no-cache-dir --no-index --find-links=./wheels \
         torch torchvision
 
-# Install large packages from local wheels (offline installation with all dependencies)
+# Install large packages from local wheels (OFFLINE - no network)
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --no-index --find-links=./wheels \
+    /opt/conda/bin/pip install --no-cache-dir --no-index --find-links=./wheels \
         onnxruntime-gpu==1.21.0 ultralytics
 
-# Install local modules (allow network for build dependencies like setuptools)
+# Install remaining requirements from local wheels (OFFLINE - prefer local, fallback to network only if needed)
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --timeout 300 --retries 3 \
+    /opt/conda/bin/pip install --no-cache-dir \
+        --find-links=./wheels \
+        --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+        -r ./requirements.txt
+
+# Install local modules (may need network for build-only dependencies like setuptools/wheel)
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install --no-cache-dir \
+        --trusted-host pypi.org --trusted-host files.pythonhosted.org \
         ./modules/insightface \
         ./modules/yolo_tracking \
         .
 
-# Install remaining requirements from local wheels (prefer local, fallback to network)
-RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --timeout 300 --retries 3 \
-        --find-links=./wheels \
-        -r ./requirements.txt
+# Copy pre-downloaded InsightFace models (prevents runtime downloads)
+RUN mkdir -p /root/.insightface/models && \
+    if [ -d "./insightface_models/buffalo_l" ]; then \
+        cp -r ./insightface_models/buffalo_l /root/.insightface/models/ && \
+        echo "InsightFace models copied successfully"; \
+    else \
+        echo "WARNING: InsightFace models not found. Run download_insightface_models.sh first"; \
+    fi
+
 ## Here is the base image:
 FROM ${BASE_IMAGE} AS base
 
@@ -190,6 +199,9 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 COPY --from=builder --chown=${UID}:${GID} /opt/conda /opt/conda
+
+# Copy pre-downloaded InsightFace models from builder stage
+COPY --from=builder /root/.insightface /root/.insightface
 
 
 ## Here is the final image:
