@@ -192,9 +192,9 @@ class PersonTrackingApp:
 
                     # Save annotated frames periodically
                     if camera_config and camera_config.storage.save_annotated_frames:
-                        save_interval = max(1, int(camera_config.performance.target_fps))
-                        if frame_num % save_interval == 0:
-                            engine.save_frame(annotated_frame, frame_num)
+                        # save_interval = max(1, int(camera_config.performance.target_fps))
+                        # if frame_num % save_interval == 0:
+                        engine.save_frame(annotated_frame, frame_num)
 
                     # Log significant events
                     for event in events:
@@ -203,11 +203,11 @@ class PersonTrackingApp:
                 if frame_processed:
                     frame_num += 1
 
-                # Log statistics periodically
-                current_time = time.time()
-                if current_time - last_stats_time >= stats_interval:
-                    self._log_statistics()
-                    last_stats_time = current_time
+                # # Log statistics periodically
+                # current_time = time.time()
+                # if current_time - last_stats_time >= stats_interval:
+                #     self._log_statistics()
+                #     last_stats_time = current_time
 
         except Exception as e:
             logger.error(f"Error during processing: {e}")

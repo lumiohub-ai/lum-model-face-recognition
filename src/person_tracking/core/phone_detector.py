@@ -127,8 +127,6 @@ class PhoneDetector:
                         phones.append(phone)
                         logger.debug(f"Phone detected: conf={conf:.2f}, bbox={bbox.tolist()}")
 
-            if len(phones) > 0:
-                logger.info(f"Detected {len(phones)} phone(s) in frame")
             return phones
 
         except Exception as e:
@@ -143,6 +141,7 @@ class PhoneDetector:
     ) -> Dict[int, List[Dict]]:
         """
         Associate detected phones with persons using bbox overlap.
+
 
         Args:
             phones: List of phone detections

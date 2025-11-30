@@ -17,6 +17,7 @@ import sys
 import time
 import signal
 import yaml
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -40,12 +41,51 @@ from person_tracking.core.person_tracker import PersonTracker
 from person_tracking.core.track_manager import PersonTrackManager
 from person_tracking.core.phone_detector import PhoneDetector
 from person_tracking.core.identity_manager import IdentityManager
-from person_tracking.core.phone_usage_logic import PhoneUsageSpatialLogic
+from person_tracking.core.phone_usage_logic_v2 import PhoneUsageDetectorV2
 from person_tracking.core.phone_usage_filter import PhoneUsageFilter
 from person_tracking.core.state_manager import PersonStateManager, EventType
 from person_tracking.core.face_adapter import crop_person_roi
+from person_tracking.core.id_switch_corrector import IDSwitchCorrector
 from person_tracking.video.frame_annotator import FrameAnnotator
 from person_tracking.logging.csv_logger import CSVLogger
+
+
+class GlobalTrackIDGenerator:
+    """Thread-safe global track ID generator for cross-camera unique IDs.
+
+    Ensures track IDs are globally unique across all cameras by using
+    a shared atomic counter with thread-safe increment operations.
+    """
+
+    def __init__(self, start_id: int = 1):
+        """Initialize global track ID generator.
+
+        Args:
+            start_id: Starting track ID (default: 1)
+        """
+        self._current_id = start_id
+        self._lock = threading.Lock()
+        logger.info(f"GlobalTrackIDGenerator initialized (start_id={start_id})")
+
+    def get_next_id(self) -> int:
+        """Get next globally unique track ID (thread-safe).
+
+        Returns:
+            Next unique track ID
+        """
+        with self._lock:
+            track_id = self._current_id
+            self._current_id += 1
+            return track_id
+
+    def get_current_id(self) -> int:
+        """Get current track ID without incrementing.
+
+        Returns:
+            Current track ID value
+        """
+        with self._lock:
+            return self._current_id
 
 
 class CameraEngine:
@@ -62,7 +102,9 @@ class CameraEngine:
         face_recognizer: FaceRecognition,
         person_detector: 'PersonDetector',
         phone_detector: Optional['PhoneDetector'],
-        client_slug: str
+        client_slug: str,
+        global_id_generator: Optional[GlobalTrackIDGenerator] = None,
+        phone_usage_config: Optional[Dict[str, Any]] = None
     ):
         """Initialize camera engine.
 
@@ -73,6 +115,8 @@ class CameraEngine:
             person_detector: Shared person detector instance
             phone_detector: Shared phone detector instance (or None)
             client_slug: Client organization slug
+            global_id_generator: Optional global track ID generator for cross-camera unique IDs
+            phone_usage_config: Phone usage detection configuration (version, thresholds, etc.)
         """
         self.camera_id = camera_config['camera_id']
         self.camera_name = camera_config['camera_name']
@@ -88,12 +132,16 @@ class CameraEngine:
         self.enable_attendance = True  # Always enabled
         self.enable_phone_detection = self.application == 'PhoneUsageDetection'
 
+        # Phone usage configuration
+        self.phone_usage_config = phone_usage_config or {}
+
         # Shared components (models)
         self.face_detector = face_detector
         self.face_recognizer = face_recognizer
         self.person_detector = person_detector
         self.phone_detector = phone_detector if self.enable_phone_detection else None
         self.client_slug = client_slug
+        self.global_id_generator = global_id_generator
 
         # Initialize per-camera components (tracking, state)
         self._init_components()
@@ -113,9 +161,10 @@ class CameraEngine:
         # Person Tracking (per-camera for isolated state)
         self.person_tracker = PersonTracker(
             tracker_type='botsort',
-            max_age=60,
+            max_age=60,  # Reduced from 60 to quickly remove ghost bboxes (~1 sec at 30fps)
             min_hits=3,
-            iou_threshold=0.5  # Increased from default 0.3 for more stable tracking
+            iou_threshold=0.3,  # Lower threshold for better re-identification when person returns
+            global_id_generator=self.global_id_generator  # Enable global track IDs
         )
 
         # Track Manager
@@ -129,10 +178,27 @@ class CameraEngine:
             similarity_threshold=self.match_threshold
         )
 
-        # Phone usage components (if enabled)
+        # ID Switch Corrector (face-based correction)
+        self.id_corrector = IDSwitchCorrector(
+            embedding_distance_threshold=0.4,  # Cosine distance for "same person"
+            correction_interval_frames=5,  # Check every 5 frames
+            min_embedding_samples=3  # Need 3+ embeddings for reliable comparison
+        )
+
+        # Phone usage components (if enabled) - V2 only
         if self.enable_phone_detection:
-            self.phone_usage_logic = PhoneUsageSpatialLogic()
-            self.phone_usage_filter = PhoneUsageFilter()
+            # Phone usage detector (overlap detection only)
+            self.phone_usage_logic = PhoneUsageDetectorV2(
+                hand_bbox_size=self.phone_usage_config.get('hand_bbox_size', 80.0),
+                overlap_iou_threshold=self.phone_usage_config.get('overlap_iou_threshold', 0.01),
+                min_keypoint_confidence=self.phone_usage_config.get('min_keypoint_confidence', 0.3)
+            )
+            logger.info(f"Initialized PhoneUsageDetectorV2 (overlap-only) for {self.camera_name}")
+
+            # Phone usage filter (temporal smoothing)
+            self.phone_usage_filter = PhoneUsageFilter(
+                stop_confirmation_frames=self.phone_usage_config.get('stop_confirmation_frames', 5)
+            )
         else:
             self.phone_usage_logic = None
             self.phone_usage_filter = None
@@ -177,6 +243,13 @@ class CameraEngine:
         if self.enable_phone_detection and self.phone_detector:
             detected_phones = self.phone_detector.detect_phones(frame)
 
+        # Step 3a: Associate phones to persons (one-to-one assignment)
+        phone_assignments = {}
+        if self.enable_phone_detection and detected_phones:
+            phone_assignments = self._associate_phones_to_persons(detected_phones, active_tracks)
+            if phone_assignments:
+                logger.debug(f"Phone assignments: {len(phone_assignments)} person(s) assigned phones")
+
         # Step 4: Process each active track
         for track in active_tracks:
             track_id = track['track_id']
@@ -212,6 +285,12 @@ class CameraEngine:
                 result = self._recognize_face(frame, bbox)
 
                 if result['face_detected']:
+                    # Store embedding for ID correction (all detected faces)
+                    embedding = result.get('embedding')
+                    if embedding is not None:
+                        recognized_name = result.get('name') if result.get('recognized') else None
+                        self.id_corrector.add_embedding(track_id, embedding, recognized_name)
+
                     # EARLY RE-ID: If this is a new track and face is recognized,
                     # check if this person already has an active track
                     if prev_state is None and result.get('recognized'):
@@ -222,10 +301,10 @@ class CameraEngine:
                             # RE-IDENTIFICATION: This person already has an active track!
                             # Merge this new track into the existing one
                             logger.warning(
-                                f"🔄 RE-ID: Track {track_id} merged into Track {existing_track} "
+                                f"🔄 RE-ID: Track {existing_track} merged into Track {track_id} "
                                 f"(returning person: {recognized_name})"
                             )
-                            self._merge_tracks(source_track_id=track_id, target_track_id=existing_track)
+                            self._merge_tracks(source_track_id=existing_track, target_track_id=track_id)
                             continue
 
                     # Normal identity voting
@@ -270,6 +349,26 @@ class CameraEngine:
                         'face_image': face_image,
                         'proof_image': proof_image,  # Best quality person crop
                     })
+                else:
+                    # TIER 2: Identity consistency check (for already-locked identities)
+                    # Continuously verify face matches locked identity
+                    result = self._recognize_face(frame, bbox)
+                    if result.get('face_detected') and result.get('embedding') is not None:
+                        embedding = result['embedding']
+
+                        # Add embedding to corrector
+                        self.id_corrector.add_embedding(track_id, embedding, identity)
+
+                        # Check consistency
+                        is_consistent = self.id_corrector.check_identity_consistency(
+                            track_id, embedding, identity
+                        )
+
+                        # if not is_consistent:
+                        #     logger.error(
+                        #         f"ID SWITCH DETECTED: Track {track_id} face doesn't match "
+                        #         f"locked identity '{identity}'! Will be corrected in batch."
+                        #     )
             else:
                 voting = self.identity_manager.get_voting_status(track_id)
                 if voting and voting.get('top_candidate'):
@@ -280,27 +379,35 @@ class CameraEngine:
             using_phone = False
             phone_confidence = 0.0
 
-            if self.enable_phone_detection and keypoints is not None:
-                # Use pre-detected phones (detected once per frame above)
-                for phone in detected_phones:
-                    person_height = self.person_detector.calculate_person_height(keypoints)
-                    spatial_result = self.phone_usage_logic.calculate_phone_usage_score(
-                        keypoints, phone['bbox'], person_height
-                    )
-
-                    if spatial_result['using_phone']:
-                        is_using = self.phone_usage_filter.update(track_id, spatial_result)
-                        if is_using:
-                            using_phone = True
-                            phone_confidence = self.phone_usage_filter.get_usage_confidence(track_id)
-                            # Log phone usage event (only once when confirmed)
-                            if prev_state and not prev_state.using_phone:
-                                identity_str = f"{identity}" if identity else f"Track {track_id}"
-                                logger.opt(colors=True).info(f"<yellow>📱 {identity_str} using phone [{self.cam_type}]</yellow>")
-                            break
-
-                if not using_phone:
-                    no_phone = {'using_phone': False, 'confidence': 0.0, 'checks_passed': 0}
+            if self.enable_phone_detection:
+                # Check if this person has been assigned a phone
+                if track_id in phone_assignments:
+                    spatial_result = phone_assignments[track_id]
+                    # Update filter with positive result
+                    self.phone_usage_filter.update(track_id, spatial_result)
+                    using_phone = self.phone_usage_filter.is_using_phone(track_id)
+                    if using_phone:
+                        phone_confidence = spatial_result['confidence']
+                        method = spatial_result['method']
+                        # Log phone usage continuously (not just on state change)
+                        identity_str = f"{identity}" if identity else f"Track {track_id}"
+                        logger.opt(colors=True).info(
+                            f"<yellow>{identity_str} using phone [{self.cam_type}] | "
+                            f"confidence={phone_confidence:.2f} | method={method}</yellow>"
+                        )
+                else:
+                    # No phone assigned, update filter with negative result
+                    no_phone = {
+                        'using_phone': False,
+                        'confidence': 0.0,
+                        'method': 'none',
+                        'details': {
+                            'hand_overlap': False,
+                            'arm_overlap': False,
+                            'hand_overlap_iou': 0.0,
+                            'arm_overlap_iou': 0.0
+                        }
+                    }
                     self.phone_usage_filter.update(track_id, no_phone)
                     using_phone = self.phone_usage_filter.is_using_phone(track_id)
                     if using_phone:
@@ -364,6 +471,7 @@ class CameraEngine:
             # Clean up state managers
             self.state_manager.remove_person(track_id)
             self.identity_manager.reset_track(track_id)
+            self.id_corrector.reset_track(track_id)  # Clean up embeddings
             if self.enable_phone_detection:
                 self.phone_usage_filter.reset_track(track_id)
 
@@ -381,7 +489,108 @@ class CameraEngine:
                     'duration': event.duration
                 })
 
+        # Delayed batch ID correction (every 5 frames)
+        if self.id_corrector.should_run_correction():
+            duplicates = self.id_corrector.find_duplicate_tracks()
+
+            for track_id_1, track_id_2, distance in duplicates:
+                # Determine which track to keep (lower ID = older track)
+                if track_id_1 < track_id_2:
+                    keep_track, merge_track = track_id_1, track_id_2
+                else:
+                    keep_track, merge_track = track_id_2, track_id_1
+
+                # Check both tracks still exist
+                if (self.person_tracker.get_track_info(keep_track) is not None and
+                    self.person_tracker.get_track_info(merge_track) is not None):
+
+                    logger.warning(
+                        f"🔧 ID CORRECTION: Merging Track {merge_track} into Track {keep_track} "
+                        f"(duplicate detected, face distance: {distance:.3f})"
+                    )
+                    self._merge_tracks(source_track_id=merge_track, target_track_id=keep_track)
+
         return recognized_persons, phone_events, frame, detected_phones
+
+    def _associate_phones_to_persons(
+        self,
+        phones: List[Dict],
+        active_tracks: List[Dict]
+    ) -> Dict[int, Dict]:
+        """
+        Associate phones to persons using one-to-one assignment.
+
+        Each phone can only be assigned to one person (the best match).
+        Uses greedy assignment based on confidence scores.
+
+        Args:
+            phones: List of detected phones
+            active_tracks: List of active person tracks
+
+        Returns:
+            Dictionary mapping track_id to spatial_result for assigned phones
+        """
+        if not phones or not active_tracks:
+            return {}
+
+        # Build list of all possible (track_id, phone_idx, spatial_result) tuples
+        candidates = []
+
+        for track in active_tracks:
+            track_id = track['track_id']
+            keypoints = track.get('keypoints')
+
+            if keypoints is None:
+                continue
+
+            # Calculate person height for pixel-to-meter conversion
+            person_height = self.person_detector.calculate_person_height(keypoints)
+
+            for phone_idx, phone in enumerate(phones):
+                phone_bbox = phone['bbox']
+
+                # Calculate spatial score using V2 detector
+                spatial_result = self.phone_usage_logic.detect_phone_usage(
+                    person_keypoints=keypoints,
+                    phone_bbox=phone_bbox,
+                    person_bbox=track.get('bbox')
+                )
+
+                # Log spatial check results for debugging
+                logger.debug(
+                    f"Track {track_id} + Phone {phone_idx}: using_phone={spatial_result['using_phone']}, "
+                    f"confidence={spatial_result['confidence']:.2f}, method={spatial_result['method']}"
+                )
+
+                # Only consider if spatial checks pass
+                if spatial_result['using_phone']:
+                    candidates.append({
+                        'track_id': track_id,
+                        'phone_idx': phone_idx,
+                        'confidence': spatial_result['confidence'],
+                        'spatial_result': spatial_result
+                    })
+
+        # Sort candidates by confidence (highest first)
+        candidates.sort(key=lambda x: x['confidence'], reverse=True)
+
+        # Greedy assignment: assign phones to persons in order of confidence
+        assigned_phones = set()
+        assigned_persons = {}
+
+        for candidate in candidates:
+            phone_idx = candidate['phone_idx']
+            track_id = candidate['track_id']
+
+            # Skip if phone or person already assigned
+            if phone_idx in assigned_phones or track_id in assigned_persons:
+                continue
+
+            # Assign this phone to this person
+            assigned_persons[track_id] = candidate['spatial_result']
+            assigned_phones.add(phone_idx)
+
+        return assigned_persons
 
     def _recognize_face(self, frame: np.ndarray, bbox: np.ndarray) -> Dict:
         """Recognize face within person bounding box."""
@@ -513,6 +722,32 @@ class CameraEngine:
                 # Old format - return face crop
                 return crop_data
 
+        # FALLBACK: If no "best" image found (all failed quality checks),
+        # return ANY available image rather than None
+        logger.debug(f"Track {track_id}: No high-quality image found, using fallback (any available image)")
+
+        # Try to get the most recent frame (last in history)
+        if crops:
+            # Get most recent frame_num
+            latest_frame_num = max(crops.keys())
+            crop_data = crops[latest_frame_num]
+
+            if isinstance(crop_data, dict):
+                frame = crop_data.get('frame')
+                bbox = crop_data.get('bbox')
+
+                if frame is not None and bbox is not None:
+                    # Return person crop from latest frame
+                    x1, y1, x2, y2 = map(int, bbox)
+                    person_crop = frame[y1:y2, x1:x2]
+                    return person_crop
+                else:
+                    # Return face crop if available
+                    return crop_data.get('face')
+            else:
+                # Old format - return face crop
+                return crop_data
+
         return None
 
     def _find_track_with_identity(self, identity_name: str, exclude_track_id: Optional[int] = None) -> Optional[int]:
@@ -581,6 +816,7 @@ class CameraEngine:
         self.track_manager.remove_track(source_track_id)
         self.state_manager.remove_person(source_track_id)
         self.identity_manager.reset_track(source_track_id)
+        self.id_corrector.reset_track(source_track_id)  # Clean up embeddings
         if self.enable_phone_detection:
             self.phone_usage_filter.reset_track(source_track_id)
 
@@ -651,6 +887,10 @@ class SmartOfficeEngine:
         if not self.camera_configs:
             raise ValueError(f"No cameras found for applications: {self.applications}")
 
+        # Initialize global track ID generator for cross-camera unique IDs
+        self.global_id_generator = GlobalTrackIDGenerator(start_id=1)
+        logger.info("Global track ID generator enabled - track IDs will be unique across all cameras")
+
         # Initialize shared detection models (GPU efficiency)
         logger.info("Initializing shared detection models...")
         self.face_detector = FaceDetector(gpu_id=0, model_name='buffalo_l')
@@ -668,8 +908,9 @@ class SmartOfficeEngine:
             for c in self.camera_configs
         )
 
-        # Load phone detection config from config file
+        # Load phone detection and usage config from config file
         phone_config = self._load_phone_detection_config()
+        self.phone_usage_config = self._load_phone_usage_config()
 
         self.shared_phone_detector = PhoneDetector(
             model_size=phone_config.get('model_size', 'n'),
@@ -772,6 +1013,49 @@ class SmartOfficeEngine:
             return [tuple(line_points[0]), tuple(line_points[1])]
         return None
 
+    def _load_phone_usage_config(self) -> Dict[str, Any]:
+        """Load phone usage detection configuration from config file.
+
+        Returns:
+            Dictionary with V2 phone usage config
+        """
+        config_path = Path('configs/person_tracking/config.yaml')
+
+        # Default V2 configuration (overlap-only)
+        default_config = {
+            'hand_bbox_size': 80.0,
+            'overlap_iou_threshold': 0.01,
+            'min_keypoint_confidence': 0.3,
+            'stop_confirmation_frames': 5
+        }
+
+        try:
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+
+                # Get phone usage config from first camera (shared across all)
+                if config and 'cameras' in config and len(config['cameras']) > 0:
+                    camera_config = config['cameras'][0]
+                    phone_usage_config = camera_config.get('phone_usage', {})
+
+                    # Merge with defaults
+                    result = default_config.copy()
+                    result.update(phone_usage_config)
+
+                    logger.info(
+                        f"Loaded phone usage config: "
+                        f"hand_bbox={result['hand_bbox_size']}px, "
+                        f"overlap_iou={result['overlap_iou_threshold']} (overlap-only mode)"
+                    )
+                    return result
+
+        except Exception as e:
+            logger.warning(f"Failed to load phone usage config: {e}")
+
+        logger.info("Using default phone usage config")
+        return default_config
+
     def _load_phone_detection_config(self) -> Dict[str, Any]:
         """Load phone detection configuration from config file.
 
@@ -843,7 +1127,9 @@ class SmartOfficeEngine:
                 face_recognizer=self.face_recognizer,
                 person_detector=self.shared_person_detector,
                 phone_detector=self.shared_phone_detector,
-                client_slug=self.client_slug
+                client_slug=self.client_slug,
+                global_id_generator=self.global_id_generator,  # Enable global track IDs
+                phone_usage_config=self.phone_usage_config  # Pass phone usage config
             )
             self.camera_engines.append(engine)
 
@@ -959,17 +1245,6 @@ class SmartOfficeEngine:
                         writer = self.video_writers[camera_idx]
                         if writer:
                             writer.write(annotated)
-
-                    # Display window
-                    if self.show_display:
-                        cv2.imshow(f"SmartOffice - {camera_name}", annotated)
-
-                # Handle display window events
-                if self.show_display:
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q'):
-                        logger.info("Quit requested via keyboard")
-                        self.running = False
 
 
 
@@ -1090,7 +1365,9 @@ class SmartOfficeEngine:
                 'keypoints': keypoints,
                 'identity': state.identity,
                 'identity_locked': state.identity_locked,
-                'using_phone': state.using_phone
+                'using_phone': state.using_phone,
+                'track_age': age,  # Add age for frame presence check
+                'in_current_frame': (age == 0)  # Explicit flag: True only if detected in current frame
             })
 
         # Annotate (phones already passed, no duplicate detection)

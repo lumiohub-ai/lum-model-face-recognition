@@ -46,7 +46,7 @@ class PersonTrackingConfig(BaseModel):
         description="Tracking algorithm to use"
     )
     max_track_age: int = Field(
-        default=120,
+        default=1,
         ge=1,
         description="Maximum seconds to keep track without updates"
     )
@@ -116,50 +116,85 @@ class PhoneDetectionConfig(BaseModel):
 class PhoneUsageConfig(BaseModel):
     """Configuration for phone usage detection logic."""
 
+    # Version selection
+    version: Literal["v1", "v2"] = Field(
+        default="v2",
+        description="Phone usage detection version: v1 (strict spatial) or v2 (overlap + pose)"
+    )
+
+    # V2 Settings (Simplified - Overlap + Pose Detection)
+    hand_bbox_size: float = Field(
+        default=80.0,
+        ge=10.0,
+        le=200.0,
+        description="Bounding box size around wrist for overlap detection (pixels)"
+    )
+    overlap_iou_threshold: float = Field(
+        default=0.01,
+        ge=0.0,
+        le=1.0,
+        description="Minimum IoU for phone-hand overlap detection (very low = any overlap)"
+    )
+    phone_usage_pose_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Confidence threshold for pose-based phone usage detection"
+    )
+
+    # Temporal filtering (applies to both versions)
+    stop_confirmation_frames: int = Field(
+        default=5,
+        ge=1,
+        le=30,
+        description="Number of consecutive frames without phone to confirm stopped (3-6 recommended)"
+    )
+
+    # V1 Settings (Legacy - Strict Spatial Logic) - kept for backward compatibility
     confirmation_frames: int = Field(
         default=8,
         ge=1,
         le=100,
-        description="Number of frames (N) for phone usage confirmation"
+        description="Number of frames (N) for phone usage confirmation (v1 only)"
     )
     confirmation_consensus: float = Field(
         default=0.75,
         ge=0.0,
         le=1.0,
-        description="Percentage of frames needed to confirm usage (e.g., 0.75 = 75%)"
+        description="Percentage of frames needed to confirm usage (v1 only)"
     )
     min_duration_ms: int = Field(
         default=500,
         ge=0,
-        description="Minimum duration in milliseconds for phone usage confirmation"
+        description="Minimum duration in milliseconds for confirmation (v1 only)"
     )
 
-    # Spatial thresholds (in meters)
+    # V1 Spatial thresholds (in meters)
     hand_distance_threshold: float = Field(
         default=0.20,
         ge=0.0,
         le=2.0,
-        description="Maximum distance (meters) from hand to phone for association"
+        description="Maximum distance (meters) from hand to phone (v1 only)"
     )
     head_distance_threshold: float = Field(
         default=0.25,
         ge=0.0,
         le=2.0,
-        description="Maximum distance (meters) from head to phone for calling detection"
+        description="Maximum distance (meters) from head to phone (v1 only)"
     )
     upper_body_zone_margin: float = Field(
         default=0.30,
         ge=0.0,
         le=2.0,
-        description="Margin (meters) above head for upper body zone"
+        description="Margin (meters) above head for upper body zone (v1 only)"
     )
 
-    # Logic configuration
+    # V1 Logic configuration
     required_checks: int = Field(
         default=2,
         ge=1,
         le=3,
-        description="Number of spatial checks required (out of 3: zone, hand, head)"
+        description="Number of spatial checks required out of 3 (v1 only)"
     )
 
 

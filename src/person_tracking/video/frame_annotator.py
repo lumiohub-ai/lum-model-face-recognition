@@ -113,6 +113,9 @@ class FrameAnnotator:
 
         # Draw each person
         for state in person_states:
+            # Skip ghost bboxes: only draw if person is in current frame
+            if not state.get('in_current_frame', True):
+                continue
             self.draw_person(annotated, state)
 
         # Draw statistics overlay
@@ -143,6 +146,8 @@ class FrameAnnotator:
                 - identity_locked: bool
                 - using_phone: bool
                 - trajectory: list of (x, y) points or None
+                - track_age: int (0 if in current frame, >0 if aging)
+                - in_current_frame: bool (True if detected in current frame)
         """
         track_id = state.get('track_id', 0)
         bbox = state.get('bbox', [0, 0, 0, 0])
@@ -152,13 +157,21 @@ class FrameAnnotator:
         using_phone = state.get('using_phone', False)
         trajectory = state.get('trajectory')
 
-        # Determine color based on identity state
-        if identity_locked:
-            color = self.colors['locked']
+        # Safety check: skip if track_age > 0 (person not in current frame)
+        track_age = state.get('track_age', 0)
+        if track_age > 0:
+            return  # Don't draw bbox for aging tracks
+
+        # Determine color based on phone usage FIRST, then identity state
+        # Priority: Phone usage > Identity locked > Tentative identity > Unknown
+        if using_phone:
+            color = (0, 255, 255)  # Yellow - phone usage (highest priority)
+        elif identity_locked:
+            color = self.colors['locked']  # Green - locked identity
         elif identity:
-            color = self.colors['tentative']
+            color = (255, 0, 255)  # Magenta - tentative identity (changed from yellow)
         else:
-            color = self.colors['unknown']
+            color = self.colors['unknown']  # Red - unknown
 
         # Draw bounding box
         self.draw_bbox(frame, bbox, color)
@@ -288,10 +301,17 @@ class FrameAnnotator:
         parts = [f"ID:{track_id}"]
 
         if identity:
-            lock_symbol = "*" if identity_locked else "?"
-            parts.append(f"{identity}{lock_symbol}")
+            # Show friendly message based on phone usage
+            if using_phone:
+                parts.append(f"{identity} is using phone")
+            else:
+                parts.append(identity)
 
-        if using_phone:
+            # Add lock status indicator only if not locked (for debugging)
+            if not identity_locked:
+                parts.append("?")
+        elif using_phone:
+            # Show phone usage even without identity
             parts.append("PHONE")
 
         label = " | ".join(parts)

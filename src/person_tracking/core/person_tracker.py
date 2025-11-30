@@ -26,32 +26,36 @@ class PersonTracker:
         max_age: int = 120,
         min_hits: int = 3,
         iou_threshold: float = 0.3,
-        model_size: str = "s"
+        model_size: str = "s",
+        global_id_generator: Optional['GlobalTrackIDGenerator'] = None
     ):
         """
         Initialize Person Tracker.
 
         Args:
             tracker_type: Tracking algorithm ('botsort', 'bytetrack', 'ocsort')
-            max_age: Maximum frames to keep track without updates (seconds at ~30fps)
+            max_age: Maximum frames to keep track without updates (in frames, not seconds)
             min_hits: Minimum consecutive hits before track is confirmed
             iou_threshold: IoU threshold for track association
             model_size: YOLOv8 model size (needed for tracker initialization)
+            global_id_generator: Optional global ID generator for cross-camera unique IDs
         """
         self.tracker_type = tracker_type.lower()
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
+        self.global_id_generator = global_id_generator
 
         logger.info(
             f"Initializing PersonTracker with {tracker_type.upper()} "
-            f"(max_age={max_age}, min_hits={min_hits}, iou={iou_threshold})"
+            f"(max_age={max_age}, min_hits={min_hits}, iou={iou_threshold}, "
+            f"global_ids={'enabled' if global_id_generator else 'disabled'})"
         )
 
         # Initialize tracking state
         self.active_tracks: Dict[int, Dict] = {}  # {track_id: track_data}
         self.removed_tracks: List[Dict] = []  # Tracks that left the frame
-        self.next_track_id = 1
+        self.next_track_id = 1  # Only used if global_id_generator is None
         self.frame_count = 0
 
         # Track configuration for ultralytics
@@ -134,9 +138,13 @@ class PersonTracker:
                 self.active_tracks[track_id]['age'] = 0  # Reset age
                 self.active_tracks[track_id]['hits'] += 1
             else:
-                # Create new track
-                track_id = self.next_track_id
-                self.next_track_id += 1
+                # Create new track with global or local ID
+                if self.global_id_generator:
+                    track_id = self.global_id_generator.get_next_id()
+                else:
+                    track_id = self.next_track_id
+                    self.next_track_id += 1
+
                 self.active_tracks[track_id] = {
                     'track_id': track_id,
                     'age': 0,
@@ -220,8 +228,7 @@ class PersonTracker:
         """
         # Mark all tracks as not updated
         for track_id in self.active_tracks:
-            if 'updated' not in self.active_tracks[track_id]:
-                self.active_tracks[track_id]['updated'] = False
+            self.active_tracks[track_id]['updated'] = False
 
         # Update tracks with new detections
         for det in tracked_detections:
@@ -275,9 +282,10 @@ class PersonTracker:
         active = []
 
         for track_id, track_data in self.active_tracks.items():
-            # Only return confirmed tracks (min_hits)
+            # Only return confirmed tracks (min_hits) that are currently being detected (age = 0)
+            # This prevents ghost bboxes from aging tracks that left the frame
             if track_data.get('hits', 0) >= self.min_hits:
-                if 'last_detection' in track_data:
+                if 'last_detection' in track_data and track_data.get('age', 0) == 0:
                     track_dict = track_data['last_detection'].copy()
                     track_dict['track_id'] = track_id
                     track_dict['track_age'] = track_data.get('age', 0)

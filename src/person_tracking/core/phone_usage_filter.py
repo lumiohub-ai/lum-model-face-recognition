@@ -35,19 +35,22 @@ class PhoneUsageFilter:
         self,
         confirmation_frames: int = 8,
         confirmation_consensus: float = 0.75,
-        min_duration_ms: int = 500
+        min_duration_ms: int = 500,
+        stop_confirmation_frames: int = 5
     ):
         """
         Initialize Phone Usage Filter.
 
         Args:
-            confirmation_frames: Number of frames (N) for sliding window
-            confirmation_consensus: Percentage of frames needed for confirmation (0.0-1.0)
-            min_duration_ms: Minimum duration in milliseconds for state change
+            confirmation_frames: Number of frames (N) for sliding window (not used for immediate detection)
+            confirmation_consensus: Percentage of frames needed for confirmation (0.0-1.0) (not used for immediate detection)
+            min_duration_ms: Minimum duration in milliseconds for state change (not used for immediate detection)
+            stop_confirmation_frames: Number of consecutive frames without phone to confirm stopped (default: 5)
         """
         self.N = confirmation_frames
         self.consensus_threshold = confirmation_consensus
         self.min_duration_ms = min_duration_ms
+        self.stop_confirmation_frames = stop_confirmation_frames
 
         # Track usage history per person
         # Format: {track_id: [(using_phone, confidence, timestamp), ...]}
@@ -61,10 +64,13 @@ class PhoneUsageFilter:
         # Format: {track_id: timestamp}
         self.state_change_time: Dict[int, float] = {}
 
+        # Counter for consecutive frames without phone (for stop detection)
+        # Format: {track_id: count}
+        self.no_phone_counter: Dict[int, int] = defaultdict(int)
+
         logger.info(
-            f"PhoneUsageFilter initialized: N={self.N} frames, "
-            f"consensus={self.consensus_threshold:.0%}, "
-            f"min_duration={self.min_duration_ms}ms"
+            f"PhoneUsageFilter initialized: immediate detection mode, "
+            f"stop_delay={self.stop_confirmation_frames} frames"
         )
 
     def update(
@@ -74,6 +80,10 @@ class PhoneUsageFilter:
     ) -> bool:
         """
         Update phone usage with new spatial detection result.
+
+        NEW LOGIC:
+        - If phone detected in current frame -> immediately mark as USING
+        - If no phone detected -> wait for stop_confirmation_frames before marking as NOT_USING
 
         Args:
             track_id: Person track identifier
@@ -92,15 +102,34 @@ class PhoneUsageFilter:
         confidence = spatial_result.get('confidence', 0.0)
         timestamp = time.time()
 
-        # Add to history
+        # Add to history (keep for statistics)
         self.usage_history[track_id].append((using_phone, confidence, timestamp))
 
         # Keep only last N frames
         if len(self.usage_history[track_id]) > self.N:
             self.usage_history[track_id] = self.usage_history[track_id][-self.N:]
 
-        # Update state
-        self._update_state(track_id)
+        # Get current state
+        current_state = self.usage_state.get(track_id, PhoneUsageState.NOT_USING)
+
+        # IMMEDIATE DETECTION LOGIC
+        if using_phone:
+            # Phone detected -> immediately transition to USING
+            if current_state != PhoneUsageState.USING:
+                self._transition_state(track_id, PhoneUsageState.USING, confidence, 1)
+            # Reset no-phone counter
+            self.no_phone_counter[track_id] = 0
+        else:
+            # No phone detected
+            if current_state == PhoneUsageState.USING:
+                # Currently using phone, increment counter
+                self.no_phone_counter[track_id] += 1
+
+                # Only transition to NOT_USING after stop_confirmation_frames
+                if self.no_phone_counter[track_id] >= self.stop_confirmation_frames:
+                    self._transition_state(track_id, PhoneUsageState.NOT_USING, 0.0,
+                                         self.no_phone_counter[track_id])
+                    self.no_phone_counter[track_id] = 0
 
         # Return current state
         current_state = self.usage_state.get(track_id, PhoneUsageState.NOT_USING)
@@ -160,8 +189,8 @@ class PhoneUsageFilter:
         self,
         track_id: int,
         new_state: PhoneUsageState,
-        consensus: float,
-        vote_count: int
+        confidence: float,
+        frame_count: int
     ) -> None:
         """
         Transition to new phone usage state.
@@ -169,8 +198,8 @@ class PhoneUsageFilter:
         Args:
             track_id: Track identifier
             new_state: New state
-            consensus: Consensus percentage
-            vote_count: Number of votes for new state
+            confidence: Detection confidence
+            frame_count: Number of frames for transition
         """
         old_state = self.usage_state.get(track_id, PhoneUsageState.NOT_USING)
 
@@ -180,7 +209,7 @@ class PhoneUsageFilter:
 
             logger.info(
                 f"Track {track_id} phone usage: {old_state.value} -> {new_state.value} "
-                f"(consensus={consensus:.0%}, votes={vote_count}/{self.N})"
+                f"(confidence={confidence:.2f}, frames={frame_count})"
             )
 
     def is_using_phone(self, track_id: int) -> bool:
@@ -289,6 +318,8 @@ class PhoneUsageFilter:
             del self.usage_state[track_id]
         if track_id in self.state_change_time:
             del self.state_change_time[track_id]
+        if track_id in self.no_phone_counter:
+            del self.no_phone_counter[track_id]
 
     def get_statistics(self) -> Dict:
         """
@@ -319,6 +350,7 @@ class PhoneUsageFilter:
         self.usage_history.clear()
         self.usage_state.clear()
         self.state_change_time.clear()
+        self.no_phone_counter.clear()
         logger.info("Phone usage filter reset")
 
     def __repr__(self) -> str:

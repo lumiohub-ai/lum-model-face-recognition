@@ -15,13 +15,13 @@ cameras:
     # Person Detection (YOLOv8-Pose)
     person_detection:
       model_size: "s"           # n/s/m/l/x (s=small, balanced)
-      confidence_threshold: 0.7  # 0.0-1.0
+      confidence_threshold: 0.5  # 0.0-1.0 (lowered from 0.7 for better track continuity)
       iou_threshold: 0.45        # NMS threshold
 
     # Person Tracking (BoT-SORT)
     person_tracking:
       tracker_type: "botsort"    # botsort/bytetrack/ocsort
-      max_track_age: 120         # seconds
+      max_track_age: 1         # seconds (track persists for 1 after leaving frame)
       min_track_hits: 3          # frames before confirming track
       iou_threshold: 0.3         # track association threshold
 
@@ -37,19 +37,15 @@ cameras:
       model_size: "n"            # n/s/m/l/x (n=nano, fastest)
       confidence_threshold: 0.25  # 0.0-1.0 (lowered for better detection)
 
-    # Phone Usage Logic
+    # Phone Usage Detection (V2: Overlap Only)
     phone_usage:
-      confirmation_frames: 8           # N frames for usage confirmation
-      confirmation_consensus: 0.75     # 75% frames (6/8)
-      min_duration_ms: 500             # minimum duration
+      # Detection sensitivity
+      hand_bbox_size: 80               # pixels - bounding box around wrist for overlap detection
+      overlap_iou_threshold: 0.01      # IoU threshold for overlap (0.01 = very sensitive)
+      min_keypoint_confidence: 0.3     # minimum confidence for keypoint visibility
 
-      # Spatial thresholds (meters)
-      hand_distance_threshold: 0.20    # 20cm hand-to-phone
-      head_distance_threshold: 0.25    # 25cm phone-to-head
-      upper_body_zone_margin: 0.30     # 30cm above head
-
-      # Logic: require X of Y checks
-      required_checks: 2               # Of: zone, hand, head
+      # Temporal filtering
+      stop_confirmation_frames: 5      # frames without phone before marking as stopped
 
     # Performance
     performance:

@@ -323,3 +323,6 @@ volumes/**modules/yolo_tracking/
 *.jpg
 *.jpeg
 *.pkl
+*.avi
+*.png
+*.onnx
