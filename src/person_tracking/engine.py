@@ -18,6 +18,7 @@ from .core.person_detector import PersonDetector
 from .core.person_tracker import PersonTracker
 from .core.track_manager import PersonTrackManager
 from .core.phone_detector import PhoneDetector
+from .core.phone_tracker import PhoneTracker
 from .core.identity_manager import IdentityManager
 from .core.phone_usage_logic_v2 import PhoneUsageDetectorV2
 from .core.phone_usage_filter import PhoneUsageFilter
@@ -153,6 +154,16 @@ class PersonTrackingEngine:
         )
         logger.info(f"Initialized PhoneDetector (YOLOv8{phd.model_size})")
 
+        # Phone Tracking
+        # Use shorter max_age for phones (they move faster than persons)
+        phone_max_age_frames = int(1.0 * target_fps)  # 1 second persistence
+        self.phone_tracker = PhoneTracker(
+            max_age=phone_max_age_frames,
+            min_hits=2,  # Lower threshold for phones
+            iou_threshold=0.25  # Slightly lower for smaller objects
+        )
+        logger.info(f"Initialized PhoneTracker (max_age=1s = {phone_max_age_frames} frames @ {target_fps} FPS)")
+
         # Identity Manager
         self.identity_manager = IdentityManager(
             identity_lock_frames=fc.identity_lock_frames,
@@ -221,12 +232,15 @@ class PersonTrackingEngine:
         active_tracks, removed_tracks = self.person_tracker.update(detections, frame)
 
         # Step 3: Detect phones once for the entire frame
-        phones = self.phone_detector.detect_phones(frame)
+        phone_detections = self.phone_detector.detect_phones(frame)
 
-        # Step 3a: Associate phones to persons (one-to-one assignment)
-        phone_assignments = self._associate_phones_to_persons(phones, active_tracks)
+        # Step 3a: Track phones across frames for temporal persistence
+        tracked_phones, removed_phones = self.phone_tracker.update(phone_detections)
 
-        # Step 3b: Process each active track
+        # Step 3b: Associate tracked phones to persons (one-to-one assignment)
+        phone_assignments = self._associate_phones_to_persons(tracked_phones, active_tracks)
+
+        # Step 3c: Process each active track
         for track in active_tracks:
             track_id = track['track_id']
             bbox = track['bbox']
@@ -370,7 +384,7 @@ class PersonTrackingEngine:
             )
 
         # Step 7: Annotate frame
-        annotated_frame = self._annotate_frame(frame, active_tracks, phones if 'phones' in dir() else [])
+        annotated_frame = self._annotate_frame(frame, active_tracks, tracked_phones)
 
         # Update performance metrics
         processing_time = time.time() - start_time
@@ -381,30 +395,31 @@ class PersonTrackingEngine:
 
     def _associate_phones_to_persons(
         self,
-        phones: List[Dict],
+        tracked_phones: List[Dict],
         active_tracks: List[Dict]
     ) -> Dict[int, Dict]:
         """
-        Associate phones to persons using one-to-one assignment.
+        Associate tracked phones to persons using one-to-one assignment.
 
         Each phone can only be assigned to one person (the best match).
         Uses greedy assignment based on confidence scores.
+        Now works with tracked phones that have phone_track_id and temporal persistence.
 
         Args:
-            phones: List of detected phones
+            tracked_phones: List of tracked phones (with phone_track_id)
             active_tracks: List of active person tracks
 
         Returns:
-            Dictionary mapping track_id to spatial_result for assigned phones
+            Dictionary mapping person track_id to spatial_result for assigned phones
         """
-        if not phones or not active_tracks:
+        if not tracked_phones or not active_tracks:
             return {}
 
-        # Build list of all possible (track_id, phone_idx, spatial_result) tuples
+        # Build list of all possible (track_id, phone_track_id, spatial_result) tuples
         candidates = []
 
         for track in active_tracks:
-            track_id = track['track_id']
+            person_track_id = track['track_id']
             keypoints = track.get('keypoints')
 
             if keypoints is None:
@@ -413,8 +428,10 @@ class PersonTrackingEngine:
             # Calculate person height for pixel-to-meter conversion
             person_height = self.person_detector.calculate_person_height(keypoints)
 
-            for phone_idx, phone in enumerate(phones):
+            for phone in tracked_phones:
                 phone_bbox = phone['bbox']
+                phone_track_id = phone.get('phone_track_id')
+                is_predicted = phone.get('is_predicted', False)
 
                 # Calculate spatial score using V2 detector
                 spatial_result = self.phone_usage_logic.detect_phone_usage(
@@ -425,9 +442,14 @@ class PersonTrackingEngine:
 
                 # Only consider if spatial checks pass
                 if spatial_result['using_phone']:
+                    # Add phone tracking metadata
+                    spatial_result['phone_track_id'] = phone_track_id
+                    spatial_result['is_predicted'] = is_predicted
+                    spatial_result['track_age'] = phone.get('track_age', 0)
+
                     candidates.append({
-                        'track_id': track_id,
-                        'phone_idx': phone_idx,
+                        'person_track_id': person_track_id,
+                        'phone_track_id': phone_track_id,
                         'confidence': spatial_result['confidence'],
                         'spatial_result': spatial_result
                     })
@@ -440,16 +462,22 @@ class PersonTrackingEngine:
         assigned_persons = {}
 
         for candidate in candidates:
-            phone_idx = candidate['phone_idx']
-            track_id = candidate['track_id']
+            phone_track_id = candidate['phone_track_id']
+            person_track_id = candidate['person_track_id']
 
             # Skip if phone or person already assigned
-            if phone_idx in assigned_phones or track_id in assigned_persons:
+            if phone_track_id in assigned_phones or person_track_id in assigned_persons:
                 continue
 
             # Assign this phone to this person
-            assigned_persons[track_id] = candidate['spatial_result']
-            assigned_phones.add(phone_idx)
+            assigned_persons[person_track_id] = candidate['spatial_result']
+            assigned_phones.add(phone_track_id)
+
+            logger.debug(
+                f"Phone track {phone_track_id} assigned to person {person_track_id} "
+                f"(conf={candidate['confidence']:.2f}, "
+                f"age={candidate['spatial_result'].get('track_age', 0)})"
+            )
 
         return assigned_persons
 
@@ -585,20 +613,21 @@ class PersonTrackingEngine:
                 identity_locked = False
                 using_phone = False
 
-            # Determine box color based on state
-            # Priority: Phone usage > Identity locked > Tentative identity > Unknown
+            # Determine box color and thickness based on state
+            # Priority: Phone usage (red, thick) > Unrecognized (yellow) > Recognized (green)
             if using_phone:
-                color = (0, 255, 255)  # Yellow for phone usage
-            elif identity_locked:
-                color = (0, 255, 0)  # Green for locked identity
-            elif identity:
-                color = (255, 0, 255)  # Magenta for tentative identity
+                color = (0, 0, 255)  # Red (BGR) for phone usage
+                thickness = 4  # Thicker border for phone users
+            elif not identity:
+                color = (0, 255, 255)  # Yellow (BGR) for unrecognized users
+                thickness = 2
             else:
-                color = (0, 0, 255)  # Red for unknown
+                color = (0, 255, 0)  # Green (BGR) for recognized users
+                thickness = 2
 
             # Draw bounding box
             x1, y1, x2, y2 = map(int, bbox[:4])
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
 
             # Draw label
             label_parts = [f"ID:{track_id}"]

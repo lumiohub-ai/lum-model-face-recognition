@@ -142,6 +142,8 @@ class PhoneDetector:
         """
         Associate detected phones with persons using bbox overlap.
 
+        NOTE: This method works with raw phone detections (no tracking).
+        For tracked phones, use associate_tracked_phones_with_persons().
 
         Args:
             phones: List of phone detections
@@ -170,6 +172,58 @@ class PhoneDetector:
 
             if associated_phones:
                 associations[track_id] = associated_phones
+
+        return associations
+
+    def associate_tracked_phones_with_persons(
+        self,
+        tracked_phones: List[Dict],
+        persons: List[Dict],
+        iou_threshold: float = 0.1
+    ) -> Dict[int, List[Dict]]:
+        """
+        Associate tracked phones with persons using bbox overlap.
+
+        This method works with tracked phones that have phone_track_id.
+        Maintains phone tracking information in associations.
+
+        Args:
+            tracked_phones: List of tracked phone detections (with phone_track_id)
+            persons: List of person detections (must have 'track_id' and 'bbox')
+            iou_threshold: Minimum IoU for association
+
+        Returns:
+            Dictionary mapping person track_id to list of associated tracked phones
+            {person_track_id: [{'phone_track_id': int, 'bbox': [...], ...}]}
+        """
+        associations = {}
+
+        for person in persons:
+            person_track_id = person.get('track_id')
+            if person_track_id is None:
+                continue
+
+            person_bbox = np.array(person['bbox'])
+            associated_phones = []
+
+            for phone in tracked_phones:
+                phone_bbox = np.array(phone['bbox'])
+
+                # Check if phone bbox overlaps with person bbox
+                if self._bboxes_overlap(person_bbox, phone_bbox, iou_threshold):
+                    # Include phone track info for temporal consistency
+                    phone_info = phone.copy()
+                    associated_phones.append(phone_info)
+
+                    logger.debug(
+                        f"Phone track {phone.get('phone_track_id')} "
+                        f"associated with person {person_track_id} "
+                        f"(age={phone.get('track_age', 0)}, "
+                        f"predicted={phone.get('is_predicted', False)})"
+                    )
+
+            if associated_phones:
+                associations[person_track_id] = associated_phones
 
         return associations
 

@@ -44,25 +44,32 @@ class PhoneUsageDetectorV2:
 
     def __init__(
         self,
-        hand_bbox_size: float = 80.0,  # pixels
+        hand_bbox_size: float = 120.0,  # pixels (increased from 80)
         overlap_iou_threshold: float = 0.01,  # very low - just need any overlap
-        min_keypoint_confidence: float = 0.3
+        min_keypoint_confidence: float = 0.3,
+        person_bbox_proximity_threshold: float = 100.0,  # pixels from person bbox
+        wrist_distance_threshold: float = 250.0  # pixels from wrist
     ):
         """
-        Initialize phone usage detector with overlap detection only.
+        Initialize phone usage detector with multi-layer detection.
 
         Args:
             hand_bbox_size: Size of bounding box around wrist (pixels)
             overlap_iou_threshold: Minimum IoU for overlap detection
             min_keypoint_confidence: Minimum confidence for keypoint visibility
+            person_bbox_proximity_threshold: Max distance from person bbox edge (pixels)
+            wrist_distance_threshold: Max distance from wrist keypoints (pixels)
         """
         self.hand_bbox_size = hand_bbox_size
         self.overlap_iou_threshold = overlap_iou_threshold
         self.min_keypoint_confidence = min_keypoint_confidence
+        self.person_bbox_proximity_threshold = person_bbox_proximity_threshold
+        self.wrist_distance_threshold = wrist_distance_threshold
 
         logger.info(
             f"PhoneUsageDetectorV2 initialized: hand_bbox={hand_bbox_size}px, "
-            f"overlap_iou={overlap_iou_threshold} (overlap-only mode)"
+            f"overlap_iou={overlap_iou_threshold}, person_proximity={person_bbox_proximity_threshold}px, "
+            f"wrist_distance={wrist_distance_threshold}px"
         )
 
     def detect_phone_usage(
@@ -72,24 +79,31 @@ class PhoneUsageDetectorV2:
         person_bbox: Optional[NDArray] = None
     ) -> Dict:
         """
-        Detect if person is using phone using overlap detection only.
+        Detect if person is using phone using multi-layer detection.
+
+        Detection layers (any can trigger positive result):
+        1. Hand overlap: Phone overlaps with wrist bounding boxes
+        2. Arm overlap: Phone overlaps with arm regions
+        3. Person proximity: Phone near person bounding box
+        4. Wrist distance: Phone within reaching distance of wrists
 
         Args:
             person_keypoints: Pose keypoints (17, 3) [x, y, confidence]
             phone_bbox: Phone bounding box [x1, y1, x2, y2]
-            person_bbox: Person bounding box [x1, y1, x2, y2] (optional)
+            person_bbox: Person bounding box [x1, y1, x2, y2] (optional but recommended)
 
         Returns:
             Dictionary with detection result:
             {
                 'using_phone': bool,
                 'confidence': float (0.0-1.0),
-                'method': str,  # 'hand_overlap', 'arm_overlap', or 'hand_arm_overlap'
+                'method': str,
                 'details': {
                     'hand_overlap': bool,
                     'arm_overlap': bool,
-                    'hand_overlap_iou': float,
-                    'arm_overlap_iou': float
+                    'person_proximity': bool,
+                    'wrist_distance': bool,
+                    ...
                 }
             }
         """
@@ -99,10 +113,23 @@ class PhoneUsageDetectorV2:
         # Check 2: Phone overlaps with arms
         arm_overlap, arm_iou = self._check_arm_overlap(person_keypoints, phone_bbox)
 
-        # Determine usage (OR logic - either overlap method succeeds)
-        using_phone = hand_overlap or arm_overlap
+        # Check 3: Phone near person bbox
+        person_proximity = False
+        proximity_distance = None
+        if person_bbox is not None:
+            person_proximity, proximity_distance = self._check_person_bbox_proximity(
+                phone_bbox, person_bbox
+            )
 
-        # Calculate confidence based on what passed
+        # Check 4: Phone near wrists (distance-based)
+        wrist_distance_check, min_wrist_dist = self._check_wrist_distance(
+            person_keypoints, phone_bbox
+        )
+
+        # Determine usage (OR logic - any check succeeds)
+        using_phone = hand_overlap or arm_overlap or person_proximity or wrist_distance_check
+
+        # Calculate confidence based on what passed (prioritize stronger signals)
         confidence = 0.0
         method = 'none'
 
@@ -113,8 +140,14 @@ class PhoneUsageDetectorV2:
             confidence = 0.85
             method = 'hand_overlap'
         elif arm_overlap:
-            confidence = 0.75
+            confidence = 0.80
             method = 'arm_overlap'
+        elif wrist_distance_check:
+            confidence = 0.75
+            method = 'wrist_distance'
+        elif person_proximity:
+            confidence = 0.70
+            method = 'person_proximity'
 
         return {
             'using_phone': using_phone,
@@ -123,8 +156,12 @@ class PhoneUsageDetectorV2:
             'details': {
                 'hand_overlap': hand_overlap,
                 'arm_overlap': arm_overlap,
+                'person_proximity': person_proximity,
+                'wrist_distance': wrist_distance_check,
                 'hand_overlap_iou': hand_iou,
-                'arm_overlap_iou': arm_iou
+                'arm_overlap_iou': arm_iou,
+                'proximity_distance': proximity_distance,
+                'min_wrist_distance': min_wrist_dist
             }
         }
 
@@ -211,6 +248,124 @@ class PhoneUsageDetectorV2:
 
         overlap = max_iou > self.overlap_iou_threshold
         return overlap, max_iou
+
+    def _check_person_bbox_proximity(
+        self,
+        phone_bbox: NDArray,
+        person_bbox: NDArray
+    ) -> Tuple[bool, Optional[float]]:
+        """
+        Check if phone is near person's bounding box.
+
+        Handles cases where phone is held at arm's length or outside the person bbox.
+
+        Args:
+            phone_bbox: Phone bbox [x1, y1, x2, y2]
+            person_bbox: Person bbox [x1, y1, x2, y2]
+
+        Returns:
+            Tuple of (is_near, distance)
+        """
+        # Calculate phone center
+        phone_center = np.array([
+            (phone_bbox[0] + phone_bbox[2]) / 2,
+            (phone_bbox[1] + phone_bbox[3]) / 2
+        ])
+
+        # Calculate minimum distance from phone center to person bbox edge
+        # If phone is inside bbox, distance is 0
+        distance = self._point_to_bbox_distance(phone_center, person_bbox)
+
+        is_near = distance <= self.person_bbox_proximity_threshold
+
+        if is_near:
+            logger.debug(
+                f"Phone near person bbox: distance={distance:.1f}px "
+                f"(threshold={self.person_bbox_proximity_threshold}px)"
+            )
+
+        return is_near, distance
+
+    def _check_wrist_distance(
+        self,
+        keypoints: NDArray,
+        phone_bbox: NDArray
+    ) -> Tuple[bool, Optional[float]]:
+        """
+        Check if phone is within reaching distance of wrists.
+
+        Distance-based check (not bbox overlap).
+
+        Args:
+            keypoints: Pose keypoints (17, 3)
+            phone_bbox: Phone bbox [x1, y1, x2, y2]
+
+        Returns:
+            Tuple of (within_distance, min_distance)
+        """
+        left_wrist = self._get_keypoint(keypoints, self.LEFT_WRIST_IDX)
+        right_wrist = self._get_keypoint(keypoints, self.RIGHT_WRIST_IDX)
+
+        if left_wrist is None and right_wrist is None:
+            return False, None
+
+        # Calculate phone center
+        phone_center = np.array([
+            (phone_bbox[0] + phone_bbox[2]) / 2,
+            (phone_bbox[1] + phone_bbox[3]) / 2
+        ])
+
+        min_distance = float('inf')
+
+        for wrist in [left_wrist, right_wrist]:
+            if wrist is None:
+                continue
+
+            distance = np.linalg.norm(phone_center - wrist)
+            min_distance = min(min_distance, distance)
+
+        if min_distance == float('inf'):
+            return False, None
+
+        within_distance = min_distance <= self.wrist_distance_threshold
+
+        if within_distance:
+            logger.debug(
+                f"Phone within wrist distance: {min_distance:.1f}px "
+                f"(threshold={self.wrist_distance_threshold}px)"
+            )
+
+        return within_distance, min_distance
+
+    def _point_to_bbox_distance(
+        self,
+        point: NDArray,
+        bbox: NDArray
+    ) -> float:
+        """
+        Calculate minimum distance from point to bounding box.
+
+        Returns 0 if point is inside bbox.
+
+        Args:
+            point: Point [x, y]
+            bbox: Bounding box [x1, y1, x2, y2]
+
+        Returns:
+            Distance in pixels
+        """
+        x, y = point
+        x1, y1, x2, y2 = bbox
+
+        # If point inside bbox, distance is 0
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            return 0.0
+
+        # Calculate distance to nearest edge
+        dx = max(x1 - x, 0, x - x2)
+        dy = max(y1 - y, 0, y - y2)
+
+        return np.sqrt(dx**2 + dy**2)
 
     def _check_phone_usage_posture(
         self,
@@ -427,8 +582,8 @@ class PhoneUsageDetectorV2:
         x_coords = points[:, 0]
         y_coords = points[:, 1]
 
-        # Add padding
-        padding = 40  # pixels
+        # Add padding (increased from 40px)
+        padding = 60  # pixels
 
         return np.array([
             np.min(x_coords) - padding,

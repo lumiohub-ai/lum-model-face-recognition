@@ -146,12 +146,18 @@ class IdleDetectionLogic:
         # Calculate confidence
         if facing_screen:
             # High confidence that person is working
-            angle_factor = 1.0 - (abs(head_angle) / self.head_orientation_threshold)
-            confidence = 0.7 + (0.3 * max(0, angle_factor))
+            if head_angle is not None:
+                angle_factor = 1.0 - (abs(head_angle) / self.head_orientation_threshold)
+                confidence = 0.7 + (0.3 * max(0, angle_factor))
+            else:
+                confidence = 0.7  # Default confidence when head angle unavailable
             method = 'facing_screen_working'
         else:
             # High confidence that person is idle
-            confidence = 0.8 + (0.2 * min(1.0, abs(head_angle) / 90.0))
+            if head_angle is not None:
+                confidence = 0.8 + (0.2 * min(1.0, abs(head_angle) / 90.0))
+            else:
+                confidence = 0.75  # Default confidence when head angle unavailable
             method = 'not_facing_screen_idle'
 
         return {
