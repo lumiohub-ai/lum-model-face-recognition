@@ -326,3 +326,9 @@ volumes/**modules/yolo_tracking/
 *.avi
 *.png
 *.onnx
+
+# Node modules
+node_modules/
+
+# VSCode settings (override partial ignore above)
+.vscode/
