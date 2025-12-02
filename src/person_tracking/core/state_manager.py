@@ -5,12 +5,16 @@ Manages comprehensive state for each tracked person and emits events
 when state changes occur (identity locked, phone usage started/stopped, etc.).
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass, asdict
 import time
+import numpy as np
 from loguru import logger
+
+if TYPE_CHECKING:
+    from src.face_recognition.api.client import APIClient
 
 
 class EventType(Enum):
@@ -21,6 +25,8 @@ class EventType(Enum):
     IDENTITY_CHANGED = "identity_changed"
     PHONE_USAGE_STARTED = "phone_usage_started"
     PHONE_USAGE_STOPPED = "phone_usage_stopped"
+    IDLE_STARTED = "idle_started"
+    IDLE_STOPPED = "idle_stopped"
 
 
 @dataclass
@@ -38,6 +44,10 @@ class PersonState:
     using_phone: bool = False
     phone_confidence: float = 0.0
     phone_usage_duration: float = 0.0  # seconds
+
+    # Idle detection (not looking at screen)
+    is_idle: bool = False
+    idle_confidence: float = 0.0
 
     # Timestamps
     first_seen: Optional[datetime] = None
@@ -112,14 +122,18 @@ class PersonStateManager:
     - Phone usage stopped
     """
 
-    def __init__(self, camera_id: int = 1):
+    def __init__(self, camera_id: int = 1, api_client: Optional['APIClient'] = None, name_to_id_map: Optional[Dict[str, int]] = None):
         """
         Initialize Person State Manager.
 
         Args:
             camera_id: Camera identifier
+            api_client: API client instance
+            name_to_id_map: Dictionary mapping user names to IDs
         """
         self.camera_id = camera_id
+        self.api_client = api_client
+        self.name_to_id_map = name_to_id_map or {}
 
         # Person states
         # Format: {track_id: PersonState}
@@ -137,7 +151,10 @@ class PersonStateManager:
         identity_locked: bool = False,
         identity_confidence: float = 0.0,
         using_phone: bool = False,
-        phone_confidence: float = 0.0
+        phone_confidence: float = 0.0,
+        is_idle: bool = False,
+        idle_confidence: float = 0.0,
+        proof_image: Optional[np.ndarray] = None
     ) -> None:
         """
         Update state for a person.
@@ -149,6 +166,9 @@ class PersonStateManager:
             identity_confidence: Identity confidence score
             using_phone: Whether person is using phone
             phone_confidence: Phone usage confidence
+            is_idle: Whether person is idle (not looking at screen)
+            idle_confidence: Idle detection confidence
+            proof_image: Optional image (frame or cropped bbox) for proof
         """
         now = datetime.now()
 
@@ -178,7 +198,10 @@ class PersonStateManager:
         self._update_identity(state, identity, identity_locked, identity_confidence)
 
         # Update phone usage
-        self._update_phone_usage(state, using_phone, phone_confidence)
+        self._update_phone_usage(state, using_phone, phone_confidence, proof_image)
+
+        # Update idle status
+        self._update_idle(state, is_idle, idle_confidence, proof_image)
 
     def _update_identity(
         self,
@@ -215,10 +238,10 @@ class PersonStateManager:
                 confidence=confidence
             )
 
-            logger.info(
-                f"Track {state.track_id}: Identity locked as '{identity}' "
-                f"(confidence={confidence:.3f})"
-            )
+            # logger.info(
+            #     f"Track {state.track_id}: Identity locked as '{identity}' "
+            #     f"(confidence={confidence:.3f})"
+            # )
 
         # Check if identity changed
         elif identity_locked and old_identity and identity != old_identity:
@@ -241,7 +264,8 @@ class PersonStateManager:
         self,
         state: PersonState,
         using_phone: bool,
-        confidence: float
+        confidence: float,
+        proof_image: Optional[np.ndarray] = None
     ) -> None:
         """
         Update phone usage and emit events if changed.
@@ -250,6 +274,7 @@ class PersonStateManager:
             state: Person state
             using_phone: Whether using phone
             confidence: Confidence score
+            proof_image: Optional image for proof
         """
         old_using_phone = state.using_phone
 
@@ -274,6 +299,23 @@ class PersonStateManager:
                 f"Phone usage started"
             )
 
+            # Send activity to API if person is identified
+            if self.api_client and state.identity and self.name_to_id_map:
+                user_id = self.name_to_id_map.get(state.identity)
+                if user_id:
+                    logger.info(f"Sending phone_usage activity for user {user_id} ({state.identity})")
+                    response = self.api_client.send_activities(
+                        activity_type='phone_usage',
+                        camera_id=state.camera_id,
+                        user_id=user_id,
+                        confidence_score=confidence,
+                        proof_image=proof_image
+                    )
+                    if response and response.status_code in [200, 201]:
+                        logger.info(f"Successfully sent phone_usage activity for {state.identity}")
+                    else:
+                        logger.error(f"Failed to send phone_usage activity for {state.identity}")
+
         # Phone usage stopped
         elif not using_phone and old_using_phone:
             # Calculate duration
@@ -290,17 +332,107 @@ class PersonStateManager:
                 duration=duration
             )
 
-            logger.info(
-                f"Track {state.track_id} ({state.identity or 'Unknown'}): "
-                f"Phone usage stopped (duration={duration:.1f}s)"
-            )
-
+            if self.api_client and state.identity and self.name_to_id_map:
+                user_id = self.name_to_id_map.get(state.identity)
+                if user_id:
+                    logger.info(f"Sending working activity for user {user_id} (stopped phone usage)")
+                    response = self.api_client.send_activities(
+                        activity_type='working',
+                        camera_id=state.camera_id,
+                        user_id=user_id
+                    )
+                    if response and response.status_code in [200, 201]:
+                        logger.info(f"Successfully sent working activity for {state.identity}")
+                    else:
+                        logger.error(f"Failed to send working activity for {state.identity}")
             state.phone_usage_started_at = None
 
         # Update duration if currently using phone
         elif using_phone and state.phone_usage_started_at:
             duration = (datetime.now() - state.phone_usage_started_at).total_seconds()
             state.phone_usage_duration = duration
+
+    def _update_idle(
+        self,
+        state: PersonState,
+        is_idle: bool,
+        confidence: float,
+        proof_image: Optional[np.ndarray] = None
+    ) -> None:
+        """
+        Update idle status and emit events if changed.
+
+        Args:
+            state: Person state
+            is_idle: Whether person is idle (not looking at screen)
+            confidence: Confidence score
+            proof_image: Optional image for proof
+        """
+        old_is_idle = state.is_idle
+
+        # Update idle status
+        state.is_idle = is_idle
+        state.idle_confidence = confidence
+
+        # Idle started (person stopped looking at screen)
+        if is_idle and not old_is_idle:
+            self._emit_event(
+                EventType.IDLE_STARTED,
+                state.track_id,
+                identity=state.identity,
+                confidence=confidence
+            )
+
+            logger.info(
+                f"Track {state.track_id} ({state.identity or 'Unknown'}): "
+                f"Idle started (not looking at screen)"
+            )
+
+            # Send activity to API if person is identified
+            if self.api_client and state.identity and self.name_to_id_map:
+                user_id = self.name_to_id_map.get(state.identity)
+                if user_id:
+                    logger.info(f"Sending not_focusing activity for user {user_id} ({state.identity})")
+                    response = self.api_client.send_activities(
+                        activity_type='not_focusing',
+                        camera_id=state.camera_id,
+                        user_id=user_id,
+                        confidence_score=confidence,
+                        proof_image=proof_image
+                    )
+                    if response and response.status_code in [200, 201]:
+                        logger.info(f"Successfully sent not_focusing activity for {state.identity}")
+                    else:
+                        logger.error(f"Failed to send not_focusing activity for {state.identity}")
+
+        # Idle stopped (person started looking at screen again)
+        elif not is_idle and old_is_idle:
+            self._emit_event(
+                EventType.IDLE_STOPPED,
+                state.track_id,
+                identity=state.identity,
+                confidence=confidence
+            )
+
+            logger.info(
+                f"Track {state.track_id} ({state.identity or 'Unknown'}): "
+                f"Idle stopped (looking at screen)"
+            )
+
+            # Send working activity to API if person is identified
+            if self.api_client and state.identity and self.name_to_id_map:
+                user_id = self.name_to_id_map.get(state.identity)
+                if user_id:
+                    logger.info(f"Sending working activity for user {user_id} ({state.identity}) - started looking at screen")
+                    response = self.api_client.send_activities(
+                        activity_type='working',
+                        camera_id=state.camera_id,
+                        user_id=user_id
+                    )
+                    if response and response.status_code in [200, 201]:
+                        logger.info(f"Successfully sent working activity for {state.identity}")
+                    else:
+                        logger.error(f"Failed to send working activity for {state.identity}")
 
     def remove_person(self, track_id: int) -> Optional[PersonState]:
         """
@@ -328,11 +460,11 @@ class PersonStateManager:
             }
         )
 
-        logger.info(
-            f"Track {track_id} ({state.identity or 'Unknown'}) exited: "
-            f"{state.total_frames} frames, "
-            f"{state.phone_usage_duration:.1f}s phone usage"
-        )
+        # logger.info(
+        #     f"Track {track_id} ({state.identity or 'Unknown'}) exited: "
+        #     f"{state.total_frames} frames, "
+        #     f"{state.phone_usage_duration:.1f}s phone usage"
+        # )
 
         return state
 
@@ -423,6 +555,10 @@ class PersonStateManager:
             1 for s in self.person_states.values()
             if s.using_phone
         )
+        idle_persons = sum(
+            1 for s in self.person_states.values()
+            if s.is_idle
+        )
 
         total_phone_usage_time = sum(
             s.phone_usage_duration
@@ -434,6 +570,7 @@ class PersonStateManager:
             'total_persons': total_persons,
             'identified_persons': identified_persons,
             'using_phone': using_phone_persons,
+            'idle_persons': idle_persons,
             'total_phone_usage_seconds': total_phone_usage_time,
             'events_queued': len(self.event_queue)
         }

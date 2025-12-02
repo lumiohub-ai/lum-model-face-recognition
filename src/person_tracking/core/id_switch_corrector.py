@@ -239,10 +239,10 @@ class IDSwitchCorrector:
 
                     if distance < self.embedding_threshold:
                         duplicates.append((track_id_1, track_id_2, distance))
-                        logger.warning(
-                            f"🔍 DUPLICATE TRACKS DETECTED: Track {track_id_1} and Track {track_id_2} "
-                            f"(identity: {identity}, distance: {distance:.3f})"
-                        )
+                        # logger.warning(
+                        #     f"🔍 DUPLICATE TRACKS DETECTED: Track {track_id_1} and Track {track_id_2} "
+                        #     f"(identity: {identity}, distance: {distance:.3f})"
+                        # )
 
         return duplicates
 

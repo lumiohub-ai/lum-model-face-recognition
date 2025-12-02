@@ -51,11 +51,11 @@ cameras:
     performance:
       target_fps: 17              # target frames per second
       resize_width: 1280          # resize for performance (null = no resize)
-      batch_size: 1               # batch size for inference
+      batch_size: 4               # batch size for inference
 
     # Storage
     storage:
-      save_annotated_frames: true
+      save_annotated_frames: false
       save_phone_usage_clips: true
       output_dir: "volumes/storage/person-tracking"
       clip_duration_seconds: 10

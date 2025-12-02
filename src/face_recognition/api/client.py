@@ -124,6 +124,51 @@ class APIClient:
 
         return unique_id
 
+    def get_users(self) -> List[Dict[str, Any]]:
+        """Retrieve all users from the API.
+
+        Returns:
+            List of user dictionaries with 'name' and 'id' fields
+        """
+        if not self.auth.is_authenticated():
+            logger.error("Not authenticated")
+            return []
+
+        url = f"{self.base_url}/org/{self.client_slug}/users"
+
+        def make_request():
+            return self.session.get(
+                url,
+                params={"status": "active"}
+            )
+
+        try:
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
+
+            if response.status_code == 200:
+                users = response.json()
+                return [
+                    {
+                        'name': user.get('full_name'),
+                        'id': user.get('id')
+                    }
+                    for user in users
+                    if user.get('full_name') and user.get('id')
+                ]
+            elif response.status_code == 404:
+                logger.warning("No users found in the database")
+                return []
+            else:
+                logger.error(
+                    f"Error fetching users: {response.status_code} - {response.text}"
+                )
+                return []
+
+        except Exception as e:
+            logger.error(f"Error fetching users: {e}")
+            return []
+
     def get_all_users(
         self,
         current_users: List[str],
@@ -417,6 +462,101 @@ class APIClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"Send unrecognized face request failed: {str(e)}")
             return None
+
+    def send_activities(
+        self,
+        activity_type: str,
+        camera_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+        proof_image: Optional[np.ndarray]=None,
+
+    ) -> Optional[requests.Response]:
+        """Send activity to the API.
+
+        Args:
+            face: Detected face image (numpy array)
+            status: Status of the user ('IN' or 'OUT')
+            camera_id: Optional camera ID that detected the face
+            notes: Optional notes about the detection
+
+        Returns:
+            Response object if successful, None otherwise
+        """
+        if not self.auth.is_authenticated():
+            logger.critical("Not authenticated. Please login first.")
+            return None
+
+        activity_type = activity_type.lower()
+        if activity_type not in ['phone_usage', 'sleeping', 'not_focusing','talking', 'working','unknown']:
+            logger.warning(
+                f"Invalid status '{activity_type}'. Activity type must be in range of 'phone_usage', 'sleeping', 'not_focusing','talking', 'working' or 'unknown'"
+            )
+            return None
+
+        url = self.base_url + f'/org/{self.client_slug}/activities'
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        data = {
+            'user_id': user_id,
+            'activity_type': activity_type,
+            'timestamp': timestamp,
+            'metadata': '{}'
+        }
+
+        # Add optional fields if provided
+        if confidence_score is not None:
+            data['confidence_score'] = confidence_score
+        if camera_id is not None:
+            data['camera_id'] = camera_id
+
+        # Log the exact payload being sent
+        logger.info(f"API Request Details: activity_type='{activity_type}' (len={len(activity_type)}), user_id={user_id} (type={type(user_id).__name__}), camera_id={camera_id}")
+        logger.debug(f"Full data payload: {data}")
+
+        image = True
+        if proof_image is None or proof_image.size == 0:
+            image = False
+        if image:
+            success, encoded_image = cv2.imencode('.jpg', proof_image)
+            if not success:
+                logger.error("Image encoding failed")
+                return None
+
+        def make_request():
+            headers = {'Authorization': f'Bearer {self.token}'}
+            # Prepare file payload - create fresh BytesIO for each retry
+            # Always send as multipart/form-data (matching API expectation)
+            if image:
+                files = [
+                    ('proof_image', ('proof.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg')),
+                ]
+            else:
+                # Send empty file to maintain multipart/form-data format
+                files = [
+                    ('proof_image', ('', io.BytesIO(b''), 'application/octet-stream')),
+                ]
+
+            logger.debug(f"POST {url} with data keys: {list(data.keys())}, has_image: {image}")
+            return requests.post(url, headers=headers, files=files, data=data)
+
+        try:
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
+
+            if response.status_code not in [200, 201]:
+                logger.error(
+                    f"Send {activity_type} failed with status {response.status_code}: "
+                    f"{response.text}"
+                )
+                return None
+
+            return response
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Send {activity_type} request failed: {str(e)}")
+            return None
+
 
     def get_cameras(self, application: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get cameras from the API, optionally filtered by application.

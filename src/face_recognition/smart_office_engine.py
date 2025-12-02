@@ -43,6 +43,9 @@ from person_tracking.core.phone_detector import PhoneDetector
 from person_tracking.core.identity_manager import IdentityManager
 from person_tracking.core.phone_usage_logic_v2 import PhoneUsageDetectorV2
 from person_tracking.core.phone_usage_filter import PhoneUsageFilter
+from person_tracking.core.screen_detector import ScreenDetector
+from person_tracking.core.idle_detection_logic import IdleDetectionLogic
+from person_tracking.core.idle_filter import IdleFilter
 from person_tracking.core.state_manager import PersonStateManager, EventType
 from person_tracking.core.face_adapter import crop_person_roi
 from person_tracking.core.id_switch_corrector import IDSwitchCorrector
@@ -101,10 +104,14 @@ class CameraEngine:
         face_detector: FaceDetector,
         face_recognizer: FaceRecognition,
         person_detector: 'PersonDetector',
-        phone_detector: Optional['PhoneDetector'],
         client_slug: str,
+        phone_detector: Optional['PhoneDetector'],
+        screen_detector: Optional['ScreenDetector']=None,
         global_id_generator: Optional[GlobalTrackIDGenerator] = None,
-        phone_usage_config: Optional[Dict[str, Any]] = None
+        phone_usage_config: Optional[Dict[str, Any]] = None,
+        idle_detection_config: Optional[Dict[str, Any]] = None,
+        api_client: Optional['APIClient'] = None,
+        name_to_id_map: Optional[Dict[str, int]] = None
     ):
         """Initialize camera engine.
 
@@ -114,9 +121,13 @@ class CameraEngine:
             face_recognizer: Shared face recognizer instance
             person_detector: Shared person detector instance
             phone_detector: Shared phone detector instance (or None)
+            screen_detector: Shared screen detector instance (or None)
             client_slug: Client organization slug
             global_id_generator: Optional global track ID generator for cross-camera unique IDs
             phone_usage_config: Phone usage detection configuration (version, thresholds, etc.)
+            idle_detection_config: Idle detection configuration (thresholds, etc.)
+            api_client: API client for sending activities
+            name_to_id_map: Dictionary mapping user names to IDs
         """
         self.camera_id = camera_config['camera_id']
         self.camera_name = camera_config['camera_name']
@@ -130,26 +141,44 @@ class CameraEngine:
 
         # Feature flags based on application
         self.enable_attendance = True  # Always enabled
-        self.enable_phone_detection = self.application == 'PhoneUsageDetection'
+        # TODO: Refactor to support application as list from API: application: ["PhoneUsageDetection", "IdleDetection"]
+        # TEMPORARY WORKAROUND: Use 'CombinedDetection' to enable both phone + idle
+        self.enable_phone_detection = self.application in ['PhoneUsageDetection', 'CombinedDetection']
+        self.enable_idle_detection = self.application in ['IdleDetection', 'CombinedDetection']
 
         # Phone usage configuration
         self.phone_usage_config = phone_usage_config or {}
+
+        # Idle detection configuration
+        self.idle_detection_config = idle_detection_config or {}
 
         # Shared components (models)
         self.face_detector = face_detector
         self.face_recognizer = face_recognizer
         self.person_detector = person_detector
         self.phone_detector = phone_detector if self.enable_phone_detection else None
+        self.screen_detector = screen_detector if self.enable_idle_detection else None
         self.client_slug = client_slug
         self.global_id_generator = global_id_generator
+
+        # API client and name mapping for activity tracking
+        self.api_client = api_client
+        self.name_to_id_map = name_to_id_map or {}
 
         # Initialize per-camera components (tracking, state)
         self._init_components()
 
+        # Log enabled features
+        features = []
+        if self.enable_phone_detection:
+            features.append("Phone")
+        if self.enable_idle_detection:
+            features.append("Idle")
+        features_str = "+".join(features) if features else "None"
+
         logger.info(
             f"CameraEngine initialized: {self.camera_name} (ID: {self.camera_id}) | "
-            f"Type: {self.cam_type} | "
-            f"Phone Detection: {'enabled' if self.enable_phone_detection else 'disabled'}"
+            f"Type: {self.cam_type} | Features: {features_str}"
         )
 
     def _init_components(self) -> None:
@@ -203,8 +232,30 @@ class CameraEngine:
             self.phone_usage_logic = None
             self.phone_usage_filter = None
 
+        # Idle detection components (if enabled)
+        if self.enable_idle_detection:
+            # Idle detection logic (head pose + screen orientation)
+            self.idle_detection_logic = IdleDetectionLogic(
+                screen_distance_threshold=self.idle_detection_config.get('screen_distance_threshold', 300.0),
+                head_orientation_threshold=self.idle_detection_config.get('head_orientation_threshold', 60.0),
+                min_keypoint_confidence=self.idle_detection_config.get('min_keypoint_confidence', 0.3)
+            )
+            logger.info(f"Initialized IdleDetectionLogic for {self.camera_name}")
+
+            # Idle filter (temporal smoothing)
+            self.idle_filter = IdleFilter(
+                working_confirmation_frames=self.idle_detection_config.get('working_confirmation_frames', 5)
+            )
+        else:
+            self.idle_detection_logic = None
+            self.idle_filter = None
+
         # State Manager
-        self.state_manager = PersonStateManager(camera_id=self.camera_id)
+        self.state_manager = PersonStateManager(
+            camera_id=self.camera_id,
+            api_client=self.api_client,
+            name_to_id_map=self.name_to_id_map
+        )
 
         # Frame counter
         self.frame_count = 0
@@ -213,7 +264,7 @@ class CameraEngine:
         self,
         frame: np.ndarray,
         frame_num: int
-    ) -> Tuple[List[Dict], List[Dict], np.ndarray, List[Dict]]:
+    ) -> Tuple[List[Dict], List[Dict], List[Dict], np.ndarray, List[Dict]]:
         """Process a single frame.
 
         Args:
@@ -221,7 +272,7 @@ class CameraEngine:
             frame_num: Frame number
 
         Returns:
-            Tuple of (recognized_persons, phone_events, processed_frame, detected_phones)
+            Tuple of (recognized_persons, phone_events, idle_events, processed_frame, detected_phones)
         """
         # Apply ROI if configured
         if self.roi:
@@ -247,6 +298,18 @@ class CameraEngine:
         phone_assignments = {}
         if self.enable_phone_detection and detected_phones:
             phone_assignments = self._associate_phones_to_persons(detected_phones, active_tracks)
+
+        # Step 3b: Detect screens ONCE per frame (for idle detection)
+        detected_screens = []
+        if self.enable_idle_detection and self.screen_detector:
+            detected_screens = self.screen_detector.detect_screens(frame)
+
+        # Step 3c: Associate screens to persons (proximity-based)
+        screen_assignments = {}
+        if self.enable_idle_detection and detected_screens:
+            screen_assignments = self.screen_detector.associate_screens_with_persons(
+                detected_screens, active_tracks
+            )
             if phone_assignments:
                 logger.debug(f"Phone assignments: {len(phone_assignments)} person(s) assigned phones")
 
@@ -259,12 +322,12 @@ class CameraEngine:
 
             # Check if this is a new track (person entered frame)
             prev_state = self.state_manager.get_state(track_id)
-            if prev_state is None:
-                # Color based on camera type: Green for IN, Red for OUT
-                if self.cam_type == "IN":
-                    logger.opt(colors=True).info(f"<green>→ Track {track_id} ENTERED frame [IN]</green>")
-                else:
-                    logger.opt(colors=True).info(f"<red>→ Track {track_id} ENTERED frame [OUT]</red>")
+            # if prev_state is None:
+            #     # Color based on camera type: Green for IN, Red for OUT
+            #     if self.cam_type == "IN":
+            #         logger.opt(colors=True).info(f"<green>→ Track {track_id} ENTERED frame [IN]</green>")
+            #     else:
+            #         logger.opt(colors=True).info(f"<red>→ Track {track_id} ENTERED frame [OUT]</red>")
 
             # Store track data
             self.track_manager.add_track_detection(
@@ -332,7 +395,7 @@ class CameraEngine:
                         continue
 
                     # Identity just locked - emit recognition event for immediate logging
-                    logger.opt(colors=True).info(f"<blue>🔒 Track {track_id} recognized as '{identity}' [{self.cam_type}]</blue>")
+                    logger.opt(colors=True).info(f"<blue> Track {track_id} recognized as '{identity}' [{self.cam_type}]</blue>")
 
                     # Get best quality person image as proof (full frame with bbox)
                     proof_image = self._get_best_person_image(track_id)
@@ -413,6 +476,52 @@ class CameraEngine:
                     if using_phone:
                         phone_confidence = self.phone_usage_filter.get_usage_confidence(track_id)
 
+            # Idle detection (using pre-detected screens)
+            is_idle = False
+            idle_confidence = 0.0
+
+            if self.enable_idle_detection:
+                # Check if this person has a screen nearby
+                if track_id in screen_assignments:
+                    screen_data = screen_assignments[track_id][0]  # Get first (nearest) screen
+                    screen_bbox = np.array(screen_data['bbox'])
+                    screen_distance = screen_data.get('distance', 0.0)
+
+                    # Apply idle detection logic
+                    spatial_result = self.idle_detection_logic.detect_idle(
+                        person_keypoints=keypoints,
+                        person_bbox=bbox,
+                        screen_bbox=screen_bbox,
+                        screen_distance=screen_distance
+                    )
+
+                    # Update filter with detection result
+                    self.idle_filter.update(track_id, spatial_result)
+                    is_idle = self.idle_filter.is_idle(track_id)
+                    if is_idle:
+                        idle_confidence = spatial_result['confidence']
+                else:
+                    # No screen nearby - person is idle
+                    no_screen_result = {
+                        'is_idle': True,
+                        'confidence': 0.9,
+                        'method': 'no_screen_detected',
+                        'details': {}
+                    }
+                    self.idle_filter.update(track_id, no_screen_result)
+                    is_idle = self.idle_filter.is_idle(track_id)
+                    if is_idle:
+                        idle_confidence = self.idle_filter.get_idle_confidence(track_id)
+
+            # Get proof image (crop person from frame)
+            proof_image = None
+            if bbox is not None:
+                x1, y1, x2, y2 = map(int, bbox)
+                # Ensure coordinates are within frame bounds
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                proof_image = frame[y1:y2, x1:x2]
+
             # Update state manager
             self.state_manager.update_person(
                 track_id=track_id,
@@ -420,7 +529,10 @@ class CameraEngine:
                 identity_locked=identity_locked,
                 identity_confidence=identity_confidence,
                 using_phone=using_phone,
-                phone_confidence=phone_confidence
+                phone_confidence=phone_confidence,
+                is_idle=is_idle,
+                idle_confidence=idle_confidence,
+                proof_image=proof_image
             )
 
             # Store face image and person bbox for later use (unrecognized faces)
@@ -442,14 +554,14 @@ class CameraEngine:
             if state:
                 identity_str = f"'{state.identity}'" if state.identity_locked else f"Track {track_id}"
                 # Color based on camera type: Green for IN, Red/Magenta for OUT
-                if self.cam_type == "IN":
-                    logger.opt(colors=True).info(f"<green>← {identity_str} LEFT frame [IN]</green>")
-                else:
-                    logger.opt(colors=True).info(f"<magenta>← {identity_str} LEFT frame [OUT]</magenta>")
+                # if self.cam_type == "IN":
+                #     logger.opt(colors=True).info(f"<green>← {identity_str} LEFT frame [IN]</green>")
+                # else:
+                #     logger.opt(colors=True).info(f"<magenta>← {identity_str} LEFT frame [OUT]</magenta>")
 
             # If person was NOT recognized (identity never locked), send unrecognized person image
             if state and not state.identity_locked:
-                logger.info(f"📸 Sending unrecognized person image for Track {track_id}")
+                # logger.info(f"📸 Sending unrecognized person image for Track {track_id}")
                 person_image = self._get_best_person_image(track_id)
                 if person_image is not None and person_image.size > 0:
                     # Add to recognized_persons list for API submission
@@ -475,8 +587,9 @@ class CameraEngine:
             if self.enable_phone_detection:
                 self.phone_usage_filter.reset_track(track_id)
 
-        # Step 6: Get phone usage events
+        # Step 6: Get events (phone usage and idle)
         events = self.state_manager.get_events(clear=True)
+        idle_events = []
         for event in events:
             if event.event_type in [EventType.PHONE_USAGE_STARTED, EventType.PHONE_USAGE_STOPPED]:
                 phone_events.append({
@@ -487,6 +600,16 @@ class CameraEngine:
                     'camera_name': self.camera_name,
                     'timestamp': event.timestamp,
                     'duration': event.duration
+                })
+            elif event.event_type in [EventType.IDLE_STARTED, EventType.IDLE_STOPPED]:
+                idle_events.append({
+                    'event_type': event.event_type.value,
+                    'track_id': event.track_id,
+                    'identity': event.identity,
+                    'camera_id': self.camera_id,
+                    'camera_name': self.camera_name,
+                    'timestamp': event.timestamp,
+                    'confidence': event.confidence
                 })
 
         # Delayed batch ID correction (every 5 frames)
@@ -510,7 +633,7 @@ class CameraEngine:
                     )
                     self._merge_tracks(source_track_id=merge_track, target_track_id=keep_track)
 
-        return recognized_persons, phone_events, frame, detected_phones
+        return recognized_persons, phone_events, idle_events, frame, detected_phones
 
     def _associate_phones_to_persons(
         self,
@@ -862,12 +985,12 @@ class SmartOfficeEngine:
             client_slug: Organization slug
             api_host: API base URL
             applications: List of application types to fetch
-                         Default: ['FaceRecognision', 'PhoneUsageDetection']
+                         Default: ['FaceRecognision', 'PhoneUsageDetection', 'IdleDetection', 'CombinedDetection']
             **kwargs: Additional configuration
         """
         self.client_slug = client_slug
         self.api_host = api_host
-        self.applications = applications or ['FaceRecognision', 'PhoneUsageDetection']
+        self.applications = applications or ['FaceRecognision', 'PhoneUsageDetection', 'IdleDetection', 'CombinedDetection']
 
         # Store credentials for entry logger
         self._email = email
@@ -904,7 +1027,7 @@ class SmartOfficeEngine:
 
         # Shared phone detector (YOLOv8n) - only if any camera needs it
         needs_phone_detection = any(
-            c.get('application') == 'PhoneUsageDetection'
+            c.get('application') in ['PhoneUsageDetection', 'CombinedDetection']
             for c in self.camera_configs
         )
 
@@ -919,6 +1042,27 @@ class SmartOfficeEngine:
 
         if self.shared_phone_detector:
             logger.info("Phone detection enabled for PhoneUsageDetection cameras")
+
+        # Shared screen detector (YOLOv8) - only if any camera needs it
+        needs_idle_detection = any(
+            c.get('application') in ['IdleDetection', 'CombinedDetection']
+            for c in self.camera_configs
+        )
+
+        # Load idle detection config from config file
+        self.idle_detection_config = self._load_idle_detection_config()
+
+        self.shared_screen_detector = ScreenDetector(
+            model_size='n',
+            confidence_threshold=0.4
+        ) if needs_idle_detection else None
+
+        if self.shared_screen_detector:
+            logger.info("Screen detection enabled for IdleDetection cameras")
+
+        # Create name-to-ID mapping for activity tracking
+        # This requires fetching user data from API
+        self.name_to_id_map = self._build_name_to_id_map()
 
         # Initialize streams and engines
         self.streams: List[StreamHandler] = []
@@ -986,7 +1130,7 @@ class SmartOfficeEngine:
                     'camera_name': cam.get('name', 'Unknown'),
                     'cam_type': cam.get('camera_type', 'IN').upper(),
                     'stream_url': cam.get('stream_url', ''),
-                    'application': application,
+                    'application': cam.get('application', application),  # Use camera's actual application field
                     'match_threshold': float(cam.get('matching_threshold', 0.3)),
                     'roi': self._parse_roi(cam.get('roi_points')),
                     'line_points': self._parse_line_points(cam.get('virtual_line_points'))
@@ -1056,6 +1200,50 @@ class SmartOfficeEngine:
         logger.info("Using default phone usage config")
         return default_config
 
+    def _load_idle_detection_config(self) -> Dict[str, Any]:
+        """Load idle detection configuration from config file.
+
+        Returns:
+            Dictionary with idle detection config
+        """
+        config_path = Path('configs/person_tracking/config.yaml')
+
+        # Default configuration
+        default_config = {
+            'screen_distance_threshold': 300.0,  # pixels
+            'head_orientation_threshold': 60.0,  # degrees
+            'min_keypoint_confidence': 0.3,
+            'working_confirmation_frames': 5
+        }
+
+        try:
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+
+                # Get idle detection config from first camera (shared across all)
+                if config and 'cameras' in config and len(config['cameras']) > 0:
+                    camera_config = config['cameras'][0]
+                    idle_config = camera_config.get('idle_detection', {})
+
+                    # Merge with defaults
+                    result = default_config.copy()
+                    result.update(idle_config)
+
+                    logger.info(
+                        f"Loaded idle detection config: "
+                        f"screen_dist={result['screen_distance_threshold']}px, "
+                        f"head_angle={result['head_orientation_threshold']}°, "
+                        f"working_conf={result['working_confirmation_frames']} frames"
+                    )
+                    return result
+
+        except Exception as e:
+            logger.warning(f"Failed to load idle detection config: {e}")
+
+        logger.info("Using default idle detection config")
+        return default_config
+
     def _load_phone_detection_config(self) -> Dict[str, Any]:
         """Load phone detection configuration from config file.
 
@@ -1098,6 +1286,29 @@ class SmartOfficeEngine:
 
         return default_config
 
+    def _build_name_to_id_map(self) -> Dict[str, int]:
+        """Build mapping of user names to IDs from API.
+
+        Returns:
+            Dictionary mapping name -> user_id
+        """
+        try:
+            users = self.api_client.get_users()
+            name_map = {}
+
+            for user in users:
+                name = user.get('name')
+                user_id = user.get('id')
+                if name and user_id:
+                    name_map[name] = user_id
+
+            logger.info(f"Built name-to-ID mapping for {len(name_map)} users")
+            return name_map
+
+        except Exception as e:
+            logger.warning(f"Failed to build name-to-ID map: {e}")
+            return {}
+
     def _init_face_recognizer(self) -> FaceRecognition:
         """Initialize face recognizer with pgvector."""
         # Create args object for FaceRecognition
@@ -1127,9 +1338,13 @@ class SmartOfficeEngine:
                 face_recognizer=self.face_recognizer,
                 person_detector=self.shared_person_detector,
                 phone_detector=self.shared_phone_detector,
+                screen_detector=self.shared_screen_detector,
                 client_slug=self.client_slug,
                 global_id_generator=self.global_id_generator,  # Enable global track IDs
-                phone_usage_config=self.phone_usage_config  # Pass phone usage config
+                phone_usage_config=self.phone_usage_config,  # Pass phone usage config
+                idle_detection_config=self.idle_detection_config,  # Pass idle detection config
+                api_client=self.api_client,  # Pass API client for activity tracking
+                name_to_id_map=self.name_to_id_map  # Pass name-to-ID mapping
             )
             self.camera_engines.append(engine)
 
@@ -1215,7 +1430,7 @@ class SmartOfficeEngine:
                     engine = self.camera_engines[camera_idx]
 
                     # Process frame
-                    recognized, phone_events, processed, phones = engine.process_frame(frame, frame_num)
+                    recognized, phone_events, idle_events, processed, phones = engine.process_frame(frame, frame_num)
 
                     # Handle recognized persons
                     for person in recognized:
@@ -1224,6 +1439,10 @@ class SmartOfficeEngine:
                     # Handle phone events
                     for event in phone_events:
                         self._handle_phone_event(event)
+
+                    # Handle idle events
+                    for event in idle_events:
+                        self._handle_idle_event(event)
 
                     # Annotate frame (pass phones to avoid duplicate detection)
                     annotated = self._annotate_frame(processed, engine, phones)
@@ -1314,6 +1533,36 @@ class SmartOfficeEngine:
         else:
             duration = event.get('duration', 0)
             logger.info(f"PHONE | {identity} stopped using phone at {camera_name} ({duration:.1f}s)")
+
+    def _handle_idle_event(self, event: Dict) -> None:
+        """Handle an idle detection event."""
+        event_type = event['event_type']
+        identity = event.get('identity', 'Unknown')
+        camera_name = event['camera_name']
+        confidence = event.get('confidence', 0.0)
+
+        # Log to CSV
+        self.csv_logger.camera_id = event['camera_id']
+        self.csv_logger.log_event(
+            track_id=event['track_id'],
+            event_type=event_type,
+            person_name=identity,
+            using_phone=False,  # Not phone usage
+            confidence=confidence,
+            timestamp=event['timestamp']
+        )
+
+        # Log to console
+        if event_type == 'idle_started':
+            logger.opt(colors=True).warning(
+                f"<yellow>IDLE | {identity} stopped looking at screen at {camera_name} "
+                f"(confidence={confidence:.2f})</yellow>"
+            )
+        else:
+            logger.opt(colors=True).info(
+                f"<green>WORKING | {identity} started looking at screen at {camera_name} "
+                f"(confidence={confidence:.2f})</green>"
+            )
 
     def _annotate_frame(self, frame: np.ndarray, engine: CameraEngine, phones: List[Dict]) -> np.ndarray:
         """Annotate frame with detections and status.
