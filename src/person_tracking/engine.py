@@ -147,6 +147,13 @@ class PersonTrackingEngine:
         self.face_recognizer = FaceRecognition(face_args)
         logger.info(f"Initialized FaceRecognition (pgvector: {self.config.database.use_pgvector})")
 
+        # Initialize pgvector store once (if using pgvector)
+        if self.config.database.use_pgvector:
+            self.pgvector_store = PgVectorStore(self.client_slug)
+            logger.info("Initialized PgVectorStore (shared instance)")
+        else:
+            self.pgvector_store = None
+
         # Phone Detection
         self.phone_detector = PhoneDetector(
             model_size=phd.model_size,
@@ -175,17 +182,19 @@ class PersonTrackingEngine:
 
         # Phone Usage Detector (V2: overlap detection only)
         self.phone_usage_logic = PhoneUsageDetectorV2(
-            hand_bbox_size=getattr(phu, 'hand_bbox_size', 80.0),
-            overlap_iou_threshold=getattr(phu, 'overlap_iou_threshold', 0.01),
-            min_keypoint_confidence=getattr(phu, 'min_keypoint_confidence', 0.3)
+            hand_bbox_size=getattr(phu, 'hand_bbox_size', 100.0),
+            overlap_iou_threshold=getattr(phu, 'overlap_iou_threshold', 0.15),
+            min_keypoint_confidence=getattr(phu, 'min_keypoint_confidence', 0.4),
+            person_bbox_proximity_threshold=9999.0,  # Effectively disabled
+            wrist_distance_threshold=9999.0  # Effectively disabled - only use overlap checks
         )
-        logger.info(f"Initialized PhoneUsageDetectorV2 (overlap-only)")
+        logger.info(f"Initialized PhoneUsageDetectorV2 (hand/arm overlap only, stricter thresholds)")
 
         # Phone Usage Filter (temporal smoothing)
         self.phone_usage_filter = PhoneUsageFilter(
-            stop_confirmation_frames=getattr(phu, 'stop_confirmation_frames', 5)
+            stop_confirmation_frames=getattr(phu, 'stop_confirmation_frames', 10)
         )
-        logger.info(f"Initialized PhoneUsageFilter (stop_delay={getattr(phu, 'stop_confirmation_frames', 5)} frames)")
+        logger.info(f"Initialized PhoneUsageFilter (stop_delay={getattr(phu, 'stop_confirmation_frames', 10)} frames)")
 
         # State Manager
         self.state_manager = PersonStateManager(
@@ -531,9 +540,8 @@ class PersonTrackingEngine:
 
         # Search for match in database
         if self.config.database.use_pgvector:
-            # Use pgvector store directly for faster search
-            pgvector_store = PgVectorStore(self.client_slug)
-            matches = pgvector_store.search_similar(
+            # Use shared pgvector store instance
+            matches = self.pgvector_store.search_similar(
                 query_embedding=embedding,
                 limit=1,
                 threshold=self.camera_config.face_recognition.match_threshold
@@ -629,8 +637,8 @@ class PersonTrackingEngine:
             x1, y1, x2, y2 = map(int, bbox[:4])
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
 
-            # Draw label
-            label_parts = [f"ID:{track_id}"]
+            # Draw label (identity only, no track ID)
+            label_parts = []
             if identity:
                 # Show friendly message based on phone usage
                 if using_phone:
@@ -641,62 +649,39 @@ class PersonTrackingEngine:
                 # Show phone usage even without identity
                 label_parts.append("PHONE")
 
-            label = " | ".join(label_parts)
+            label = " | ".join(label_parts) if label_parts else None
 
-            # Background for label
-            (label_w, label_h), baseline = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
-            )
-            cv2.rectangle(
-                annotated,
-                (x1, y1 - label_h - 10),
-                (x1 + label_w, y1),
-                color,
-                -1
-            )
+            # Draw label only if there's content
+            if label:
+                # Background for label
+                (label_w, label_h), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
+                )
+                cv2.rectangle(
+                    annotated,
+                    (x1, y1 - label_h - 10),
+                    (x1 + label_w, y1),
+                    color,
+                    -1
+                )
 
-            # Draw label text
-            cv2.putText(
-                annotated,
-                label,
-                (x1, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 255, 255),
-                2
-            )
+                # Draw label text
+                cv2.putText(
+                    annotated,
+                    label,
+                    (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    2
+                )
 
             # Draw keypoints skeleton if available
             if keypoints is not None:
                 self._draw_skeleton(annotated, keypoints)
 
-        # Draw phones
-        for phone in phones:
-            phone_bbox = phone['bbox']
-            x1, y1, x2, y2 = map(int, phone_bbox[:4])
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(
-                annotated,
-                "Phone",
-                (x1, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 0, 0),
-                2
-            )
-
-        # Draw FPS and stats
-        fps = self.get_current_fps()
-        stats_text = f"FPS: {fps:.1f} | Tracks: {len(tracks)} | Phones: {len(phones)}"
-        cv2.putText(
-            annotated,
-            stats_text,
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (0, 255, 0),
-            2
-        )
+        # No phone boxes drawn
+        # No FPS/stats drawn
 
         return annotated
 

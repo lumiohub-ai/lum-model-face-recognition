@@ -291,10 +291,10 @@ class PgVectorStore:
                         user_id,
                         user_name,
                         image_url,
-                        1 - (embedding <=> :query_embedding::vector) as similarity
+                        1 - (embedding <=> CAST(:query_embedding AS vector)) as similarity
                     FROM {self.schema_name}.face_embeddings
-                    WHERE 1 - (embedding <=> :query_embedding::vector) >= :threshold
-                    ORDER BY embedding <=> :query_embedding::vector
+                    WHERE 1 - (embedding <=> CAST(:query_embedding AS vector)) >= :threshold
+                    ORDER BY embedding <=> CAST(:query_embedding AS vector)
                     LIMIT :limit
                 """), {
                     'query_embedding': str(embedding_list),
@@ -311,7 +311,7 @@ class PgVectorStore:
                         'similarity': float(row[3])
                     })
 
-                logger.info(f"Found {len(matches)} similar faces above threshold {threshold}")
+                # logger.info(f"Found {len(matches)} similar faces above threshold {threshold}")
                 return matches
 
         except Exception as e:

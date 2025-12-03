@@ -1,0 +1,39 @@
+# Camera Configuration
+# This file defines camera sources and settings for the face recognition system
+# Environment variables can be used with ${VAR_NAME} syntax
+
+cameras:
+  # Camera 1 - Entry Camera
+  - camera_id: 1
+    camera_name: "Entry Camera"
+    camera_type: "IN"  # IN, OUT, or MANAGEMENT
+    video_path: "${HB_IN}"  # Use HB_IN environment variable
+    application: "CombinedDetection"  # Application type
+    match_threshold: 0.3  # Face matching threshold
+    roi: null  # Region of interest [x1, y1, x2, y2] or null
+    line_points: null  # Line crossing points [[x1, y1], [x2, y2]] or null
+
+  # Camera 2 - Exit Camera (optional)
+  # - camera_id: 2
+  #   camera_name: "Exit Camera"
+  #   camera_type: "OUT"
+  #   video_path: "${HB_OUT}"
+  #   application: "FaceRecognision"
+  #   match_threshold: 0.3
+  #   roi: null
+  #   line_points: null
+
+  # Camera 3 - Management Camera (optional)
+  # - camera_id: 3
+  #   camera_name: "Management Camera"
+  #   camera_type: "MANAGEMENT"
+  #   video_path: "${HB_IN_MANAGEMENT}"
+  #   application: "FaceRecognision"
+  #   match_threshold: 0.3
+  #   roi: null
+  #   line_points: null
+
+# Additional supported applications:
+# - "PhoneUsageDetection": Phone usage tracking
+# - "IdleDetection": Idle/screen time tracking
+# - "CombinedDetection": All detection features

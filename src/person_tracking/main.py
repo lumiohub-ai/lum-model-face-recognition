@@ -48,7 +48,9 @@ class PersonTrackingApp:
         self.config: Optional[PersonTrackingAppConfig] = None
         self.engines: Dict[int, PersonTrackingEngine] = {}
         self.streams: Dict[int, StreamHandler] = {}
+        self.video_writers: Dict[int, Optional[cv2.VideoWriter]] = {}
         self.running = False
+        self.start_time = time.time()
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -137,6 +139,48 @@ class PersonTrackingApp:
                 )
                 self.engines[camera_id] = engine
 
+                # Initialize video writer if save_video is enabled
+                if camera_config.storage.save_phone_usage_clips:
+                    output_dir = Path(camera_config.storage.output_dir) / self.config.client_slug / f"camera_{camera_id}"
+                    output_dir.mkdir(parents=True, exist_ok=True)
+
+                    video_filename = f"output_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+                    video_path = output_dir / video_filename
+
+                    # Get first frame to determine video dimensions
+                    first_frame = stream.get_first_frame()
+                    if first_frame is not None:
+                        h, w = first_frame.shape[:2]
+
+                        # Adjust dimensions if resize is enabled
+                        if camera_config.performance.resize_width:
+                            target_w = camera_config.performance.resize_width
+                            target_h = int(h * target_w / w)
+                            w, h = target_w, target_h
+
+                        # Use MP4V codec (compatible with most players)
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        fps = camera_config.performance.target_fps
+
+                        video_writer = cv2.VideoWriter(
+                            str(video_path),
+                            fourcc,
+                            fps,
+                            (w, h)
+                        )
+
+                        if video_writer.isOpened():
+                            self.video_writers[camera_id] = video_writer
+                            logger.info(f"Video output: {video_path} ({w}x{h} @ {fps} FPS)")
+                        else:
+                            logger.error(f"Failed to initialize video writer for camera {camera_id}")
+                            self.video_writers[camera_id] = None
+                    else:
+                        logger.warning(f"Cannot initialize video writer - no first frame for camera {camera_id}")
+                        self.video_writers[camera_id] = None
+                else:
+                    self.video_writers[camera_id] = None
+
                 logger.info(f"Camera {camera_id} initialized successfully")
 
             logger.info("=" * 60)
@@ -159,7 +203,9 @@ class PersonTrackingApp:
         self.running = True
         frame_num = 0
         last_stats_time = time.time()
+        last_frame_log_time = time.time()
         stats_interval = 10.0  # Log stats every 10 seconds
+        frame_log_interval = 5.0  # Log frame processing every 5 seconds
 
         logger.info("Starting person tracking pipeline...")
 
@@ -174,8 +220,13 @@ class PersonTrackingApp:
                     # Read frame from stream
                     ret, frame = stream.read()
 
-                    if not ret:
-                        logger.warning(f"Camera {camera_id}: Failed to read frame")
+                    if not ret or frame is None:
+                        logger.warning(f"Camera {camera_id}: Failed to read frame (ret={ret}, frame={'None' if frame is None else 'valid'})")
+                        # If this is a video file and we can't read, the video might have ended
+                        if stream.is_video:
+                            logger.error(f"Camera {camera_id}: Video file ended or cannot be read")
+                            self.running = False
+                            break
                         continue
 
                     frame_processed = True
@@ -190,10 +241,12 @@ class PersonTrackingApp:
                     # Process frame through pipeline
                     annotated_frame, events = engine.process_frame(frame, frame_num)
 
-                    # Save annotated frames periodically
+                    # Write to video file
+                    if camera_id in self.video_writers and self.video_writers[camera_id] is not None:
+                        self.video_writers[camera_id].write(annotated_frame)
+
+                    # Save annotated frames periodically (if enabled)
                     if camera_config and camera_config.storage.save_annotated_frames:
-                        # save_interval = max(1, int(camera_config.performance.target_fps))
-                        # if frame_num % save_interval == 0:
                         engine.save_frame(annotated_frame, frame_num)
 
                     # Log significant events
@@ -203,8 +256,13 @@ class PersonTrackingApp:
                 if frame_processed:
                     frame_num += 1
 
+                # Log frame processing status periodically
+                current_time = time.time()
+                if current_time - last_frame_log_time >= frame_log_interval:
+                    logger.info(f"Processing: Frame {frame_num} | FPS: {frame_num / (current_time - self.start_time):.1f}")
+                    last_frame_log_time = current_time
+
                 # # Log statistics periodically
-                # current_time = time.time()
                 # if current_time - last_stats_time >= stats_interval:
                 #     self._log_statistics()
                 #     last_stats_time = current_time
@@ -256,6 +314,15 @@ class PersonTrackingApp:
         logger.info("=" * 60)
         logger.info("Shutting down Person Tracking System")
         logger.info("=" * 60)
+
+        # Release video writers
+        for camera_id, writer in self.video_writers.items():
+            if writer is not None:
+                try:
+                    writer.release()
+                    logger.info(f"Camera {camera_id}: Video writer released")
+                except Exception as e:
+                    logger.error(f"Camera {camera_id}: Error releasing video writer - {e}")
 
         # Stop all streams
         for camera_id, stream in self.streams.items():

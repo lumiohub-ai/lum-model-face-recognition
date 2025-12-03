@@ -47,9 +47,18 @@ class FaceSetup:
         self.client_slug = kwargs.get('client_slug', 'default_client')
         self.FR_SLUG = os.getenv("FR_SLUG", "face-recognition")
 
-        # Auto-fetch camera configs from API if not provided
+        # Auto-load camera configs from file/env if not provided
         if cam_types is None or video_path is None:
-            camera_configs = self._fetch_camera_configs_from_api(**kwargs)
+            # Check if we should use API (legacy mode)
+            use_api_for_cameras = os.getenv('USE_API_FOR_CAMERAS', 'false').lower() == 'true'
+
+            if use_api_for_cameras:
+                logger.info("Loading camera configs from API (USE_API_FOR_CAMERAS=true)")
+                camera_configs = self._fetch_camera_configs_from_api(**kwargs)
+            else:
+                logger.info("Loading camera configs from config file or environment")
+                camera_configs = self._load_camera_configs_from_file()
+
             if camera_configs:
                 cam_types = camera_configs.pop('cam_types')
                 video_path = camera_configs.pop('video_path')
@@ -57,7 +66,7 @@ class FaceSetup:
                 kwargs.update(camera_configs)
                 # Update multi_camera based on number of cameras
                 self.multi_camera = len(cam_types) > 1
-                logger.info(f"Auto-fetched {len(cam_types)} camera configuration(s) from API")
+                logger.info(f"Loaded {len(cam_types)} camera configuration(s)")
 
         # Initialize camera processor for dashboard streaming
         try:
@@ -76,8 +85,45 @@ class FaceSetup:
 
         self.entry_logger = EntryLogger(args=self.args)
 
+    def _load_camera_configs_from_file(self) -> Optional[Dict[str, List[Any]]]:
+        """Load camera configurations from config file or environment variables.
+
+        Returns:
+            Dictionary with camera configs or None if load fails
+        """
+        try:
+            from .config.camera_loader import get_camera_configs, convert_to_system_setup_format
+
+            # Get camera configs (from file or env)
+            cameras = get_camera_configs()
+
+            # Convert to SystemSetup format
+            camera_configs = convert_to_system_setup_format(cameras)
+
+            # Debug: Print all camera configurations
+            num_cameras = len(camera_configs.get('cam_types', []))
+            logger.info("=" * 80)
+            logger.info(f"LOADED {num_cameras} CAMERA CONFIGURATION(S):")
+            logger.info("=" * 80)
+            for i, cam_type in enumerate(camera_configs.get('cam_types', [])):
+                logger.info(f"\nCamera {i+1}:")
+                logger.info(f"  Type: {cam_type}")
+                logger.info(f"  Name: {camera_configs.get('camera_name', [])[i] if i < len(camera_configs.get('camera_name', [])) else 'N/A'}")
+                logger.info(f"  ID: {camera_configs.get('camera_id', [])[i] if i < len(camera_configs.get('camera_id', [])) else 'N/A'}")
+                logger.info(f"  Stream URL: {camera_configs.get('video_path', [])[i] if i < len(camera_configs.get('video_path', [])) else 'N/A'}")
+                logger.info(f"  Match Threshold: {camera_configs.get('match_threshold', [])[i] if i < len(camera_configs.get('match_threshold', [])) else 'N/A'}")
+                logger.info(f"  ROI: {camera_configs.get('roi', [])[i] if camera_configs.get('roi') and i < len(camera_configs.get('roi', [])) else 'None'}")
+                logger.info(f"  Line Points: {camera_configs.get('line_points', [])[i] if camera_configs.get('line_points') and i < len(camera_configs.get('line_points', [])) else 'None'}")
+            logger.info("=" * 80)
+
+            return camera_configs
+
+        except Exception as e:
+            logger.error(f"Failed to load camera configs: {e}")
+            return None
+
     def _fetch_camera_configs_from_api(self, **kwargs) -> Optional[Dict[str, List[Any]]]:
-        """Fetch camera configurations from API.
+        """Fetch camera configurations from API (legacy method).
 
         Args:
             **kwargs: Should contain email, password, client_slug, and api_host
@@ -120,7 +166,7 @@ class FaceSetup:
             # Debug: Print all camera configurations
             num_cameras = len(camera_configs.get('cam_types', []))
             logger.info("=" * 80)
-            logger.info(f"FETCHED {num_cameras} CAMERA CONFIGURATION(S):")
+            logger.info(f"FETCHED {num_cameras} CAMERA CONFIGURATION(S) FROM API:")
             logger.info("=" * 80)
             for i, cam_type in enumerate(camera_configs.get('cam_types', [])):
                 logger.info(f"\nCamera {i+1}:")

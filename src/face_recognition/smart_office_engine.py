@@ -1004,11 +1004,19 @@ class SmartOfficeEngine:
             client_slug=client_slug
         )
 
-        # Fetch camera configurations
-        self.camera_configs = self._fetch_camera_configs()
+        # Load camera configurations from config file or environment
+        # Fallback to API only if USE_API_FOR_CAMERAS env var is explicitly set
+        use_api_for_cameras = os.getenv('USE_API_FOR_CAMERAS', 'false').lower() == 'true'
+
+        if use_api_for_cameras:
+            logger.info("Loading camera configs from API (USE_API_FOR_CAMERAS=true)")
+            self.camera_configs = self._fetch_camera_configs_from_api()
+        else:
+            logger.info("Loading camera configs from config file or environment")
+            self.camera_configs = self._load_camera_configs_from_file()
 
         if not self.camera_configs:
-            raise ValueError(f"No cameras found for applications: {self.applications}")
+            raise ValueError(f"No cameras configured. Check config file or environment variables.")
 
         # Initialize global track ID generator for cross-camera unique IDs
         self.global_id_generator = GlobalTrackIDGenerator(start_id=1)
@@ -1117,8 +1125,40 @@ class SmartOfficeEngine:
         logger.warning(f"Received signal {signum}, shutting down...")
         self.running = False
 
-    def _fetch_camera_configs(self) -> List[Dict]:
-        """Fetch camera configurations from API for all applications."""
+    def _load_camera_configs_from_file(self) -> List[Dict]:
+        """Load camera configurations from config file or environment variables."""
+        from .config.camera_loader import get_camera_configs, convert_to_smart_office_format
+
+        try:
+            # Get camera configs (from file or env)
+            cameras = get_camera_configs()
+
+            # Convert to SmartOfficeEngine format
+            configs = convert_to_smart_office_format(cameras)
+
+            # Filter by applications if specified
+            if self.applications:
+                filtered_configs = []
+                for config in configs:
+                    if config['application'] in self.applications:
+                        filtered_configs.append(config)
+                configs = filtered_configs
+
+            logger.info(f"Loaded {len(configs)} camera configuration(s)")
+            for config in configs:
+                logger.info(
+                    f"Camera: {config['camera_name']} | "
+                    f"Type: {config['cam_type']} | "
+                    f"App: {config['application']}"
+                )
+
+            return configs
+        except Exception as e:
+            logger.error(f"Failed to load camera configs: {e}")
+            raise
+
+    def _fetch_camera_configs_from_api(self) -> List[Dict]:
+        """Fetch camera configurations from API for all applications (legacy method)."""
         all_configs = []
 
         for application in self.applications:

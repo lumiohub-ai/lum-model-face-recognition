@@ -1,15 +1,14 @@
 """
-Simplified Phone Usage Detection Logic.
+Simplified Phone Usage Detection Logic - HAND OVERLAP ONLY.
 
-Combines:
-1. Bounding box overlap between phone and hands/arms
-2. Pose-based activity recognition (phone usage postures)
-3. No strict spatial zone requirements
+Detection criteria:
+- Phone must overlap with at least one hand (wrist bounding box)
+- Hand bounding box: configurable size around wrist keypoint (default 100px)
+- Overlap threshold: configurable IoU (default 0.15)
 
-A person is considered using a phone when:
-- Phone detected anywhere in frame
-- Phone overlaps with hand/arm regions OR
-- Person exhibits phone usage posture (arms raised, hands near upper body)
+A person is considered using a phone ONLY when:
+- Phone detected in frame
+- Phone substantially overlaps with left or right hand bounding box
 """
 
 from typing import Dict, Optional, Tuple, List
@@ -20,11 +19,11 @@ from loguru import logger
 
 class PhoneUsageDetectorV2:
     """
-    Simplified phone usage detector using overlap detection only.
+    Simplified phone usage detector - HAND OVERLAP ONLY.
 
-    Detection criteria (OR logic):
-    1. Phone overlaps with hand/wrist bounding boxes
-    2. Phone overlaps with arm (shoulder-wrist) bounding boxes
+    Detection criteria (single check):
+    - Phone overlaps with hand/wrist bounding boxes (left or right)
+    - No other checks performed (arm, proximity, distance disabled)
     """
 
     # COCO keypoint indices
@@ -79,75 +78,48 @@ class PhoneUsageDetectorV2:
         person_bbox: Optional[NDArray] = None
     ) -> Dict:
         """
-        Detect if person is using phone using multi-layer detection.
+        Detect if person is using phone - HAND OVERLAP ONLY.
 
-        Detection layers (any can trigger positive result):
-        1. Hand overlap: Phone overlaps with wrist bounding boxes
-        2. Arm overlap: Phone overlaps with arm regions
-        3. Person proximity: Phone near person bounding box
-        4. Wrist distance: Phone within reaching distance of wrists
+        Detection criteria (strict):
+        - Phone must overlap with at least one hand (wrist bounding box)
+        - Minimum IoU threshold must be met (configured via overlap_iou_threshold)
 
         Args:
             person_keypoints: Pose keypoints (17, 3) [x, y, confidence]
             phone_bbox: Phone bounding box [x1, y1, x2, y2]
-            person_bbox: Person bounding box [x1, y1, x2, y2] (optional but recommended)
+            person_bbox: Person bounding box [x1, y1, x2, y2] (not used, kept for compatibility)
 
         Returns:
             Dictionary with detection result:
             {
                 'using_phone': bool,
                 'confidence': float (0.0-1.0),
-                'method': str,
+                'method': str ('hand_overlap' or 'none'),
                 'details': {
                     'hand_overlap': bool,
-                    'arm_overlap': bool,
-                    'person_proximity': bool,
-                    'wrist_distance': bool,
-                    ...
+                    'hand_overlap_iou': float
                 }
             }
         """
-        # Check 1: Phone overlaps with hands
+        # ONLY Check: Phone overlaps with hands (at least one hand)
         hand_overlap, hand_iou = self._check_hand_overlap(person_keypoints, phone_bbox)
 
-        # Check 2: Phone overlaps with arms
-        arm_overlap, arm_iou = self._check_arm_overlap(person_keypoints, phone_bbox)
+        # Determine usage - ONLY hand overlap matters
+        using_phone = hand_overlap
 
-        # Check 3: Phone near person bbox
-        person_proximity = False
-        proximity_distance = None
-        if person_bbox is not None:
-            person_proximity, proximity_distance = self._check_person_bbox_proximity(
-                phone_bbox, person_bbox
-            )
-
-        # Check 4: Phone near wrists (distance-based)
-        wrist_distance_check, min_wrist_dist = self._check_wrist_distance(
-            person_keypoints, phone_bbox
-        )
-
-        # Determine usage (OR logic - any check succeeds)
-        using_phone = hand_overlap or arm_overlap or person_proximity or wrist_distance_check
-
-        # Calculate confidence based on what passed (prioritize stronger signals)
+        # Calculate confidence based on hand overlap quality
         confidence = 0.0
         method = 'none'
 
-        if hand_overlap and arm_overlap:
-            confidence = 0.95
-            method = 'hand_arm_overlap'
-        elif hand_overlap:
-            confidence = 0.85
+        if hand_overlap:
+            # Confidence based on IoU quality
+            if hand_iou > 0.3:
+                confidence = 0.95  # Strong overlap
+            elif hand_iou > 0.2:
+                confidence = 0.85  # Good overlap
+            else:
+                confidence = 0.75  # Moderate overlap
             method = 'hand_overlap'
-        elif arm_overlap:
-            confidence = 0.80
-            method = 'arm_overlap'
-        elif wrist_distance_check:
-            confidence = 0.75
-            method = 'wrist_distance'
-        elif person_proximity:
-            confidence = 0.70
-            method = 'person_proximity'
 
         return {
             'using_phone': using_phone,
@@ -155,13 +127,7 @@ class PhoneUsageDetectorV2:
             'method': method,
             'details': {
                 'hand_overlap': hand_overlap,
-                'arm_overlap': arm_overlap,
-                'person_proximity': person_proximity,
-                'wrist_distance': wrist_distance_check,
-                'hand_overlap_iou': hand_iou,
-                'arm_overlap_iou': arm_iou,
-                'proximity_distance': proximity_distance,
-                'min_wrist_distance': min_wrist_dist
+                'hand_overlap_iou': hand_iou
             }
         }
 

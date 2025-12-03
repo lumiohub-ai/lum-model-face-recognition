@@ -38,7 +38,7 @@ class StreamHandler:
             self.cap = cv2.VideoCapture(src)
         self.stopped = False
         self.lock = threading.Lock()
-        self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame
+        self.frame_queue = queue.Queue(maxsize=30)  # Buffer up to 30 frames to avoid dropping
         self.reconnect_delay = 1  # Initial delay between reconnection attempts
         self.max_delay = 30  # Maximum delay between reconnection attempts
         self.last_gc_time = time.time()
@@ -144,15 +144,13 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
 
-            # Clear the queue before putting new frame
+            # Add frame to queue (block if full to ensure we don't skip frames)
             try:
-                while not self.frame_queue.empty():
-                    self.frame_queue.get_nowait()
-            except queue.Empty:
-                pass
-
-            # Put the new frame
-            self.frame_queue.put((ret, frame))
+                self.frame_queue.put((ret, frame), timeout=1.0)
+            except queue.Full:
+                # If queue is full, log warning but continue
+                # This means processing is slower than capture rate
+                self.logger.warning("Frame queue full - processing may be too slow")
 
             # Periodically run garbage collection
             current_time = time.time()
