@@ -8,8 +8,9 @@
 # Installation Guide
 ### 1. Clone the Repository
 ```bash
-git clone --recursive so.model-face-recognition
-cd so.model-face-recognition```
+git clone --recursive https://github.com/humblebeeai/so.model-face-recognition.git
+cd so.model-face-recognition
+```
 
 ### 2. Prepare Configuration Files
 
