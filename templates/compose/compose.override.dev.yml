@@ -1,3 +1,6 @@
+# Development override for face-recognition service
+# Usage: Copy this file to project root as compose.override.yml
+#   cp templates/compose/compose.override.dev.yml compose.override.yml
 
 services:
   face-recognition:
@@ -6,6 +9,11 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - ./src:/app/src
-      - ./examples:/app/examples
+      # Mount source code for hot-reload during development
+      - ./src:/app/face-recognition/src
+      - ./examples:/app/face-recognition/examples
+      - ./configs:/app/face-recognition/configs
+    # Uncomment to get shell access instead of running the service
     # command: ["/bin/bash"]
+    # stdin_open: true
+    # tty: true

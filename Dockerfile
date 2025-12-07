@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # check=skip=SecretsUsedInArgOrEnv
 
-ARG BASE_IMAGE=nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu20.04@sha256:131e238d724ee145317f10d6c8eba0d301439c6c8764b02473510e7035756e81
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG FR_SLUG="face-recognition"
@@ -52,7 +52,6 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=private \
 COPY setup.py setup.cfg pyproject.toml requirements.txt ./
 COPY src ./src
 COPY modules ./modules
-COPY wheels ./wheels
 
 # --- Make TLS sane in the Conda env ---
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
@@ -67,15 +66,10 @@ RUN --mount=type=cache,target=/root/.cache,sharing=locked \
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
-
-# Configure pip to use alternative PyPI mirrors with fallback
-RUN /opt/conda/bin/pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
-    /opt/conda/bin/pip config set global.extra-index-url "https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/"
-
-# Install PyTorch from local wheels (offline installation)
+# Install PyTorch from official PyTorch repository for CUDA 12.2
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
-    /opt/conda/bin/pip install --no-index --find-links=./wheels \
-        torch torchvision
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 \
+        torch torchvision --extra-index-url https://download.pytorch.org/whl/cu122
 
 RUN --mount=type=cache,target=/root/.cache,sharing=locked \
     /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/insightface && \

@@ -18,10 +18,10 @@ class CloudStorageManager:
 
         Args:
             credentials_path: Path to Google Cloud credentials JSON file.
-                            If None, uses GOOGLE_APPLICATION_CREDENTIALS environment variable.
+                            If None, uses GCS_CREDENTIALS_PATH environment variable.
         """
         if credentials_path is None:
-            credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            credentials_path = os.getenv('GCS_CREDENTIALS_PATH')
 
         self.fs = gcsfs.GCSFileSystem(token=credentials_path)
         logger.info("Initialized Google Cloud Storage filesystem")

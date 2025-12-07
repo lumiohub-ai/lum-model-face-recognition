@@ -25,7 +25,7 @@ class StreamHandler:
         self.src = src
         self.is_video = self.is_video_file(src)
         self.logger = logger
-        self.cap = cv2.VideoCapture(src)
+        self.cap = self._create_capture(src)
         self.stopped = False
         self.lock = threading.Lock()
         self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame
@@ -55,6 +55,30 @@ class StreamHandler:
 
         self.thread = None  # Store reference to thread
 
+    def _create_capture(self, src: Any) -> cv2.VideoCapture:
+        """Create a VideoCapture object with optimized RTSP settings.
+
+        Args:
+            src: Video source (file path, camera index, or network URL)
+
+        Returns:
+            Configured VideoCapture object
+        """
+        cap = cv2.VideoCapture(src)
+
+        # Only set RTSP options for network streams
+        if isinstance(src, str) and src.startswith(('rtsp://', 'rtmp://', 'http://')):
+            # Set buffer size to reduce latency
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            # Set timeout to 60 seconds (60000 milliseconds)
+            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 60000)
+
+            # Set read timeout to 60 seconds
+            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 60000)
+
+        return cap
+
     def _reconnect(self) -> bool:
         """Attempt to reconnect to the video source infinitely until successful.
 
@@ -69,7 +93,7 @@ class StreamHandler:
         attempt_count = 1
 
         while True:  # Infinite reconnection loop
-            self.cap = cv2.VideoCapture(self.src)
+            self.cap = self._create_capture(self.src)
             ret, _ = self.cap.read()
             if ret:
                 self.logger.warning(f"Successfully reconnected to stream: {self.src}")

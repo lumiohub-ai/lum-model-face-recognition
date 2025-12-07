@@ -10,7 +10,6 @@ import numpy as np
 from loguru import logger
 
 from ..api.client import APIClient
-from ..dashboard.camera_processor import get_camera_processor
 from .csv_logger import CSVLogger
 
 
@@ -22,7 +21,6 @@ class EntryLogger:
     - Communication with API via APIClient
     - CSV logging via CSVLogger
     - Visualization of recent entries
-    - Dashboard frame streaming
     """
 
     def __init__(
@@ -70,9 +68,6 @@ class EntryLogger:
 
         # Get initial person status
         self.person_status = self._get_last_status()
-
-        # Get camera processor instance for dashboard streaming
-        self.camera_processor = get_camera_processor()
 
     def _get_last_status(self) -> Dict[str, str]:
         """Get the last status of each user from the API.
@@ -293,7 +288,7 @@ class EntryLogger:
         camera_type: str,
         camera_id: int
     ) -> Optional[Any]:
-        """Send annotated frame to dashboard and optionally to API.
+        """Send annotated frame to API.
 
         Args:
             frame: Annotated frame to send
@@ -303,15 +298,7 @@ class EntryLogger:
         Returns:
             Response object if API upload successful, None otherwise
         """
-        # Push frame to dashboard stream (non-blocking)
-        if self.camera_processor is not None:
-            try:
-                stream_id = f"camera_{camera_id}"
-                self.camera_processor.put_frame(stream_id, frame)
-            except Exception as e:
-                logger.debug(f"Failed to push frame to dashboard: {e}")
-
-        # Optional: Upload to external API (can be disabled)
+        # Upload to external API (can be disabled)
         return self.api_client.upload_annotated_frame(frame, camera_id, camera_type)
 
     def save_status_info(self, video_name: str = 'status_info') -> str:

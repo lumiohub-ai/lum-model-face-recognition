@@ -43,7 +43,7 @@ class FaceEngine:
         self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120)
 
         # Initialize cloud storage
-        self.fs = gcsfs.GCSFileSystem(token=os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
+        self.fs = gcsfs.GCSFileSystem(token=os.getenv('GCS_CREDENTIALS_PATH'))
 
         # Get face detection padding from args or environment (default: 20%)
         padding_percent = getattr(args, 'face_padding', None) or \

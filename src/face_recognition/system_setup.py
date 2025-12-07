@@ -10,13 +10,9 @@ from typing import List, Optional, Union, Any, Dict
 
 # Local imports
 from .core.engine import FaceEngine
-from .dashboard.visualizer import Visualization
 from .video.stream_handler import StreamHandler
 from .logging.entry_logger import EntryLogger
 from .api.client import APIClient
-
-# Initialize camera processor for dashboard streaming
-from .dashboard.camera_processor import setup_cameras as init_camera_processor
 
 
 class FaceSetup:
@@ -41,7 +37,6 @@ class FaceSetup:
         self.multi_camera = multi_camera
         self.streams: List[StreamHandler] = []
         self.engines: List[FaceEngine] = []
-        self.visualize = Visualization()
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.config_path = config_path
         self.client_slug = kwargs.get('client_slug', 'default_client')
@@ -58,13 +53,6 @@ class FaceSetup:
                 # Update multi_camera based on number of cameras
                 self.multi_camera = len(cam_types) > 1
                 logger.info(f"Auto-fetched {len(cam_types)} camera configuration(s) from API")
-
-        # Initialize camera processor for dashboard streaming
-        try:
-            init_camera_processor()
-            logger.info("Camera processor initialized for dashboard streaming")
-        except Exception as e:
-            logger.warning(f"Failed to initialize camera processor: {e}")
 
         # Configure logger (pass client_slug directly)
         self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True), self.client_slug)

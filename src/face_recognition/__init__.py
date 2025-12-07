@@ -5,7 +5,6 @@ This package provides a comprehensive face recognition system with:
 - Real-time face detection and tracking
 - Face recognition with embedding-based matching
 - Multi-camera support
-- Dashboard visualization
 - API integration for attendance tracking
 """
 
@@ -21,9 +20,6 @@ from .config import constants
 
 # Logging
 from .logging import setup_structured_logging, EntryLogger, CSVLogger
-
-# Dashboard
-from .dashboard import CameraProcessor, Visualization
 
 # Storage
 from .storage import Database, CloudStorageManager
@@ -54,10 +50,6 @@ __all__ = [
     "setup_structured_logging",
     "EntryLogger",
     "CSVLogger",
-
-    # Dashboard
-    "CameraProcessor",
-    "Visualization",
 
     # Storage
     "Database",

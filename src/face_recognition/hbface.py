@@ -16,7 +16,12 @@ from .system_setup import FaceSetup
 from .video.frame_processor import FrameProcessor
 
 warnings.filterwarnings("ignore", category=FutureWarning)
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+# Configure RTSP options for better stability
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+    "rtsp_transport;tcp|"
+    "timeout;60000000|"  # 60 seconds in microseconds
+    "stimeout;60000000"  # socket timeout
+)
 
 
 # Main class that merges configuration and processing
@@ -43,7 +48,6 @@ class HBFace:
         # For easier access
         self.streams = self.config.streams
         self.engines = self.config.engines
-        self.visualize = self.config.visualize
         self.entry_logger = self.config.entry_logger
         self.video_writers = self.config.video_writers
         self.FR_SLUG = os.getenv("FR_SLUG")
@@ -171,13 +175,6 @@ class HBFace:
             add_entries=True
         )
 
-        # Dashboard streaming disabled
-        # self.frame_processor.send_frame_to_dashboard(
-        #     frame_annotated,
-        #     engine.args.cam_type,
-        #     engine.args.camera_id
-        # )
-
         return frame_annotated
 
     def _display_frames(self, frames: List[NDArray]) -> None:
@@ -187,12 +184,15 @@ class HBFace:
             frames: List of processed frames to display
         """
         if self.engines[0].args.show:
-            combined_frame = self.visualize.concat_frames(*frames) if len(frames) > 1 else frames[0]
+            # Simple concatenation for multiple frames (horizontal)
+            if len(frames) > 1:
+                combined_frame = cv2.hconcat(frames)
+            else:
+                combined_frame = frames[0]
 
-            if self.engines[0].args.show:
-                cv2.imshow("Face Recognition", combined_frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    logger.info("ESC key pressed, exiting")
+            cv2.imshow("Face Recognition", combined_frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                logger.info("ESC key pressed, exiting")
 
     def _check_time_interval(self) -> bool:
         """Check if current time is within the defined recording intervals.

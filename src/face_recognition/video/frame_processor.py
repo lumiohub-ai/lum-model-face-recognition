@@ -212,24 +212,6 @@ class FrameProcessor:
 
         return frame
 
-    def send_frame_to_dashboard(
-        self,
-        frame: np.ndarray,
-        camera_type: str,
-        camera_id: int
-    ) -> None:
-        """Send annotated frame to the dashboard via API.
-
-        Args:
-            frame: Annotated frame
-            camera_type: Camera type
-            camera_id: Camera ID
-        """
-        try:
-            self.entry_logger.send_annotated_frame(frame, camera_type, camera_id)
-        except Exception as e:
-            logger.warning(f"Failed to send frame to dashboard: {e}")
-
 
 def create_frame_processor(entry_logger, timezone: str = "UTC") -> FrameProcessor:
     """Factory function to create a FrameProcessor.
