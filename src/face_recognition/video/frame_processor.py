@@ -134,7 +134,7 @@ class FrameProcessor:
         Args:
             name: Person's name
             appear_time: Time when person appeared
-            image: Person's image
+            image: Person's image (recognized frame)
             camera_type: Camera type
             camera_name: Camera name
             camera_id: Camera ID
@@ -146,7 +146,8 @@ class FrameProcessor:
             camera_type,
             appear_time,
             camera_name,
-            camera_id
+            camera_id,
+            proof_image=image
         )
 
         logger.info(

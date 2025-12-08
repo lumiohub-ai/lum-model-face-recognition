@@ -259,7 +259,8 @@ class APIClient:
         self,
         user_id: int,
         status: str,
-        camera_id: Optional[int] = None
+        camera_id: Optional[int] = None,
+        proof_image: Optional[np.ndarray] = None
     ) -> Optional[requests.Response]:
         """Create an attendance record.
 
@@ -267,6 +268,7 @@ class APIClient:
             user_id: ID of the user to create record for
             status: Either 'IN' or 'OUT'
             camera_id: ID of the camera that detected the person
+            proof_image: Optional recognized frame image (numpy array)
 
         Returns:
             Response object if successful, None otherwise
@@ -285,19 +287,36 @@ class APIClient:
         # Generate timestamp in ISO 8601 format with milliseconds
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        record_data = {
-            "user_id": user_id,
+        url = f"{self.base_url}/org/{self.client_slug}/attendance-records"
+
+        # Prepare form data
+        data = {
+            "user_id": str(user_id),
             "status": status.lower(),
-            "camera_id": camera_id,
-            "timestamp": timestamp
+            "timestamp": timestamp,
+            "source": "auto"
         }
 
+        if camera_id is not None:
+            data["camera_id"] = str(camera_id)
+
         def make_request():
-            return self.session.post(
-                f"{self.base_url}/org/{self.client_slug}/attendance-records",
-                json=record_data,
-                headers={"Content-Type": "application/json"}
-            )
+            headers = {"Authorization": f"Bearer {self.token}"}
+
+            # If proof_image is provided, send as multipart/form-data
+            if proof_image is not None and proof_image.size > 0:
+                success, encoded_image = cv2.imencode('.jpg', proof_image)
+                if not success:
+                    logger.error("Proof image encoding failed")
+                    return self.session.post(url, data=data, headers=headers)
+
+                files = [
+                    ('proof_image', ('proof_image.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg'))
+                ]
+                return self.session.post(url, data=data, files=files, headers=headers)
+            else:
+                # Send without image
+                return self.session.post(url, data=data, headers=headers)
 
         try:
             response = make_request()

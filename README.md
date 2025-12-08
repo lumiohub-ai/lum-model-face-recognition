@@ -103,35 +103,6 @@ docker compose ps
 # View logs
 docker compose logs -f face-recognition
 ```
-
-
-### Manual Installation (Development)
-
-For local development without Docker:
-
-```bash
-# 1. Create virtual environment
-conda create -n face-recognition python=3.10
-conda activate face-recognition
-
-# 2. Install PyTorch with CUDA
-pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu122
-
-# 3. Install dependencies
-pip install -r requirements.txt
-pip install -e .
-
-# 4. Install submodules
-pip install ./modules/insightface
-pip install ./modules/yolo_tracking
-
-# 5. Start PostgreSQL and Redis
-docker compose up -d postgres redis
-
-# 6. Run application
-python examples/clients/main.py
-```
-
 ## Configuration
 
 ### Environment Variables
@@ -155,6 +126,52 @@ FR_PORT=5000                     # Main service port
 - **configs/config.yaml** - Main application configuration
 - **compose.yml** - Docker services configuration
 - **compose.override.yml** - Local overrides
+
+### User Face Images (Required)
+
+**IMPORTANT**: User face images must be uploaded through the **SmartOffice Dashboard > Users** before the system can recognize individuals. The face recognition system calculates embeddings from these images for matching.
+
+**Requirements:**
+- **Face Image Upload** - Each user must have a clear frontal face photo uploaded
+- **Image Quality** - High-quality images with good lighting and face visibility
+- **User Profile** - Complete user profile with full name
+
+**How to Add Users:**
+1. Log in to SmartOffice Dashboard
+2. Navigate to **Users**
+3. Add new user or edit existing user
+4. Upload a clear frontal face photo
+5. Save user profile
+
+The system automatically:
+- Fetches active users and their images from the API on startup
+- Calculates 512-dimensional face embeddings from the uploaded images
+- Stores embeddings in the pgvector database for fast similarity matching
+- Synchronizes new users and updates automatically
+
+### Camera Configuration (Required)
+
+**IMPORTANT**: All camera-related configurations must be entered through the **SmartOffice Dashboard > Camera Settings**. The face recognition system will not work without proper camera configuration in the dashboard.
+
+**Required Camera Settings:**
+- **IP Address** - Camera RTSP stream URL
+- **Port Number** - RTSP port (usually 554)
+- **Username/Password** - Camera credentials
+- **Application Type** - Must be set to `FaceRecognision`
+- **ROI (Region of Interest)** - Coordinates for detection area `[[x1, y1], [x2, y2]]`
+- **Virtual Line Points** - Coordinates for counting line `[[x1, y1], [x2, y2]]`
+- **Recognition Threshold** - Matching confidence threshold (recommended: 0.3)
+- **Camera Type** - Set to `IN` or `OUT` for entry/exit tracking
+
+**How to Configure:**
+1. Log in to SmartOffice Dashboard
+2. Navigate to **top right profile icon >Camera Settings**
+3. Add or edit camera configuration
+4. Set **Application** field to `FaceRecognision`
+5. Fill in all required fields listed above
+6. Save configuration
+
+The system automatically fetches camera configurations from the API on startup. Any changes made in the dashboard will be applied on the next service restart.
 
 ## Usage
 
