@@ -8,7 +8,7 @@ partial_match_threshold: 0.15  # Threshold for partial face matches
 show: False  # Show the output video with annotations (disabled for headless/Docker environments)
 save_video: False  # Save the output video with annotations
 record_always: False  # Always record the video
-save_recognized_frame: True  # Save individual frames when faces are recognized
+save_recognized_frame: false  # Save individual frames when faces are recognized
 
 # Evaluation settings
 eval: False  # Enable evaluation mode
