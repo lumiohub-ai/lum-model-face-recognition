@@ -47,7 +47,7 @@ A production-ready face recognition system with real-time tracking and pgvector 
 ### 1. Clone Repository
 
 ```bash
-git clone --recursive https://github.com/your-org/so.model-face-recognition.git
+git clone --recursive https://github.com/humblebeeai/so.model-face-recognition.git
 cd so.model-face-recognition
 ```
 
