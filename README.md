@@ -54,59 +54,43 @@ Place your face embedding file (main.pkl) in: ```volumes/src/embeddings/```
 ./compose.sh stop
 ```
 
+# Check stream in VLC
+vlc "rtsp://your_stream"
 
-## 📚 Documentation
-
-- [Description](https://docs.google.com/document/d/1DaPsSgqk6UXJVogyn9UbPGN5JYFbu2do8p9r11yKAKA)
-- [Methodology and Evaluation](https://docs.google.com/document/d/1SsCB4fBA2nK6PQISYrcaki0moe4ID7Mwm4J2cF_g9i0)
-
---- 
-
-## Video recording using ffmpeg
-### Simple video recording 
-```bash 
-ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -c copy output.mp4
-```
-
-### Scheduled Video Recording
-
-You can schedule video recording from an RTSP camera using `ffmpeg` together with the `at` command.
-
-#### When the camera **has audio**
-
-```bash
-echo 'ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -t 3000 -an -c:v copy output.mp4' | at 17:45
-```
-#### When the camera does not have audio
-```bash
-echo 'ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -t 3000 -c copy output.mp4' | at 17:45
-```
-
-rtsp://<camera-link> → Replace with your camera’s RTSP stream URL.
-
--t 3000 → Duration of recording in seconds (adjust as needed).
-
--an → Disable audio (useful when you only want video).
-
--c:v copy / -c copy → Copy streams without re-encoding for efficiency.
-
-at 17:45 → Time to schedule the recording (24-hour format).
-
-#### Check scheduled jobs
-```bash
-atq
-```
-#### Remove a scheduled job
-```bash
-atrm <job-number>
+# Verify environment variables
+docker exec face-recognition env | grep HB_IN
 ```
 
 
 
-## 📑  Research References
+## Research References
 
-- [Face ReID Model](https://github.com/timesler/facenet-pytorch)
-- [Track Evaluation](https://github.com/JonathonLuiten/TrackEval)
-- [Detection and Tracking Model](https://github.com/ultralytics/ultralytics)
-- [Face Detection Models](https://github.com/akanametov/yolo-face)
+- [InsightFace](https://github.com/deepinsight/insightface) - Face detection and recognition
+- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) - Object detection
+- [DeepOCSORT](https://github.com/mikel-brostrom/yolo_tracking) - Multi-object tracking
+- [TrackEval](https://github.com/JonathonLuiten/TrackEval) - Tracking evaluation
+- [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search
 
+## License
+
+This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
+
+## Acknowledgments
+
+- HumbleBee AI team for development and testing
+- InsightFace team for face detection models
+- Ultralytics for YOLO models
+- pgvector team for vector database extension
+
+## Support
+
+For issues, questions, or feature requests:
+- Create an issue on GitHub
+- Check existing documentation
+- Contact the development team
+
+---
+
+**Version**: 2.0.0
+**Last Updated**: December 2025
+**Status**: Production Ready

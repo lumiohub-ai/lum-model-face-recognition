@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # check=skip=SecretsUsedInArgOrEnv
 
-ARG BASE_IMAGE=nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu20.04@sha256:131e238d724ee145317f10d6c8eba0d301439c6c8764b02473510e7035756e81
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG FR_SLUG="face-recognition"
@@ -53,13 +53,29 @@ COPY setup.py setup.cfg pyproject.toml requirements.txt ./
 COPY src ./src
 COPY modules ./modules
 
-RUN	--mount=type=cache,target=/root/.cache,sharing=locked \
-	/opt/conda/bin/pip install --timeout 60 ./modules/insightface && \
-	/opt/conda/bin/pip install --timeout 60 ./modules/yolo_tracking && \
-	/opt/conda/bin/pip install --timeout 60 . && \
-	/opt/conda/bin/pip install --timeout 120 -r ./requirements.txt
+# --- Make TLS sane in the Conda env ---
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/condabin/conda install -y \
+        ca-certificates \
+        openssl \
+        certifi && \
+    /opt/conda/condabin/conda update -y ca-certificates openssl && \
+    /opt/conda/bin/python -c "import ssl,certifi; print('OpenSSL:', ssl.OPENSSL_VERSION); print('certifi:', certifi.where())"
 
+# Ensure Python requests use the system bundle (keeps you future-proof)
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
+# Install PyTorch from official PyTorch repository for CUDA 12.2
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 \
+        torch torchvision --extra-index-url https://download.pytorch.org/whl/cu122
+
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/insightface && \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/yolo_tracking && \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 . && \
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 -r ./requirements.txt
 ## Here is the base image:
 FROM ${BASE_IMAGE} AS base
 
@@ -106,6 +122,8 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 	# echo "Acquire::BrokenProxy true;" >> /etc/apt/apt.conf.d/99fixbadproxy && \
 	apt-get update --fix-missing -o Acquire::CompressionTypes::Order::=gz && \
 	apt-get install -y --no-install-recommends \
+		ca-certificates \
+		openssl \
 		sudo \
 		locales \
 		tzdata \
@@ -116,6 +134,7 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 		nano \
 		libgl1-mesa-glx \
 		libglib2.0-0 && \
+	update-ca-certificates && \
 	apt-get clean -y && \
 	sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
 	sed -i -e 's/# en_AU.UTF-8 UTF-8/en_AU.UTF-8 UTF-8/' /etc/locale.gen && \
@@ -147,6 +166,10 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 ENV LANG=en_US.UTF-8 \
 	LANGUAGE=en_US.UTF-8 \
 	LC_ALL=en_US.UTF-8
+
+# SSL configuration for runtime (needed for InsightFace model downloads)
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 COPY --from=builder --chown=${UID}:${GID} /opt/conda /opt/conda
 

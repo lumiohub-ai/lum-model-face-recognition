@@ -48,6 +48,10 @@ data/**
 !data/*.pkl
 !data/embeddings/
 
+# Allow wheels directory for offline PyTorch installation
+!wheels/
+!wheels/*.whl
+
 
 
 # Ignore documentation and test folders

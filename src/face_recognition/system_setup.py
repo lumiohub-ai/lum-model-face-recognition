@@ -6,13 +6,13 @@ import cv2
 import yaml
 from loguru import logger
 from datetime import datetime
-from typing import List, Optional, Union, Any
+from typing import List, Optional, Union, Any, Dict
 
 # Local imports
-from .engine import FaceEngine
-from .visualize import Visualization
-from .stream_handler import StreamHandler
-from .entry_logger import EntryLogger
+from .core.engine import FaceEngine
+from .video.stream_handler import StreamHandler
+from .logging.entry_logger import EntryLogger
+from .api.client import APIClient
 
 
 class FaceSetup:
@@ -27,17 +27,32 @@ class FaceSetup:
             video_path: Path(s) to video file(s) or stream URL(s)
             multi_camera: Whether to process multiple cameras simultaneously
             config_path: Path to the configuration file
-            **kwargs: Additional configuration parameters
+            **kwargs: Additional configuration parameters including:
+                - email: API authentication email (for auto-fetch)
+                - password: API authentication password (for auto-fetch)
+                - client_slug: Organization slug (for auto-fetch)
+                - api_host: API base URL (for auto-fetch)
         """
         # Core configuration
         self.multi_camera = multi_camera
         self.streams: List[StreamHandler] = []
         self.engines: List[FaceEngine] = []
-        self.visualize = Visualization()
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.config_path = config_path
         self.client_slug = kwargs.get('client_slug', 'default_client')
         self.FR_SLUG = os.getenv("FR_SLUG", "face-recognition")
+
+        # Auto-fetch camera configs from API if not provided
+        if cam_types is None or video_path is None:
+            camera_configs = self._fetch_camera_configs_from_api(**kwargs)
+            if camera_configs:
+                cam_types = camera_configs.pop('cam_types')
+                video_path = camera_configs.pop('video_path')
+                # Merge remaining camera configs into kwargs
+                kwargs.update(camera_configs)
+                # Update multi_camera based on number of cameras
+                self.multi_camera = len(cam_types) > 1
+                logger.info(f"Auto-fetched {len(cam_types)} camera configuration(s) from API")
 
         # Configure logger (pass client_slug directly)
         self._setup_logger(kwargs.get('log_file'), kwargs.get('debug', True), self.client_slug)
@@ -48,6 +63,69 @@ class FaceSetup:
 
 
         self.entry_logger = EntryLogger(args=self.args)
+
+    def _fetch_camera_configs_from_api(self, **kwargs) -> Optional[Dict[str, List[Any]]]:
+        """Fetch camera configurations from API.
+
+        Args:
+            **kwargs: Should contain email, password, client_slug, and api_host
+
+        Returns:
+            Dictionary with camera configs or None if fetch fails
+        """
+        email = kwargs.get('email')
+        password = kwargs.get('password')
+        client_slug = kwargs.get('client_slug')
+        api_host = kwargs.get('api_host') or os.getenv('API_HOST')
+
+        # Check if all required credentials are provided
+        if not all([email, password, client_slug, api_host]):
+            logger.warning(
+                "Camera configs not provided and API credentials incomplete. "
+                "Cannot auto-fetch camera configurations. "
+                "Required: email, password, client_slug, api_host"
+            )
+            return None
+
+        try:
+            # Type assertions for mypy/pylance - we've already checked these are not None
+            assert api_host is not None
+            assert email is not None
+            assert password is not None
+            assert client_slug is not None
+
+            # Initialize API client
+            api_client = APIClient(
+                api_host=api_host,
+                email=email,
+                password=password,
+                client_slug=client_slug
+            )
+
+            # Fetch camera configs for Face Recognition
+            camera_configs = api_client.get_face_recognition_camera_configs()
+
+            # Debug: Print all camera configurations
+            num_cameras = len(camera_configs.get('cam_types', []))
+            logger.info("=" * 80)
+            logger.info(f"FETCHED {num_cameras} CAMERA CONFIGURATION(S):")
+            logger.info("=" * 80)
+            for i, cam_type in enumerate(camera_configs.get('cam_types', [])):
+                logger.info(f"\nCamera {i+1}:")
+                logger.info(f"  Type: {cam_type}")
+                logger.info(f"  Name: {camera_configs.get('camera_name', [])[i] if i < len(camera_configs.get('camera_name', [])) else 'N/A'}")
+                logger.info(f"  ID: {camera_configs.get('camera_id', [])[i] if i < len(camera_configs.get('camera_id', [])) else 'N/A'}")
+                logger.info(f"  Stream URL: {camera_configs.get('video_path', [])[i] if i < len(camera_configs.get('video_path', [])) else 'N/A'}")
+                logger.info(f"  Match Threshold: {camera_configs.get('match_threshold', [])[i] if i < len(camera_configs.get('match_threshold', [])) else 'N/A'}")
+                logger.info(f"  ROI: {camera_configs.get('roi', [])[i] if camera_configs.get('roi') and i < len(camera_configs.get('roi', [])) else 'None'}")
+                logger.info(f"  Line Points: {camera_configs.get('line_points', [])[i] if camera_configs.get('line_points') and i < len(camera_configs.get('line_points', [])) else 'None'}")
+            logger.info("=" * 80)
+
+            return camera_configs
+
+        except Exception as e:
+            logger.error(f"Failed to fetch camera configs from API: {e}")
+            return None
 
     def setup_cameras(self, cam_types: Optional[List[str]], video_paths: Optional[Union[str, List[str]]], **kwargs) -> None:
         """Set up camera streams based on configuration.
@@ -120,6 +198,7 @@ class FaceSetup:
             index: Camera index (for multi-camera setup)
         """
         args.cam_type = cam_type
+        args.camera_index = index if index is not None else 0
 
         # Handle ROI configuration
         if hasattr(args, 'roi') and args.roi is not None:
@@ -134,6 +213,28 @@ class FaceSetup:
                 args.line_points = args.line_points[index]
         else:
             args.line_points = None
+
+        # Handle match_threshold configuration
+        if hasattr(args, 'match_threshold') and args.match_threshold is not None:
+            if index is not None and isinstance(args.match_threshold, (list, tuple)) and len(args.match_threshold) > index:
+                args.match_threshold = args.match_threshold[index]
+        else:
+            # Default threshold if not specified
+            args.match_threshold = 0.3
+
+        # Handle camera_name configuration
+        if hasattr(args, 'camera_name') and args.camera_name is not None:
+            if index is not None and isinstance(args.camera_name, (list, tuple)) and len(args.camera_name) > index:
+                args.camera_name = args.camera_name[index]
+        else:
+            args.camera_name = "Unknown"
+
+        # Handle camera_id configuration
+        if hasattr(args, 'camera_id') and args.camera_id is not None:
+            if index is not None and isinstance(args.camera_id, (list, tuple)) and len(args.camera_id) > index:
+                args.camera_id = args.camera_id[index]
+        else:
+            args.camera_id = None
 
         # Initialize stream and engine
         stream_handler = StreamHandler(vid_path, args.logger)
@@ -193,6 +294,17 @@ class FaceSetup:
 
         # Set default values
         args.save_video = getattr(args, "save_video", True)
+        args.save_recognized_frame = getattr(args, "save_recognized_frame", True)
+        args.record_always = getattr(args, "record_always", True)
+        args.show = getattr(args, "show", True)
+        # SECURITY: Default to production mode (debug=False)
+        args.debug = getattr(args, "debug", False)
+        args.production = getattr(args, "production", True)
+        args.partial_match_threshold = getattr(args, "partial_match_threshold", 0.15)
+        args.multi_camera = getattr(args, "multi_camera", True)
+
+        # Check if pgvector mode is enabled
+        args.use_pgvector = os.getenv("USE_PGVECTOR", "false").lower() == "true"
 
         # Add logger to args
         args.logger = logger
