@@ -34,6 +34,36 @@ MIN_FRAMES_FOR_RECOGNITION = 3
 DEFAULT_MINIMUM_FACE_SIZE = 30
 
 # ============================================================================
+# Enhanced Filter Constants (New)
+# ============================================================================
+
+# Quality thresholds
+DEFAULT_MIN_FRONTALITY_SCORE = 0.65
+DEFAULT_MIN_LAPLACIAN_VARIANCE = 100.0
+DEFAULT_MIN_BRIGHTNESS = 40
+DEFAULT_MAX_BRIGHTNESS = 220
+DEFAULT_MIN_LANDMARK_SPREAD = 0.12
+
+# Recognition confidence zones
+DEFAULT_RECOGNIZED_THRESHOLD = 0.40
+DEFAULT_TRUE_UNKNOWN_THRESHOLD = 0.22
+DEFAULT_MIN_TOP2_MARGIN = 0.08
+DEFAULT_MAX_UNKNOWN_SIMILARITY = 0.25
+
+# Temporal deduplication
+DEFAULT_DEDUP_CACHE_TTL = 300  # 5 minutes
+DEFAULT_DEDUP_SIMILARITY_THRESHOLD = 0.85
+DEFAULT_DEDUP_CROSS_CAMERA_WINDOW = 60  # 1 minute
+
+# Track quality
+DEFAULT_MIN_TRACK_QUALITY_SCORE = 0.60
+DEFAULT_MIN_QUALITY_FRAMES = 3
+DEFAULT_MIN_UNRECOGNIZED_TRACK_LIFETIME = 2.5  # seconds
+
+# Rate limiting
+DEFAULT_MAX_UNKNOWNS_PER_CAMERA_PER_MINUTE = 8
+
+# ============================================================================
 # Video Processing Constants
 # ============================================================================
 

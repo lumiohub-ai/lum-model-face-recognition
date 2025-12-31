@@ -239,6 +239,7 @@ class ConfigurationManager:
         return {
             'max_track_lifetime_seconds': self.kwargs.get('max_track_lifetime_seconds', 120),
             'min_frames_for_recognition': self.kwargs.get('min_frames_for_recognition', 3),
+            'min_unrecognized_track_lifetime': float(self.kwargs.get('min_unrecognized_track_lifetime', 1.0)),
         }
 
     def _build_dashboard_config(self) -> Dict[str, Any]:
