@@ -373,6 +373,9 @@ def _create_args_for_client(client_slug: str) -> argparse.Namespace:
     # Logging
     args.logger = logger
 
+    # Shadow mode for filter testing (set to True to log without filtering)
+    args.shadow_mode = os.getenv('SHADOW_MODE', 'false').lower() == 'true'
+
     return args
 
 
