@@ -198,6 +198,7 @@ class TrackingConfig(BaseModel):
     Attributes:
         max_track_lifetime_seconds: Maximum lifetime for a track in seconds
         min_frames_for_recognition: Minimum frames required for recognition
+        min_unrecognized_track_lifetime: Minimum track lifetime for unrecognized faces (seconds)
     """
 
     max_track_lifetime_seconds: int = Field(
@@ -211,6 +212,12 @@ class TrackingConfig(BaseModel):
         ge=1,
         le=100,
         description="Minimum frames required for recognition"
+    )
+    min_unrecognized_track_lifetime: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=60.0,
+        description="Minimum track lifetime for unrecognized faces to be sent to dashboard (seconds)"
     )
 
 

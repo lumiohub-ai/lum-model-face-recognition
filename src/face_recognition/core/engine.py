@@ -2,7 +2,8 @@
 
 import json
 import os
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -17,6 +18,8 @@ from .detector import FaceDetector
 from .tracker import FaceTracker
 from .track_manager import TrackManager
 from .recognizer import FaceRecognition  # FaceRecognition is the class name in recognizer.py
+from .deduplicator import UnknownDeduplicator
+from .filter_metrics import FilterMetrics
 from ..services.redis_pubsub import RedisSubscriber
 
 
@@ -81,6 +84,31 @@ class FaceEngine:
             except Exception as e:
                 args.logger.warning(f"Failed to start Redis subscriber: {e}")
 
+        # Initialize temporal deduplicator for unknown faces
+        cache_ttl = getattr(args, 'dedup_cache_ttl_seconds', 300)
+        similarity_threshold = getattr(args, 'dedup_similarity_threshold', 0.85)
+        cross_camera_window = getattr(args, 'dedup_cross_camera_window', 60)
+
+        self.unknown_deduplicator = UnknownDeduplicator(
+            cache_ttl_seconds=cache_ttl,
+            similarity_threshold=similarity_threshold,
+            cross_camera_window_seconds=cross_camera_window
+        )
+
+        # Initialize filter metrics for tracking performance
+        self.filter_metrics = FilterMetrics()
+
+        # Rate limiting tracker for unknowns
+        self._recent_unknowns: Dict[str, deque] = {}
+
+        # Shadow mode flag (log decisions but don't actually filter)
+        self.shadow_mode = getattr(args, 'shadow_mode', False)
+        if self.shadow_mode:
+            args.logger.info("🔍 SHADOW MODE ENABLED - Logging filter decisions without filtering")
+
+        # Setup filter decision logging
+        self._setup_filter_logging()
+
     def _setup_data_collection_folder(self) -> None:
         """Set up folder for storing collected face data and recognition results."""
         self.data_collection_path = os.path.join(
@@ -109,6 +137,92 @@ class FaceEngine:
             )
         except Exception as e:
             self.args.logger.error(f"❌ Failed to reload embeddings: {e}")
+
+    def _setup_filter_logging(self) -> None:
+        """Setup logging for filter decisions."""
+        log_dir = getattr(self.args, 'filter_log_dir', '/app/logs')
+        if not os.path.exists(log_dir):
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+            except Exception as e:
+                self.args.logger.warning(f"Could not create filter log directory: {e}")
+                return
+
+        self.filter_log_path = os.path.join(log_dir, 'filter_decisions.jsonl')
+        self.args.logger.info(f"Filter decisions will be logged to: {self.filter_log_path}")
+
+    def _log_filter_decision(
+        self,
+        track_id: int,
+        decision: str,
+        reason: str,
+        quality_score: float,
+        recognition_info: Dict[str, Any],
+        track_data: Dict[str, Any]
+    ) -> None:
+        """Log detailed filter decision.
+
+        Args:
+            track_id: Track ID
+            decision: 'SEND' or 'FILTER'
+            reason: Reason for the decision
+            quality_score: Overall quality score
+            recognition_info: Recognition information
+            track_data: Track data
+        """
+        similarity = recognition_info.get('similarity', 0.0)
+        lifetime = track_data.get('lifetime_seconds', 0.0)
+
+        # Update metrics
+        self.filter_metrics.log_decision(
+            decision=decision,
+            reason=reason,
+            quality=quality_score,
+            similarity=similarity,
+            lifetime=lifetime
+        )
+
+        # Log to file
+        log_entry = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'track_id': track_id,
+            'camera': self.args.camera_name,
+            'camera_type': self.args.cam_type,
+            'decision': decision,
+            'reason': reason,
+            'shadow_mode': self.shadow_mode,
+
+            # Quality metrics
+            'quality_score': round(quality_score, 3),
+            'frontality_score': round(recognition_info.get('frontality_score', 0), 3),
+
+            # Recognition metrics
+            'similarity': round(similarity, 3),
+            'best_match_name': recognition_info.get('name', 'unknown'),
+            'status': recognition_info.get('status', 'unknown'),
+            'confidence': round(recognition_info.get('confidence', 0), 3),
+            'top3_similarities': [round(s, 3) for s in recognition_info.get('top3_similarities', [])],
+
+            # Track metrics
+            'track_lifetime': round(lifetime, 2),
+            'num_frames': track_data.get('num_frames', 0),
+        }
+
+        try:
+            with open(self.filter_log_path, 'a') as f:
+                f.write(json.dumps(log_entry) + '\n')
+        except Exception as e:
+            self.args.logger.warning(f"Could not write filter log: {e}")
+
+        # Log summary every 100 tracks
+        if self.filter_metrics.counters['total_tracks'] % 100 == 0:
+            summary = self.filter_metrics.get_summary()
+            self.args.logger.info(
+                f"Filter summary (last 100 tracks): "
+                f"Reduction: {summary['reduction_rate']}, "
+                f"Sent: {summary['sent_count']}, "
+                f"Filtered: {summary['filtered_count']}"
+            )
 
     def compute_embeddings(self, image: np.ndarray, alpha: float = 0.9) -> Optional[np.ndarray]:
         """Compute face embeddings for a given image.
@@ -387,8 +501,204 @@ class FaceEngine:
 
         if expired_track_ids:
             self.tracker.remove_tracks(expired_track_ids)
+            # Clean up track_manager cache to prevent memory leaks
+            for track_id in expired_track_ids:
+                self.track_manager.delete_track_cache(track_id)
 
         return expired_track_ids
+
+    def _get_recent_unknown_count(self, camera_name: str, window_seconds: int = 60) -> int:
+        """Count unknowns sent in recent time window.
+
+        Args:
+            camera_name: Camera name
+            window_seconds: Time window in seconds
+
+        Returns:
+            Count of unknowns sent in the window
+        """
+        if camera_name not in self._recent_unknowns:
+            self._recent_unknowns[camera_name] = deque(maxlen=20)
+
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=window_seconds)
+
+        # Clean old entries
+        self._recent_unknowns[camera_name] = deque(
+            [t for t in self._recent_unknowns[camera_name] if t > cutoff],
+            maxlen=20
+        )
+
+        return len(self._recent_unknowns[camera_name])
+
+    def _record_unknown_sent(self, camera_name: str) -> None:
+        """Record that an unknown was sent to dashboard.
+
+        Args:
+            camera_name: Camera name
+        """
+        if camera_name not in self._recent_unknowns:
+            self._recent_unknowns[camera_name] = deque(maxlen=20)
+
+        self._recent_unknowns[camera_name].append(datetime.now())
+
+    def should_send_unrecognized_to_dashboard(
+        self,
+        track_id: int,
+        recognition_info: Dict[str, Any]
+    ) -> Tuple[bool, str, Optional[np.ndarray], float]:
+        """Multi-stage decision for unrecognized faces.
+
+        Args:
+            track_id: Track ID
+            recognition_info: Recognition information
+
+        Returns:
+            Tuple of (should_send, reason, image, quality_score)
+        """
+        # Get track data
+        appear_time = self.track_manager.get_track_appear_time(track_id)
+        track_embeddings = self.track_manager.get_track_embeddings(track_id)
+        track_landmarks = self.track_manager.get_track_landmarks(track_id)
+
+        # Calculate track lifetime
+        track_lifetime = 0.0
+        if appear_time:
+            now = datetime.now(pytz.timezone(self.timezone))
+            track_lifetime = (now - appear_time).total_seconds()
+
+        # Prepare track data for logging
+        track_data = {
+            'lifetime_seconds': track_lifetime,
+            'num_frames': len(track_embeddings),
+        }
+
+        # === STAGE 1: Track Lifetime Gating ===
+        min_lifetime = getattr(self.args, 'min_unrecognized_track_lifetime', 1.5)
+        if track_lifetime < min_lifetime:
+            self._log_filter_decision(
+                track_id, 'FILTER', f'short_track_{track_lifetime:.1f}s',
+                0.0, recognition_info, track_data
+            )
+            return False, f"short_track_{track_lifetime:.1f}s", None, 0.0
+
+        # === STAGE 2: Check UNCERTAIN Status ===
+        status = recognition_info.get('status', 'UNKNOWN')
+        if status == 'UNCERTAIN':
+            # Option A: Wait for better frames (check if track has improved)
+            # For now, we'll filter UNCERTAIN cases but log them
+            self._log_filter_decision(
+                track_id, 'FILTER', 'uncertain_match',
+                0.0, recognition_info, track_data
+            )
+            return False, "uncertain_match", None, 0.0
+
+        # === STAGE 3: Quality Score Validation ===
+        matched_frame_num = recognition_info.get('matched_frame_num')
+        if matched_frame_num is None:
+            self._log_filter_decision(
+                track_id, 'FILTER', 'no_frontal_frame',
+                0.0, recognition_info, track_data
+            )
+            return False, "no_frontal_frame", None, 0.0
+
+        # Calculate average quality score from track
+        quality_scores = []
+        for frame_num in track_embeddings.keys():
+            if frame_num in track_landmarks:
+                face_crop = self.track_manager.get_track_crop(track_id, frame_num)
+                landmarks = track_landmarks[frame_num]
+
+                if face_crop is not None and landmarks is not None:
+                    # Get bbox for this frame (simplified - use frame dimensions)
+                    h, w = face_crop.shape[:2]
+                    bbox = np.array([0, 0, w, h, 1.0, 0])
+
+                    is_valid, quality, _ = self.face_recognition.enhanced_frame_quality_check(
+                        face_crop, landmarks, bbox
+                    )
+                    if is_valid:
+                        quality_scores.append(quality)
+
+        avg_quality = np.mean(quality_scores) if quality_scores else 0.0
+        min_quality = getattr(self.args, 'min_track_quality_score', 0.50)
+
+        if avg_quality < min_quality:
+            self._log_filter_decision(
+                track_id, 'FILTER', f'low_quality_{avg_quality:.2f}',
+                avg_quality, recognition_info, track_data
+            )
+            return False, f"low_quality_{avg_quality:.2f}", None, avg_quality
+
+        # Require minimum quality frames
+        min_quality_frames = getattr(self.args, 'min_quality_frames', 2)
+        if len(quality_scores) < min_quality_frames:
+            self._log_filter_decision(
+                track_id, 'FILTER', f'insufficient_quality_frames_{len(quality_scores)}',
+                avg_quality, recognition_info, track_data
+            )
+            return False, f"insufficient_quality_frames_{len(quality_scores)}", None, avg_quality
+
+        # === STAGE 4: Similarity Check ===
+        # Ensure similarity is low enough (confident unknown)
+        similarity = recognition_info.get('similarity', 0.0)
+        max_unknown_similarity = getattr(self.args, 'max_unknown_similarity', 0.28)
+
+        if similarity > max_unknown_similarity:
+            self._log_filter_decision(
+                track_id, 'FILTER', f'similarity_too_high_{similarity:.3f}',
+                avg_quality, recognition_info, track_data
+            )
+            return False, f"similarity_too_high_{similarity:.3f}", None, avg_quality
+
+        # === STAGE 5: Temporal Deduplication ===
+        matched_embedding = track_embeddings.get(matched_frame_num)
+        if matched_embedding is None:
+            self._log_filter_decision(
+                track_id, 'FILTER', 'no_embedding_for_matched_frame',
+                avg_quality, recognition_info, track_data
+            )
+            return False, "no_embedding_for_matched_frame", None, avg_quality
+
+        camera_name = self.args.camera_name
+        should_send, dedup_reason = self.unknown_deduplicator.should_send(
+            embedding=matched_embedding,
+            camera_name=camera_name,
+            quality_score=avg_quality,
+            track_id=track_id
+        )
+
+        if not should_send:
+            self._log_filter_decision(
+                track_id, 'FILTER', dedup_reason,
+                avg_quality, recognition_info, track_data
+            )
+            return False, dedup_reason, None, avg_quality
+
+        # === STAGE 6: Rate Limiting ===
+        max_per_minute = getattr(self.args, 'max_unknowns_per_camera_per_minute', 12)
+        recent_count = self._get_recent_unknown_count(camera_name, window_seconds=60)
+
+        if recent_count >= max_per_minute:
+            self._log_filter_decision(
+                track_id, 'FILTER', f'rate_limited_{recent_count}',
+                avg_quality, recognition_info, track_data
+            )
+            return False, f"rate_limited_{recent_count}", None, avg_quality
+
+        # === ALL CHECKS PASSED ===
+        # Send full frame for unrecognized faces (not just crop)
+        image = self.track_manager.get_track_frame(track_id, matched_frame_num)
+
+        self._log_filter_decision(
+            track_id, 'SEND', dedup_reason,
+            avg_quality, recognition_info, track_data
+        )
+
+        # Record that we sent this unknown
+        self._record_unknown_sent(camera_name)
+
+        return True, dedup_reason, image, avg_quality
 
     def recognize_removed_tracks(
         self,
@@ -437,6 +747,9 @@ class FaceEngine:
             if recognition_info is None:
                 continue
 
+            # No need to cache best frame - we have all frames in track_frame_history
+            # matched_frame_num from recognition will be used directly to retrieve frame
+
             # Log recognition result
             self._log_recognition_result(track_id, recognition_info)
 
@@ -446,6 +759,33 @@ class FaceEngine:
                 # Unrecognized face failed validation
                 self.track_manager.delete_track_cache(track_id)
                 continue
+
+            # Enhanced filtering for unrecognized faces
+            if recognition_info['recognized'] == 'unrecognized':
+                # Use comprehensive multi-stage filtering
+                should_send, reason, filtered_image, quality_score = self.should_send_unrecognized_to_dashboard(
+                    track_id, recognition_info
+                )
+
+                # In shadow mode, log but always send
+                if self.shadow_mode:
+                    if not should_send:
+                        self.args.logger.debug(
+                            f"SHADOW MODE: Would have filtered {track_id} - {reason} (quality: {quality_score:.2f})"
+                        )
+                    # Continue with original logic in shadow mode
+                    image = self._get_recognition_image(track_id, recognition_info)
+                else:
+                    # Production mode: actually filter
+                    if not should_send:
+                        self.args.logger.debug(
+                            f"Filtered unrecognized {track_id}: {reason} (quality: {quality_score:.2f})"
+                        )
+                        self.track_manager.delete_track_cache(track_id)
+                        continue
+
+                    # Use the filtered image
+                    image = filtered_image
 
             # Store result
             name = recognition_info['name']
@@ -536,7 +876,8 @@ class FaceEngine:
                 )
                 return None
 
-            image = self.track_manager.get_track_crop(track_id, matched_frame_num)
+            # Send full frame for unrecognized faces (not just crop)
+            image = self.track_manager.get_track_frame(track_id, matched_frame_num)
 
             # Validate landmarks for unrecognized faces
             if not self._validate_unrecognized_face_landmarks(track_id, matched_frame_num):

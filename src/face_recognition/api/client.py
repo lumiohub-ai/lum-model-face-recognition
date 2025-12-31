@@ -2,6 +2,7 @@
 """API client for SmartOffice backend integration."""
 
 import io
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -48,6 +49,12 @@ class APIClient:
         if not self.token:
             logger.error("Failed to authenticate with API")
 
+        # Circuit breaker state for location API
+        self._location_circuit_breaker_failures = 0
+        self._location_circuit_breaker_open_until = 0
+        self._location_circuit_breaker_threshold = 5
+        self._location_circuit_breaker_timeout = 60  # seconds
+
     @property
     def session(self) -> requests.Session:
         """Get the authenticated session."""
@@ -78,6 +85,121 @@ class APIClient:
                 logger.error("Token refresh failed, cannot retry request")
 
         return response
+
+    def _retry_with_backoff(
+        self,
+        request_func,
+        max_retries: int = 3,
+        initial_delay: float = 1.0,
+        backoff_factor: float = 2.0,
+        retry_status_codes: set = {502, 503, 504}
+    ) -> Optional[requests.Response]:
+        """Retry a request with exponential backoff.
+
+        Args:
+            request_func: Function that makes the request
+            max_retries: Maximum number of retry attempts
+            initial_delay: Initial delay in seconds before first retry
+            backoff_factor: Multiplier for delay between retries
+            retry_status_codes: HTTP status codes that should trigger a retry
+
+        Returns:
+            Response object if successful, None otherwise
+        """
+        delay = initial_delay
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                response = request_func()
+
+                # Handle token expiry
+                response = self._handle_token_expiry(response, request_func)
+
+                # Success
+                if response.status_code in [200, 201]:
+                    return response
+
+                # Retry on specific error codes
+                if response.status_code in retry_status_codes:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Request failed with status {response.status_code}, "
+                            f"retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(delay)
+                        delay *= backoff_factor
+                        continue
+                    else:
+                        logger.error(
+                            f"Request failed with status {response.status_code} "
+                            f"after {max_retries} attempts"
+                        )
+                        return None
+                else:
+                    # Don't retry on other status codes
+                    return response
+
+            except requests.exceptions.Timeout as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Request timed out, retrying in {delay:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                    delay *= backoff_factor
+                    continue
+                else:
+                    logger.error(f"Request timed out after {max_retries} attempts: {e}")
+                    return None
+
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                logger.error(f"Request failed with exception: {e}")
+                return None
+
+        return None
+
+    def _is_location_circuit_breaker_open(self) -> bool:
+        """Check if the circuit breaker for location API is open.
+
+        Returns:
+            True if circuit breaker is open (should not attempt requests), False otherwise
+        """
+        current_time = time.time()
+
+        # Check if circuit breaker is open
+        if current_time < self._location_circuit_breaker_open_until:
+            return True
+
+        # Circuit breaker timeout has passed, reset and allow retry
+        if self._location_circuit_breaker_open_until > 0:
+            logger.info("Location API circuit breaker timeout passed, attempting to reconnect")
+            self._location_circuit_breaker_failures = 0
+            self._location_circuit_breaker_open_until = 0
+
+        return False
+
+    def _record_location_failure(self):
+        """Record a failure for the location API circuit breaker."""
+        self._location_circuit_breaker_failures += 1
+
+        if self._location_circuit_breaker_failures >= self._location_circuit_breaker_threshold:
+            self._location_circuit_breaker_open_until = (
+                time.time() + self._location_circuit_breaker_timeout
+            )
+            logger.warning(
+                f"Location API circuit breaker opened after {self._location_circuit_breaker_failures} "
+                f"consecutive failures. Will retry after {self._location_circuit_breaker_timeout}s"
+            )
+
+    def _record_location_success(self):
+        """Record a success for the location API circuit breaker."""
+        if self._location_circuit_breaker_failures > 0:
+            logger.info("Location API recovered, resetting circuit breaker")
+        self._location_circuit_breaker_failures = 0
+        self._location_circuit_breaker_open_until = 0
 
     def get_org_unique_id(self) -> Optional[str]:
         """Fetch the unique_id of the organization matching this client's slug.
@@ -404,7 +526,7 @@ class APIClient:
 
         Args:
             application: Optional filter for camera application type
-                        (e.g., 'FaceRecognision')
+                        (e.g., 'attendance')
 
         Returns:
             List of camera configuration dictionaries
@@ -429,7 +551,7 @@ class APIClient:
             if application:
                 cameras = [
                     cam for cam in cameras
-                    if cam.get('application') == application
+                    if application in cam.get('application', [])
                 ]
 
             return cameras
@@ -441,7 +563,7 @@ class APIClient:
     def get_face_recognition_camera_configs(self) -> Dict[str, List[Any]]:
         """Fetch and parse camera configurations for face recognition.
 
-        Retrieves cameras with application='FaceRecognision' and parses them
+        Retrieves cameras with 'attendance' in their application list and parses them
         into the format required by HBFace initialization.
 
         Returns:
@@ -455,13 +577,13 @@ class APIClient:
             - line_points: List of virtual line points (or None if no lines)
 
         Raises:
-            ValueError: If no cameras found with application='FaceRecognision'
+            ValueError: If no cameras found with 'attendance' in application list
         """
-        # Fetch cameras with application='FaceRecognision'
-        cameras = self.get_cameras(application='FaceRecognision')
+        # Fetch cameras with 'attendance' in application list
+        cameras = self.get_cameras(application='attendance')
 
         if not cameras:
-            raise ValueError("No cameras found with application='FaceRecognision'")
+            raise ValueError("No cameras found with 'attendance' in application list")
 
         # Parse camera configs into HBFace parameters
         cam_types = []
@@ -513,7 +635,7 @@ class APIClient:
         timestamp: str,
         status: str
     ) -> Optional[requests.Response]:
-        """Send user location data to the API.
+        """Send user location data to the API with retry logic and circuit breaker.
 
         Args:
             user_name: Full name of the user
@@ -534,6 +656,13 @@ class APIClient:
             )
             return None
 
+        # Check circuit breaker
+        if self._is_location_circuit_breaker_open():
+            logger.debug(
+                f"Location API circuit breaker is open, skipping location update for {user_name}"
+            )
+            return None
+
         url = f"{self.base_url}/org/{self.client_slug}/user-locations"
 
         data = {
@@ -545,23 +674,25 @@ class APIClient:
 
         def make_request():
             headers = {"Authorization": f"Bearer {self.token}"}
-            return self.session.post(url, headers=headers, json=data)
+            return self.session.post(url, headers=headers, json=data, timeout=10)
 
-        try:
-            response = make_request()
-            response = self._handle_token_expiry(response, make_request)
+        # Use retry with exponential backoff
+        response = self._retry_with_backoff(make_request, max_retries=3)
 
-            if response.status_code not in [200, 201]:
-                logger.error(
-                    f"Send location failed with status {response.status_code}: "
-                    f"{response.text}"
-                )
-                return None
-
+        if response and response.status_code in [200, 201]:
+            self._record_location_success()
             return response
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Send location request failed: {str(e)}")
+        else:
+            self._record_location_failure()
+            if response:
+                logger.warning(
+                    f"Failed to send location data for {user_name} "
+                    f"with status {response.status_code}"
+                )
+            else:
+                logger.warning(
+                    f"Failed to send location data for {user_name}"
+                )
             return None
 
     def upload_annotated_frame(

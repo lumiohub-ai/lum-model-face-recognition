@@ -29,18 +29,19 @@ class TrackManager:
         self.timezone = pytz.timezone(timezone)
         self.max_track_lifetime_seconds = max_track_lifetime_seconds
 
-        # Track history storage
+        # Track history storage - no limits (production tracks are 30-60 sec)
         self.track_emb_frame_history: Dict[int, Dict[int, np.ndarray]] = {}
         self.track_boxes_frame: Dict[int, Dict[int, List[float]]] = {}
         self.track_road_history: Dict[int, List[Tuple[int, int]]] = {}
         self.track_crop_history: Dict[int, Dict[int, np.ndarray]] = {}
-        self.track_frame_history: Dict[int, Dict[int, np.ndarray]] = {}
         self.track_landmarks_history: Dict[int, Dict[int, np.ndarray]] = {}
+        self.track_frame_history: Dict[int, Dict[int, np.ndarray]] = {}  # Full frames
 
         # Track metadata
         self.all_tracks: Set[int] = set()
         self.id_appear_time: Dict[int, datetime] = {}
-        self.passed_tracks: deque = deque(maxlen=5000)
+        # Increase from 5000 to 50000 to prevent premature ID reuse
+        self.passed_tracks: deque = deque(maxlen=50000)
 
     def register_track(self, track_id: int) -> None:
         """Register a new track.
@@ -137,12 +138,28 @@ class TrackManager:
 
         Args:
             track_id: Track ID
-            frame_num: Frame number
+            frame_num: Frame number (actual frame number from recognition)
 
         Returns:
             Full frame image or None if not found
         """
+        # Direct retrieval from frame history - no caching, no complexity
+        # frame_num comes directly from recognizer and matches storage keys
         return self.track_frame_history.get(track_id, {}).get(frame_num, None)
+
+    def set_best_frame(self, track_id: int, frame_num: int, frame: np.ndarray) -> None:
+        """Store the best quality frame for a track.
+
+        This frame is preserved even when it falls out of the frame window,
+        ensuring it's always available for sending to the dashboard.
+
+        Args:
+            track_id: Track ID
+            frame_num: Frame number of the best frame
+            frame: The full frame image
+        """
+        self.track_best_frame[track_id] = frame
+        self.track_best_frame_num[track_id] = frame_num
 
     def get_track_trajectory(self, track_id: int) -> List[Tuple[int, int]]:
         """Get trajectory (center points) for a track.
@@ -247,8 +264,8 @@ class TrackManager:
                 self.track_crop_history,
                 self.track_road_history,
                 self.id_appear_time,
-                self.track_frame_history,
-                self.track_landmarks_history
+                self.track_landmarks_history,
+                self.track_frame_history
             ]:
                 storage_dict.pop(track_id, None)
         except KeyError:
