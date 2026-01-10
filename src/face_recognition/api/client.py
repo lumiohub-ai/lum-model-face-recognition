@@ -460,13 +460,15 @@ class APIClient:
     def send_unrecognized_face(
         self,
         face: np.ndarray,
-        status: str
+        status: str,
+        camera_id: Optional[int] = None
     ) -> Optional[requests.Response]:
         """Send unrecognized face image to the API.
 
         Args:
             face: Detected face image (numpy array)
             status: Status of the user ('IN' or 'OUT')
+            camera_id: ID of the camera that detected the unrecognized face
 
         Returns:
             Response object if successful, None otherwise
@@ -485,7 +487,13 @@ class APIClient:
         url = self.base_url + f'/org/{self.client_slug}/unrecognized-faces'
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        data = {'detection_time': timestamp}
+        data = {
+            'detection_time': timestamp,
+            'user_status': status.lower()
+        }
+
+        if camera_id is not None:
+            data['camera_id'] = str(camera_id)
 
         if face is None or face.size == 0:
             logger.warning("No face detected to send")
