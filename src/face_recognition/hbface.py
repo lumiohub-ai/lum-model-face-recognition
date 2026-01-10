@@ -4,7 +4,11 @@ import os
 import warnings
 from typing import List, Optional, Union
 import time
+import csv
+from collections import deque
 import cv2
+import numpy as np
+import psutil
 from numpy.typing import NDArray
 from loguru import logger
 import datetime
@@ -59,6 +63,30 @@ class HBFace:
         # Initialize frame processor
         self.frame_processor = FrameProcessor(self.entry_logger, self.timezone)
 
+        # FPS and performance monitoring
+        self.fps_history = deque(maxlen=120)  # Store last 120 FPS readings (2 min at 1fps)
+        self.fps_log_interval = 3600  # Write to file every 1 hour (seconds)
+        self.fps_console_interval = 600  # Print to console every 10 minutes (seconds)
+        self.fps_check_interval = 30  # Calculate FPS every 30 frames
+        self.fps_threshold_warning = 15  # Warn if FPS < 15
+        self.fps_threshold_critical = 10  # Critical if FPS < 10
+        self.last_fps_log_time = time.time()
+        self.last_fps_console_time = time.time()
+        self.last_fps_check_time = time.time()
+
+        # Setup FPS log file
+        log_dir = os.path.join(os.getcwd(), f'/app/volumes/storage/{self.FR_SLUG}/logs')
+        os.makedirs(log_dir, exist_ok=True)
+        self.fps_log_path = os.path.join(log_dir, f'{self.client_slug}_fps_performance.csv')
+
+        # Create CSV header if file doesn't exist
+        if not os.path.exists(self.fps_log_path):
+            with open(self.fps_log_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['timestamp', 'avg_fps', 'min_fps', 'max_fps', 'memory_mb', 'status'])
+
+        logger.info(f"📊 FPS monitoring enabled. Log file: {self.fps_log_path}")
+
     def run(self) -> None:
         """Run the face recognition system and process video streams."""
         try:
@@ -92,6 +120,10 @@ class HBFace:
 
                 self._save_frames(annotated_frames)
                 self._display_frames(annotated_frames)
+
+                # FPS monitoring (every fps_check_interval frames)
+                if total_frames % self.fps_check_interval == 0:
+                    self._check_and_log_fps()
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -244,7 +276,7 @@ class HBFace:
                 elif recognized == 'unrecognized':
                     # Send to API only if image is valid (None check)
                     if image is not None:
-                        self.entry_logger.send_unrecognized_face(face=image, status=status)
+                        self.entry_logger.send_unrecognized_face(face=image, status=status, camera_id=camera_id)
 
     def save_recognized_frame(self, name: str, image: NDArray, status: str) -> None:
         """Save recognized frame to the specified directory.
@@ -280,11 +312,99 @@ class HBFace:
         except OSError as e:
             logger.error(f"Error saving recognized frame for {name}: {e}")
 
+    def _check_and_log_fps(self) -> None:
+        """Check current FPS and log to file if needed."""
+        current_time = time.time()
+        elapsed = current_time - self.last_fps_check_time
+
+        if elapsed > 0:
+            current_fps = self.fps_check_interval / elapsed
+            self.fps_history.append(current_fps)
+            self.last_fps_check_time = current_time
+
+            # Calculate statistics
+            if len(self.fps_history) > 0:
+                avg_fps = np.mean(self.fps_history)
+                min_fps = np.min(self.fps_history)
+                max_fps = np.max(self.fps_history)
+
+                # Get memory usage
+                process = psutil.Process()
+                memory_mb = process.memory_info().rss / (1024 * 1024)
+
+                # Determine status and log accordingly
+                time_since_console = current_time - self.last_fps_console_time
+
+                if avg_fps < self.fps_threshold_critical:
+                    status = "critical"
+                    # CRITICAL: Always print immediately
+                    logger.error(f"🔴 CRITICAL: FPS={avg_fps:.1f} Memory={memory_mb:.0f}MB - RESTART RECOMMENDED")
+                    # Write immediately to file
+                    self._write_fps_to_file(avg_fps, min_fps, max_fps, memory_mb, status)
+                    self.last_fps_console_time = current_time
+
+                elif avg_fps < self.fps_threshold_warning:
+                    status = "warning"
+                    # WARNING: Always print immediately
+                    logger.warning(f"⚠️  WARNING: FPS={avg_fps:.1f} Memory={memory_mb:.0f}MB - Performance degrading")
+                    # Write immediately to file
+                    self._write_fps_to_file(avg_fps, min_fps, max_fps, memory_mb, status)
+                    self.last_fps_console_time = current_time
+
+                else:
+                    status = "healthy"
+                    # HEALTHY: Only print every 10 minutes
+                    if time_since_console >= self.fps_console_interval:
+                        logger.info(f"✅ FPS: {avg_fps:.1f} Memory: {memory_mb:.0f}MB - System healthy")
+                        self.last_fps_console_time = current_time
+
+                # Check if it's time for hourly file log (for healthy status)
+                time_since_last_log = current_time - self.last_fps_log_time
+                if time_since_last_log >= self.fps_log_interval:
+                    self._write_fps_to_file(avg_fps, min_fps, max_fps, memory_mb, status)
+                    self.last_fps_log_time = current_time
+
+    def _write_fps_to_file(self, avg_fps: float, min_fps: float, max_fps: float,
+                           memory_mb: float, status: str) -> None:
+        """Write FPS metrics to CSV file.
+
+        Args:
+            avg_fps: Average FPS
+            min_fps: Minimum FPS
+            max_fps: Maximum FPS
+            memory_mb: Memory usage in MB
+            status: Status (healthy/warning/critical)
+        """
+        try:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(self.fps_log_path, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    timestamp,
+                    f"{avg_fps:.2f}",
+                    f"{min_fps:.2f}",
+                    f"{max_fps:.2f}",
+                    f"{memory_mb:.1f}",
+                    status
+                ])
+            logger.info(f"📊 FPS log written: {avg_fps:.1f} FPS, {memory_mb:.0f} MB, Status: {status}")
+        except Exception as e:
+            logger.error(f"Failed to write FPS log: {e}")
 
     def _cleanup(self) -> None:
         """Cleanup resources and finalize the face recognition system."""
         # Release resources and perform final recognition on remaining tracks
         self._process_rest_tracks()
+
+        # Stop Redis subscribers (if using pgvector mode)
+        for engine in self.engines:
+            if hasattr(engine, 'redis_subscriber') and engine.redis_subscriber is not None:
+                try:
+                    logger.info("Stopping Redis subscriber...")
+                    engine.redis_subscriber.stop()
+                    logger.info("Redis subscriber stopped successfully")
+                except Exception as e:
+                    logger.warning(f"Error stopping Redis subscriber: {e}")
 
         # Stop streams and release video writers
         for stream in self.streams:
