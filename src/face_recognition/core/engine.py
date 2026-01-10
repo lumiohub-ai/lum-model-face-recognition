@@ -478,7 +478,7 @@ class FaceEngine:
                 if hasattr(self, 'current_frame_landmarks') and idx in self.current_frame_landmarks:
                     landmarks = self.current_frame_landmarks[idx]
 
-                # Store track data
+                # Store track data (embeddings, crops, landmarks, etc.)
                 self.track_manager.store_track_data(
                     track_id=track_id,
                     frame_num=frame_num,
@@ -486,9 +486,39 @@ class FaceEngine:
                     box=[x1, y1, x2, y2, track.conf, 0],
                     center=center,
                     face_crop=face_crop,
-                    full_frame=frame,
                     landmarks=landmarks
                 )
+
+                # Calculate quality score and update best frame using two-tier strategy
+                quality_score = 0.0
+                if landmarks is not None and len(landmarks) == 5:
+                    bbox = [x1, y1, x2, y2, track.conf, 0]
+                    is_valid, quality_score, _ = self.face_recognition.enhanced_frame_quality_check(
+                        face_crop, landmarks, bbox
+                    )
+                    # Only update if frame passes basic quality checks
+                    if is_valid:
+                        self.track_manager.update_best_frame(
+                            track_id=track_id,
+                            frame_num=frame_num,
+                            full_frame=frame,
+                            landmarks=landmarks,
+                            bbox=bbox,
+                            quality_score=quality_score,
+                            frontality_threshold=0.65
+                        )
+                else:
+                    # No landmarks - use bbox size only as fallback
+                    # Set very low quality score so it's only used if no frontal frames exist
+                    self.track_manager.update_best_frame(
+                        track_id=track_id,
+                        frame_num=frame_num,
+                        full_frame=frame,
+                        landmarks=None,
+                        bbox=[x1, y1, x2, y2, track.conf, 0],
+                        quality_score=0.1,  # Low score = fallback only
+                        frontality_threshold=0.65
+                    )
 
     def prune_long_lived_tracks(self) -> List[int]:
         """Identify and prune tracks that have exceeded their maximum lifetime.
@@ -745,6 +775,8 @@ class FaceEngine:
             # Perform recognition
             recognition_info = self._perform_recognition(track_id)
             if recognition_info is None:
+                self.args.logger.debug(f"Track {track_id} skipped - recognition failed")
+                self.track_manager.delete_track_cache(track_id)
                 continue
 
             # No need to cache best frame - we have all frames in track_frame_history

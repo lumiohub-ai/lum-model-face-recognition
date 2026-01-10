@@ -35,7 +35,13 @@ class TrackManager:
         self.track_road_history: Dict[int, List[Tuple[int, int]]] = {}
         self.track_crop_history: Dict[int, Dict[int, np.ndarray]] = {}
         self.track_landmarks_history: Dict[int, Dict[int, np.ndarray]] = {}
-        self.track_frame_history: Dict[int, Dict[int, np.ndarray]] = {}  # Full frames
+
+        # Best frame storage (MEMORY OPTIMIZED - only ONE frame per track)
+        self.track_best_frame: Dict[int, np.ndarray] = {}  # Single best frame
+        self.track_best_frame_num: Dict[int, int] = {}  # Frame number of best frame
+        self.track_best_frame_quality: Dict[int, float] = {}  # Quality score of best frame
+        self.track_largest_bbox_frame: Dict[int, np.ndarray] = {}  # Fallback: largest bbox frame
+        self.track_largest_bbox_size: Dict[int, float] = {}  # Bbox size (for comparison)
 
         # Track metadata
         self.all_tracks: Set[int] = set()
@@ -91,13 +97,81 @@ class TrackManager:
         if face_crop is not None:
             self.track_crop_history.setdefault(track_id, {})[frame_num] = face_crop
 
-        # Store full frame if provided
-        if full_frame is not None:
-            self.track_frame_history.setdefault(track_id, {})[frame_num] = full_frame
+        # NOTE: Full frames are NO LONGER stored here to save memory
+        # Use update_best_frame() instead to store only the best frame
 
         # Store landmarks if provided
         if landmarks is not None:
             self.track_landmarks_history.setdefault(track_id, {})[frame_num] = landmarks
+
+    def update_best_frame(
+        self,
+        track_id: int,
+        frame_num: int,
+        full_frame: np.ndarray,
+        landmarks: Optional[np.ndarray],
+        bbox: List[float],
+        quality_score: float,
+        frontality_threshold: float = 0.65
+    ) -> None:
+        """Update best frame using two-tier strategy: prioritize frontal, fallback to biggest bbox.
+
+        Strategy:
+        1. If frame is frontal (>= threshold) AND better quality than current best frontal → Update
+        2. Always track biggest bbox as fallback
+        3. Final selection (at end of track): Use best frontal if exists, else biggest bbox
+
+        Args:
+            track_id: Track ID
+            frame_num: Frame number
+            full_frame: Full frame image
+            landmarks: Facial landmarks (5 keypoints)
+            bbox: Bounding box [x1, y1, x2, y2, confidence, class_id]
+            quality_score: Overall quality score (0-1)
+            frontality_threshold: Minimum frontality score to consider frame as frontal
+        """
+        # Calculate bbox size
+        x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
+        bbox_size = (x2 - x1) * (y2 - y1)
+
+        # Check if frame is frontal (if landmarks available)
+        is_frontal = False
+        if landmarks is not None and len(landmarks) == 5:
+            # Calculate frontality score (same logic as enhanced_frame_quality_check)
+            left_eye = landmarks[0]
+            right_eye = landmarks[1]
+            nose = landmarks[2]
+            left_mouth = landmarks[3]
+            right_mouth = landmarks[4]
+
+            # Calculate eye center
+            eye_center_x = (left_eye[0] + right_eye[0]) / 2
+            mouth_center_x = (left_mouth[0] + right_mouth[0]) / 2
+            face_center_x = (eye_center_x + mouth_center_x) / 2
+
+            # Calculate nose deviation
+            nose_deviation = abs(nose[0] - face_center_x)
+
+            # Calculate inter-eye distance for normalization
+            inter_eye_distance = np.linalg.norm(left_eye - right_eye)
+            if inter_eye_distance > 0:
+                normalized_nose_deviation = nose_deviation / inter_eye_distance
+                frontality_score = max(0, 1.0 - normalized_nose_deviation * 2)
+                is_frontal = frontality_score >= frontality_threshold
+
+        # Strategy 1: Update best frontal frame if this is frontal and better quality
+        if is_frontal:
+            current_best_quality = self.track_best_frame_quality.get(track_id, -1.0)
+            if quality_score > current_best_quality:
+                self.track_best_frame[track_id] = full_frame.copy()
+                self.track_best_frame_num[track_id] = frame_num
+                self.track_best_frame_quality[track_id] = quality_score
+
+        # Strategy 2: Always track biggest bbox as fallback
+        current_largest_bbox = self.track_largest_bbox_size.get(track_id, 0.0)
+        if bbox_size > current_largest_bbox:
+            self.track_largest_bbox_frame[track_id] = full_frame.copy()
+            self.track_largest_bbox_size[track_id] = bbox_size
 
     def get_track_embeddings(self, track_id: int) -> Dict[int, np.ndarray]:
         """Get all embeddings for a track.
@@ -133,19 +207,31 @@ class TrackManager:
         """
         return self.track_crop_history.get(track_id, {}).get(frame_num, None)
 
-    def get_track_frame(self, track_id: int, frame_num: int) -> Optional[np.ndarray]:
-        """Get full frame for a specific track and frame.
+    def get_track_frame(self, track_id: int, frame_num: int = None) -> Optional[np.ndarray]:
+        """Get best frame for a track using two-tier strategy.
+
+        Strategy:
+        1. Return best frontal frame if available
+        2. Else return largest bbox frame as fallback
+        3. Else return None
 
         Args:
             track_id: Track ID
-            frame_num: Frame number (actual frame number from recognition)
+            frame_num: Frame number (DEPRECATED - ignored, kept for compatibility)
 
         Returns:
-            Full frame image or None if not found
+            Best frame image or None if not found
         """
-        # Direct retrieval from frame history - no caching, no complexity
-        # frame_num comes directly from recognizer and matches storage keys
-        return self.track_frame_history.get(track_id, {}).get(frame_num, None)
+        # Priority 1: Best frontal frame
+        if track_id in self.track_best_frame:
+            return self.track_best_frame[track_id]
+
+        # Priority 2: Largest bbox frame (fallback)
+        if track_id in self.track_largest_bbox_frame:
+            return self.track_largest_bbox_frame[track_id]
+
+        # No frame available
+        return None
 
     def set_best_frame(self, track_id: int, frame_num: int, frame: np.ndarray) -> None:
         """Store the best quality frame for a track.
@@ -258,6 +344,10 @@ class TrackManager:
             track_id: Track ID to delete
         """
         try:
+            # Remove from all_tracks set (Fix memory leak)
+            self.all_tracks.discard(track_id)
+
+            # Clean up all storage dictionaries
             for storage_dict in [
                 self.track_emb_frame_history,
                 self.track_boxes_frame,
@@ -265,7 +355,11 @@ class TrackManager:
                 self.track_road_history,
                 self.id_appear_time,
                 self.track_landmarks_history,
-                self.track_frame_history
+                self.track_best_frame,
+                self.track_best_frame_num,
+                self.track_best_frame_quality,
+                self.track_largest_bbox_frame,
+                self.track_largest_bbox_size
             ]:
                 storage_dict.pop(track_id, None)
         except KeyError:
