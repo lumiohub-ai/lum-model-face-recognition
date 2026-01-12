@@ -27,7 +27,9 @@ class PersonTracker:
         min_hits: int = 3,
         iou_threshold: float = 0.3,
         model_size: str = "s",
-        global_id_generator: Optional['GlobalTrackIDGenerator'] = None
+        global_id_generator: Optional['GlobalTrackIDGenerator'] = None,
+        global_track_manager: Optional['GlobalTrackManager'] = None,
+        camera_id: int = 0
     ):
         """
         Initialize Person Tracker.
@@ -39,12 +41,16 @@ class PersonTracker:
             iou_threshold: IoU threshold for track association
             model_size: YOLOv8 model size (needed for tracker initialization)
             global_id_generator: Optional global ID generator for cross-camera unique IDs
+            global_track_manager: Optional GlobalTrackManager for Phase 0 instrumentation
+            camera_id: Camera identifier for logging
         """
         self.tracker_type = tracker_type.lower()
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
         self.global_id_generator = global_id_generator
+        self.global_track_manager = global_track_manager
+        self.camera_id = camera_id
 
         logger.info(
             f"Initializing PersonTracker with {tracker_type.upper()} "
@@ -90,8 +96,6 @@ class PersonTracker:
         self.removed_tracks = []  # Reset removed tracks for this frame
 
         if not detections:
-            # No detections, age all tracks
-            logger.debug(f"Frame {self.frame_count}: No detections")
             self._age_tracks()
             return self._get_active_tracks(), self.removed_tracks
 
@@ -104,10 +108,11 @@ class PersonTracker:
         # Remove old tracks
         self._age_tracks()
 
-        logger.debug(
-            f"Frame {self.frame_count}: {len(self.active_tracks)} active tracks, "
-            f"{len(self.removed_tracks)} removed"
-        )
+        # Verbose logging disabled to reduce log noise
+        # logger.debug(
+        #     f"Frame {self.frame_count}: {len(self.active_tracks)} active tracks, "
+        #     f"{len(self.removed_tracks)} removed"
+        # )
 
         return self._get_active_tracks(), self.removed_tracks
 
@@ -152,6 +157,15 @@ class PersonTracker:
                     'first_frame': self.frame_count
                 }
 
+                # Phase 0: Log track creation
+                if self.global_track_manager:
+                    self.global_track_manager.on_track_created(
+                        camera_id=self.camera_id,
+                        local_track_id=track_id,
+                        bbox=bbox,
+                        frame_num=self.frame_count
+                    )
+
             # Add tracking info to detection
             tracked_det = det.copy()
             tracked_det['track_id'] = track_id
@@ -160,6 +174,13 @@ class PersonTracker:
 
             # Update track bbox
             self.active_tracks[track_id]['bbox'] = bbox
+
+            # Phase 0: Update track frame counter
+            if self.global_track_manager:
+                self.global_track_manager.on_track_update(
+                    camera_id=self.camera_id,
+                    local_track_id=track_id
+                )
 
         return tracked
 
@@ -260,17 +281,28 @@ class PersonTracker:
 
             # Only add to removed_tracks if track was confirmed (min_hits)
             if removed_track.get('hits', 0) >= self.min_hits:
+                total_frames = self.frame_count - removed_track.get('first_frame', 0)
+
                 self.removed_tracks.append({
                     'track_id': track_id,
                     'last_detection': removed_track.get('last_detection'),
-                    'total_frames': self.frame_count - removed_track.get('first_frame', 0),
+                    'total_frames': total_frames,
                     'total_hits': removed_track.get('hits', 0)
                 })
 
-                logger.debug(
-                    f"Track {track_id} removed after {removed_track.get('age', 0)} frames "
-                    f"of inactivity (total frames: {removed_track.get('hits', 0)})"
-                )
+                # Phase 0: Log track removal
+                if self.global_track_manager:
+                    self.global_track_manager.on_track_removed(
+                        camera_id=self.camera_id,
+                        local_track_id=track_id,
+                        total_frames=total_frames
+                    )
+
+                # Verbose logging disabled to reduce log noise
+                # logger.debug(
+                #     f"Track {track_id} removed after {removed_track.get('age', 0)} frames "
+                #     f"of inactivity (total frames: {removed_track.get('hits', 0)})"
+                # )
 
     def _get_active_tracks(self) -> List[Dict]:
         """

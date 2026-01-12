@@ -52,7 +52,6 @@ class PersonTrackManager:
 
         # Track state
         self.track_identity: Dict[int, Optional[str]] = {}  # Person name if recognized
-        self.track_phone_usage: Dict[int, bool] = {}  # Phone usage state
 
         logger.info(
             f"PersonTrackManager initialized (max_history={max_history_frames} frames)"
@@ -175,7 +174,6 @@ class PersonTrackManager:
             'first_seen': self.track_first_seen.get(track_id),
             'last_seen': self.track_last_seen.get(track_id),
             'identity': self.track_identity.get(track_id),
-            'using_phone': self.track_phone_usage.get(track_id, False),
             'total_frames': len(frames)
         }
 
@@ -246,21 +244,6 @@ class PersonTrackManager:
         self.track_identity[track_id] = identity
         logger.debug(f"Track {track_id} identity set to: {identity}")
 
-    def set_track_phone_usage(
-        self,
-        track_id: int,
-        using_phone: bool
-    ) -> None:
-        """
-        Set phone usage state for a track.
-
-        Args:
-            track_id: Track identifier
-            using_phone: Whether person is using phone
-        """
-        self.track_phone_usage[track_id] = using_phone
-        logger.debug(f"Track {track_id} phone usage: {using_phone}")
-
     def get_trajectory(
         self,
         track_id: int,
@@ -311,10 +294,9 @@ class PersonTrackManager:
             del self.track_last_seen[track_id]
         if track_id in self.track_identity:
             del self.track_identity[track_id]
-        if track_id in self.track_phone_usage:
-            del self.track_phone_usage[track_id]
 
-        logger.debug(f"Track {track_id} removed from manager")
+        # Verbose logging disabled to reduce log noise
+        # logger.debug(f"Track {track_id} removed from manager")
         return final_data
 
     def get_active_tracks(self) -> List[int]:
@@ -338,10 +320,6 @@ class PersonTrackManager:
             1 for identity in self.track_identity.values()
             if identity is not None
         )
-        phone_usage_tracks = sum(
-            1 for using in self.track_phone_usage.values()
-            if using
-        )
 
         # Calculate total frames stored
         total_frames = sum(
@@ -351,7 +329,6 @@ class PersonTrackManager:
         return {
             'total_active_tracks': total_tracks,
             'identified_tracks': identified_tracks,
-            'phone_usage_tracks': phone_usage_tracks,
             'total_frames_stored': total_frames,
             'max_history_frames': self.max_history_frames
         }
@@ -366,7 +343,6 @@ class PersonTrackManager:
         self.track_last_seen.clear()
         self.track_trajectories.clear()
         self.track_identity.clear()
-        self.track_phone_usage.clear()
         logger.info("Track manager reset")
 
     def __repr__(self) -> str:

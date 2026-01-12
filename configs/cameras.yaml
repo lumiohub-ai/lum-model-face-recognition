@@ -8,7 +8,7 @@ cameras:
     camera_name: "Entry Camera"
     camera_type: "IN"  # IN, OUT, or MANAGEMENT
     video_path: "${HB_IN}"  # Use HB_IN environment variable
-    application: "CombinedDetection"  # Application type
+    application: ["attendance"]  # Application type
     match_threshold: 0.3  # Face matching threshold
     roi: null  # Region of interest [x1, y1, x2, y2] or null
     line_points: null  # Line crossing points [[x1, y1], [x2, y2]] or null
@@ -18,7 +18,7 @@ cameras:
   #   camera_name: "Exit Camera"
   #   camera_type: "OUT"
   #   video_path: "${HB_OUT}"
-  #   application: "FaceRecognision"
+  #   application: "Attendance Checking"
   #   match_threshold: 0.3
   #   roi: null
   #   line_points: null
@@ -28,12 +28,7 @@ cameras:
   #   camera_name: "Management Camera"
   #   camera_type: "MANAGEMENT"
   #   video_path: "${HB_IN_MANAGEMENT}"
-  #   application: "FaceRecognision"
+  #   application: "Attendance Checking"
   #   match_threshold: 0.3
   #   roi: null
   #   line_points: null
-
-# Additional supported applications:
-# - "PhoneUsageDetection": Phone usage tracking
-# - "IdleDetection": Idle/screen time tracking
-# - "CombinedDetection": All detection features

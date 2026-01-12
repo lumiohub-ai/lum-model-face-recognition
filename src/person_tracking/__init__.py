@@ -19,10 +19,7 @@ from .config.models import PersonTrackingAppConfig, CameraConfig
 from .core.person_detector import PersonDetector
 from .core.person_tracker import PersonTracker
 from .core.track_manager import PersonTrackManager
-from .core.phone_detector import PhoneDetector
 from .core.identity_manager import IdentityManager
-from .core.phone_usage_logic_v2 import PhoneUsageDetectorV2
-from .core.phone_usage_filter import PhoneUsageFilter
 from .core.state_manager import PersonStateManager
 
 # Video processing
@@ -44,10 +41,7 @@ __all__ = [
     "PersonDetector",
     "PersonTracker",
     "PersonTrackManager",
-    "PhoneDetector",
     "IdentityManager",
-    "PhoneUsageDetectorV2",
-    "PhoneUsageFilter",
     "PersonStateManager",
 
     # Video

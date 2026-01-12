@@ -3,13 +3,11 @@
 This module provides a unified engine that combines:
 - Person detection and tracking (YOLOv8-Pose + BoT-SORT)
 - Face recognition within person ROIs (InsightFace)
-- Phone usage detection (YOLOv8n)
 - Attendance logging (IN/OUT status)
 
 Replaces HBFace with improved architecture:
 - Track persons instead of faces for stable IDs
 - Temporal voting for identity locking
-- Configurable phone detection per camera
 """
 
 import os
@@ -39,18 +37,12 @@ from .dashboard.camera_processor import get_camera_processor, setup_cameras as i
 from person_tracking.core.person_detector import PersonDetector
 from person_tracking.core.person_tracker import PersonTracker
 from person_tracking.core.track_manager import PersonTrackManager
-from person_tracking.core.phone_detector import PhoneDetector
 from person_tracking.core.identity_manager import IdentityManager
-from person_tracking.core.phone_usage_logic_v2 import PhoneUsageDetectorV2
-from person_tracking.core.phone_usage_filter import PhoneUsageFilter
-from person_tracking.core.screen_detector import ScreenDetector
-from person_tracking.core.idle_detection_logic import IdleDetectionLogic
-from person_tracking.core.idle_filter import IdleFilter
-from person_tracking.core.state_manager import PersonStateManager, EventType
+from person_tracking.core.state_manager import PersonStateManager
 from person_tracking.core.face_adapter import crop_person_roi
 from person_tracking.core.id_switch_corrector import IDSwitchCorrector
+from person_tracking.core.global_track_manager import GlobalTrackManager
 from person_tracking.video.frame_annotator import FrameAnnotator
-from person_tracking.logging.csv_logger import CSVLogger
 
 
 class GlobalTrackIDGenerator:
@@ -105,13 +97,10 @@ class CameraEngine:
         face_recognizer: FaceRecognition,
         person_detector: 'PersonDetector',
         client_slug: str,
-        phone_detector: Optional['PhoneDetector'],
-        screen_detector: Optional['ScreenDetector']=None,
         global_id_generator: Optional[GlobalTrackIDGenerator] = None,
-        phone_usage_config: Optional[Dict[str, Any]] = None,
-        idle_detection_config: Optional[Dict[str, Any]] = None,
         api_client: Optional['APIClient'] = None,
-        name_to_id_map: Optional[Dict[str, int]] = None
+        name_to_id_map: Optional[Dict[str, int]] = None,
+        global_track_manager: Optional['GlobalTrackManager'] = None
     ):
         """Initialize camera engine.
 
@@ -120,46 +109,29 @@ class CameraEngine:
             face_detector: Shared face detector instance
             face_recognizer: Shared face recognizer instance
             person_detector: Shared person detector instance
-            phone_detector: Shared phone detector instance (or None)
-            screen_detector: Shared screen detector instance (or None)
             client_slug: Client organization slug
             global_id_generator: Optional global track ID generator for cross-camera unique IDs
-            phone_usage_config: Phone usage detection configuration (version, thresholds, etc.)
-            idle_detection_config: Idle detection configuration (thresholds, etc.)
             api_client: API client for sending activities
             name_to_id_map: Dictionary mapping user names to IDs
+            global_track_manager: Optional GlobalTrackManager for Phase 0 instrumentation
         """
         self.camera_id = camera_config['camera_id']
         self.camera_name = camera_config['camera_name']
         self.cam_type = camera_config['cam_type']  # IN or OUT
         self.stream_url = camera_config['stream_url']
-        self.application = camera_config.get('application', 'FaceRecognision')
+        self.application = camera_config.get('application', ['attendance'])
         self.match_threshold = camera_config.get('match_threshold', 0.3)
         self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
         self.roi = camera_config.get('roi')
         self.line_points = camera_config.get('line_points')
 
-        # Feature flags based on application
-        self.enable_attendance = True  # Always enabled
-        # TODO: Refactor to support application as list from API: application: ["PhoneUsageDetection", "IdleDetection"]
-        # TEMPORARY WORKAROUND: Use 'CombinedDetection' to enable both phone + idle
-        self.enable_phone_detection = self.application in ['PhoneUsageDetection', 'CombinedDetection']
-        self.enable_idle_detection = self.application in ['IdleDetection', 'CombinedDetection']
-
-        # Phone usage configuration
-        self.phone_usage_config = phone_usage_config or {}
-
-        # Idle detection configuration
-        self.idle_detection_config = idle_detection_config or {}
-
         # Shared components (models)
         self.face_detector = face_detector
         self.face_recognizer = face_recognizer
         self.person_detector = person_detector
-        self.phone_detector = phone_detector if self.enable_phone_detection else None
-        self.screen_detector = screen_detector if self.enable_idle_detection else None
         self.client_slug = client_slug
         self.global_id_generator = global_id_generator
+        self.global_track_manager = global_track_manager
 
         # API client and name mapping for activity tracking
         self.api_client = api_client
@@ -168,23 +140,15 @@ class CameraEngine:
         # Initialize per-camera components (tracking, state)
         self._init_components()
 
-        # Log enabled features
-        features = []
-        if self.enable_phone_detection:
-            features.append("Phone")
-        if self.enable_idle_detection:
-            features.append("Idle")
-        features_str = "+".join(features) if features else "None"
-
         logger.info(
             f"CameraEngine initialized: {self.camera_name} (ID: {self.camera_id}) | "
-            f"Type: {self.cam_type} | Features: {features_str}"
+            f"Type: {self.cam_type}"
         )
 
     def _init_components(self) -> None:
         """Initialize tracking and state management components.
 
-        Note: Detection models (person_detector, phone_detector) are shared
+        Note: Detection models (person_detector) are shared
         and passed in __init__, not created here.
         """
         # Person Tracking (per-camera for isolated state)
@@ -193,7 +157,9 @@ class CameraEngine:
             max_age=60,  # Reduced from 60 to quickly remove ghost bboxes (~1 sec at 30fps)
             min_hits=3,
             iou_threshold=0.3,  # Lower threshold for better re-identification when person returns
-            global_id_generator=self.global_id_generator  # Enable global track IDs
+            global_id_generator=self.global_id_generator,  # Enable global track IDs
+            global_track_manager=self.global_track_manager,  # Phase 0: instrumentation
+            camera_id=self.camera_id
         )
 
         # Track Manager
@@ -214,42 +180,6 @@ class CameraEngine:
             min_embedding_samples=3  # Need 3+ embeddings for reliable comparison
         )
 
-        # Phone usage components (if enabled) - V2 only
-        if self.enable_phone_detection:
-            # Phone usage detector (overlap detection only)
-            self.phone_usage_logic = PhoneUsageDetectorV2(
-                hand_bbox_size=self.phone_usage_config.get('hand_bbox_size', 80.0),
-                overlap_iou_threshold=self.phone_usage_config.get('overlap_iou_threshold', 0.01),
-                min_keypoint_confidence=self.phone_usage_config.get('min_keypoint_confidence', 0.3)
-            )
-            logger.info(f"Initialized PhoneUsageDetectorV2 (overlap-only) for {self.camera_name}")
-
-            # Phone usage filter (temporal smoothing)
-            self.phone_usage_filter = PhoneUsageFilter(
-                stop_confirmation_frames=self.phone_usage_config.get('stop_confirmation_frames', 5)
-            )
-        else:
-            self.phone_usage_logic = None
-            self.phone_usage_filter = None
-
-        # Idle detection components (if enabled)
-        if self.enable_idle_detection:
-            # Idle detection logic (head pose + screen orientation)
-            self.idle_detection_logic = IdleDetectionLogic(
-                screen_distance_threshold=self.idle_detection_config.get('screen_distance_threshold', 300.0),
-                head_orientation_threshold=self.idle_detection_config.get('head_orientation_threshold', 60.0),
-                min_keypoint_confidence=self.idle_detection_config.get('min_keypoint_confidence', 0.3)
-            )
-            logger.info(f"Initialized IdleDetectionLogic for {self.camera_name}")
-
-            # Idle filter (temporal smoothing)
-            self.idle_filter = IdleFilter(
-                working_confirmation_frames=self.idle_detection_config.get('working_confirmation_frames', 5)
-            )
-        else:
-            self.idle_detection_logic = None
-            self.idle_filter = None
-
         # State Manager
         self.state_manager = PersonStateManager(
             camera_id=self.camera_id,
@@ -264,7 +194,7 @@ class CameraEngine:
         self,
         frame: np.ndarray,
         frame_num: int
-    ) -> Tuple[List[Dict], List[Dict], List[Dict], np.ndarray, List[Dict]]:
+    ) -> Tuple[List[Dict], np.ndarray]:
         """Process a single frame.
 
         Args:
@@ -272,7 +202,7 @@ class CameraEngine:
             frame_num: Frame number
 
         Returns:
-            Tuple of (recognized_persons, phone_events, idle_events, processed_frame, detected_phones)
+            Tuple of (recognized_persons, processed_frame)
         """
         # Apply ROI if configured
         if self.roi:
@@ -281,37 +211,12 @@ class CameraEngine:
 
         self.frame_count += 1
         recognized_persons = []
-        phone_events = []
 
         # Step 1: Detect persons
         detections = self.person_detector.detect_persons(frame)
 
         # Step 2: Update tracker
         active_tracks, removed_tracks = self.person_tracker.update(detections, frame)
-
-        # Step 3: Detect phones ONCE per frame (not per track)
-        detected_phones = []
-        if self.enable_phone_detection and self.phone_detector:
-            detected_phones = self.phone_detector.detect_phones(frame)
-
-        # Step 3a: Associate phones to persons (one-to-one assignment)
-        phone_assignments = {}
-        if self.enable_phone_detection and detected_phones:
-            phone_assignments = self._associate_phones_to_persons(detected_phones, active_tracks)
-
-        # Step 3b: Detect screens ONCE per frame (for idle detection)
-        detected_screens = []
-        if self.enable_idle_detection and self.screen_detector:
-            detected_screens = self.screen_detector.detect_screens(frame)
-
-        # Step 3c: Associate screens to persons (proximity-based)
-        screen_assignments = {}
-        if self.enable_idle_detection and detected_screens:
-            screen_assignments = self.screen_detector.associate_screens_with_persons(
-                detected_screens, active_tracks
-            )
-            if phone_assignments:
-                logger.debug(f"Phone assignments: {len(phone_assignments)} person(s) assigned phones")
 
         # Step 4: Process each active track
         for track in active_tracks:
@@ -345,7 +250,7 @@ class CameraEngine:
             face_image = None
 
             if not self.identity_manager.is_identity_locked(track_id):
-                result = self._recognize_face(frame, bbox)
+                result = self._recognize_face(frame, bbox, track_id)
 
                 if result['face_detected']:
                     # Store embedding for ID correction (all detected faces)
@@ -415,7 +320,7 @@ class CameraEngine:
                 else:
                     # TIER 2: Identity consistency check (for already-locked identities)
                     # Continuously verify face matches locked identity
-                    result = self._recognize_face(frame, bbox)
+                    result = self._recognize_face(frame, bbox, track_id)
                     if result.get('face_detected') and result.get('embedding') is not None:
                         embedding = result['embedding']
 
@@ -438,81 +343,6 @@ class CameraEngine:
                     identity = voting['top_candidate']
                     identity_confidence = voting.get('top_avg_similarity', 0.0)
 
-            # Phone usage detection (using pre-detected phones)
-            using_phone = False
-            phone_confidence = 0.0
-
-            if self.enable_phone_detection:
-                # Check if this person has been assigned a phone
-                if track_id in phone_assignments:
-                    spatial_result = phone_assignments[track_id]
-                    # Update filter with positive result
-                    self.phone_usage_filter.update(track_id, spatial_result)
-                    using_phone = self.phone_usage_filter.is_using_phone(track_id)
-                    if using_phone:
-                        phone_confidence = spatial_result['confidence']
-                        method = spatial_result['method']
-                        # Log phone usage continuously (not just on state change)
-                        identity_str = f"{identity}" if identity else f"Track {track_id}"
-                        logger.opt(colors=True).info(
-                            f"<yellow>{identity_str} using phone [{self.cam_type}] | "
-                            f"confidence={phone_confidence:.2f} | method={method}</yellow>"
-                        )
-                else:
-                    # No phone assigned, update filter with negative result
-                    no_phone = {
-                        'using_phone': False,
-                        'confidence': 0.0,
-                        'method': 'none',
-                        'details': {
-                            'hand_overlap': False,
-                            'arm_overlap': False,
-                            'hand_overlap_iou': 0.0,
-                            'arm_overlap_iou': 0.0
-                        }
-                    }
-                    self.phone_usage_filter.update(track_id, no_phone)
-                    using_phone = self.phone_usage_filter.is_using_phone(track_id)
-                    if using_phone:
-                        phone_confidence = self.phone_usage_filter.get_usage_confidence(track_id)
-
-            # Idle detection (using pre-detected screens)
-            is_idle = False
-            idle_confidence = 0.0
-
-            if self.enable_idle_detection:
-                # Check if this person has a screen nearby
-                if track_id in screen_assignments:
-                    screen_data = screen_assignments[track_id][0]  # Get first (nearest) screen
-                    screen_bbox = np.array(screen_data['bbox'])
-                    screen_distance = screen_data.get('distance', 0.0)
-
-                    # Apply idle detection logic
-                    spatial_result = self.idle_detection_logic.detect_idle(
-                        person_keypoints=keypoints,
-                        person_bbox=bbox,
-                        screen_bbox=screen_bbox,
-                        screen_distance=screen_distance
-                    )
-
-                    # Update filter with detection result
-                    self.idle_filter.update(track_id, spatial_result)
-                    is_idle = self.idle_filter.is_idle(track_id)
-                    if is_idle:
-                        idle_confidence = spatial_result['confidence']
-                else:
-                    # No screen nearby - person is idle
-                    no_screen_result = {
-                        'is_idle': True,
-                        'confidence': 0.9,
-                        'method': 'no_screen_detected',
-                        'details': {}
-                    }
-                    self.idle_filter.update(track_id, no_screen_result)
-                    is_idle = self.idle_filter.is_idle(track_id)
-                    if is_idle:
-                        idle_confidence = self.idle_filter.get_idle_confidence(track_id)
-
             # Get proof image (crop person from frame)
             proof_image = None
             if bbox is not None:
@@ -528,10 +358,6 @@ class CameraEngine:
                 identity=identity,
                 identity_locked=identity_locked,
                 identity_confidence=identity_confidence,
-                using_phone=using_phone,
-                phone_confidence=phone_confidence,
-                is_idle=is_idle,
-                idle_confidence=idle_confidence,
                 proof_image=proof_image
             )
 
@@ -584,33 +410,6 @@ class CameraEngine:
             self.state_manager.remove_person(track_id)
             self.identity_manager.reset_track(track_id)
             self.id_corrector.reset_track(track_id)  # Clean up embeddings
-            if self.enable_phone_detection:
-                self.phone_usage_filter.reset_track(track_id)
-
-        # Step 6: Get events (phone usage and idle)
-        events = self.state_manager.get_events(clear=True)
-        idle_events = []
-        for event in events:
-            if event.event_type in [EventType.PHONE_USAGE_STARTED, EventType.PHONE_USAGE_STOPPED]:
-                phone_events.append({
-                    'event_type': event.event_type.value,
-                    'track_id': event.track_id,
-                    'identity': event.identity,
-                    'camera_id': self.camera_id,
-                    'camera_name': self.camera_name,
-                    'timestamp': event.timestamp,
-                    'duration': event.duration
-                })
-            elif event.event_type in [EventType.IDLE_STARTED, EventType.IDLE_STOPPED]:
-                idle_events.append({
-                    'event_type': event.event_type.value,
-                    'track_id': event.track_id,
-                    'identity': event.identity,
-                    'camera_id': self.camera_id,
-                    'camera_name': self.camera_name,
-                    'timestamp': event.timestamp,
-                    'confidence': event.confidence
-                })
 
         # Delayed batch ID correction (every 5 frames)
         if self.id_corrector.should_run_correction():
@@ -633,99 +432,31 @@ class CameraEngine:
                     )
                     self._merge_tracks(source_track_id=merge_track, target_track_id=keep_track)
 
-        return recognized_persons, phone_events, idle_events, frame, detected_phones
+        return recognized_persons, frame
 
-    def _associate_phones_to_persons(
-        self,
-        phones: List[Dict],
-        active_tracks: List[Dict]
-    ) -> Dict[int, Dict]:
-        """
-        Associate phones to persons using one-to-one assignment.
-
-        Each phone can only be assigned to one person (the best match).
-        Uses greedy assignment based on confidence scores.
-
-        Args:
-            phones: List of detected phones
-            active_tracks: List of active person tracks
-
-        Returns:
-            Dictionary mapping track_id to spatial_result for assigned phones
-        """
-        if not phones or not active_tracks:
-            return {}
-
-        # Build list of all possible (track_id, phone_idx, spatial_result) tuples
-        candidates = []
-
-        for track in active_tracks:
-            track_id = track['track_id']
-            keypoints = track.get('keypoints')
-
-            if keypoints is None:
-                continue
-
-            # Calculate person height for pixel-to-meter conversion
-            person_height = self.person_detector.calculate_person_height(keypoints)
-
-            for phone_idx, phone in enumerate(phones):
-                phone_bbox = phone['bbox']
-
-                # Calculate spatial score using V2 detector
-                spatial_result = self.phone_usage_logic.detect_phone_usage(
-                    person_keypoints=keypoints,
-                    phone_bbox=phone_bbox,
-                    person_bbox=track.get('bbox')
-                )
-
-                # Log spatial check results for debugging
-                logger.debug(
-                    f"Track {track_id} + Phone {phone_idx}: using_phone={spatial_result['using_phone']}, "
-                    f"confidence={spatial_result['confidence']:.2f}, method={spatial_result['method']}"
-                )
-
-                # Only consider if spatial checks pass
-                if spatial_result['using_phone']:
-                    candidates.append({
-                        'track_id': track_id,
-                        'phone_idx': phone_idx,
-                        'confidence': spatial_result['confidence'],
-                        'spatial_result': spatial_result
-                    })
-
-        # Sort candidates by confidence (highest first)
-        candidates.sort(key=lambda x: x['confidence'], reverse=True)
-
-        # Greedy assignment: assign phones to persons in order of confidence
-        assigned_phones = set()
-        assigned_persons = {}
-
-        for candidate in candidates:
-            phone_idx = candidate['phone_idx']
-            track_id = candidate['track_id']
-
-            # Skip if phone or person already assigned
-            if phone_idx in assigned_phones or track_id in assigned_persons:
-                continue
-
-            # Assign this phone to this person
-            assigned_persons[track_id] = candidate['spatial_result']
-            assigned_phones.add(phone_idx)
-
-        return assigned_persons
-
-    def _recognize_face(self, frame: np.ndarray, bbox: np.ndarray) -> Dict:
+    def _recognize_face(self, frame: np.ndarray, bbox: np.ndarray, track_id: int = 0) -> Dict:
         """Recognize face within person bounding box."""
         roi, offset = crop_person_roi(frame, bbox, expand=0.1)
 
         if roi is None or roi.size == 0:
+            # Phase 0: Log face not visible
+            if self.global_track_manager:
+                self.global_track_manager.on_face_not_visible(
+                    camera_id=self.camera_id,
+                    local_track_id=track_id
+                )
             return {'face_detected': False, 'name': None, 'similarity': 0.0}
 
         # Detect face
         faces = self.face_detector.detect(roi)
 
         if not faces:
+            # Phase 0: Log face not visible
+            if self.global_track_manager:
+                self.global_track_manager.on_face_not_visible(
+                    camera_id=self.camera_id,
+                    local_track_id=track_id
+                )
             return {'face_detected': False, 'name': None, 'similarity': 0.0}
 
         face = faces[0]
@@ -738,6 +469,15 @@ class CameraEngine:
 
         # Match against database
         if len(self.face_recognizer.db_embs) == 0:
+            # Phase 0: Log face detected but not recognized
+            if self.global_track_manager:
+                self.global_track_manager.on_face_detected(
+                    camera_id=self.camera_id,
+                    local_track_id=track_id,
+                    quality=float(face.det_score) if hasattr(face, 'det_score') else 0.0,
+                    recognized=False,
+                    identity=None
+                )
             return {
                 'face_detected': True,
                 'recognized': False,
@@ -752,6 +492,15 @@ class CameraEngine:
 
         if best_similarity >= self.match_threshold:
             name = self.face_recognizer.db_names[best_idx]
+            # Phase 0: Log face detected and recognized
+            if self.global_track_manager:
+                self.global_track_manager.on_face_detected(
+                    camera_id=self.camera_id,
+                    local_track_id=track_id,
+                    quality=float(face.det_score) if hasattr(face, 'det_score') else 0.0,
+                    recognized=True,
+                    identity=name
+                )
             return {
                 'face_detected': True,
                 'recognized': True,
@@ -761,6 +510,15 @@ class CameraEngine:
                 'face_image': face_image
             }
         else:
+            # Phase 0: Log face detected but not recognized
+            if self.global_track_manager:
+                self.global_track_manager.on_face_detected(
+                    camera_id=self.camera_id,
+                    local_track_id=track_id,
+                    quality=float(face.det_score) if hasattr(face, 'det_score') else 0.0,
+                    recognized=False,
+                    identity=None
+                )
             return {
                 'face_detected': True,
                 'recognized': False,
@@ -940,8 +698,6 @@ class CameraEngine:
         self.state_manager.remove_person(source_track_id)
         self.identity_manager.reset_track(source_track_id)
         self.id_corrector.reset_track(source_track_id)  # Clean up embeddings
-        if self.enable_phone_detection:
-            self.phone_usage_filter.reset_track(source_track_id)
 
         # Remove from person_tracker's active_tracks
         if source_track_id in self.person_tracker.active_tracks:
@@ -952,8 +708,6 @@ class CameraEngine:
         self.person_tracker.reset()
         self.track_manager.reset()
         self.identity_manager.reset()
-        if self.enable_phone_detection:
-            self.phone_usage_filter.reset()
         self.state_manager.reset()
         self.frame_count = 0
 
@@ -964,7 +718,6 @@ class SmartOfficeEngine:
     This class replaces HBFace with an improved architecture that:
     - Tracks persons instead of faces for stable IDs
     - Uses temporal voting for identity locking
-    - Supports phone usage detection
     - Maintains backward compatibility with EntryLogger and API
     """
 
@@ -985,12 +738,13 @@ class SmartOfficeEngine:
             client_slug: Organization slug
             api_host: API base URL
             applications: List of application types to fetch
-                         Default: ['FaceRecognision', 'PhoneUsageDetection', 'IdleDetection', 'CombinedDetection']
+                         Default: ['attendance']
+                         Options: 'attendance', 'unrecognized', 'activity'
             **kwargs: Additional configuration
         """
         self.client_slug = client_slug
         self.api_host = api_host
-        self.applications = applications or ['FaceRecognision', 'PhoneUsageDetection', 'IdleDetection', 'CombinedDetection']
+        self.applications = applications or ['attendance']
 
         # Store credentials for entry logger
         self._email = email
@@ -1022,6 +776,11 @@ class SmartOfficeEngine:
         self.global_id_generator = GlobalTrackIDGenerator(start_id=1)
         logger.info("Global track ID generator enabled - track IDs will be unique across all cameras")
 
+        # Phase 0: Initialize GlobalTrackManager (stub for instrumentation)
+        self.global_track_manager = GlobalTrackManager()
+        if self.global_track_manager.enabled:
+            logger.info("GlobalTrackManager enabled - collecting baseline metrics")
+
         # Initialize shared detection models (GPU efficiency)
         logger.info("Initializing shared detection models...")
         self.face_detector = FaceDetector(gpu_id=0, model_name='buffalo_l')
@@ -1033,40 +792,8 @@ class SmartOfficeEngine:
             confidence_threshold=0.5
         )
 
-        # Shared phone detector (YOLOv8n) - only if any camera needs it
-        needs_phone_detection = any(
-            c.get('application') in ['PhoneUsageDetection', 'CombinedDetection']
-            for c in self.camera_configs
-        )
-
-        # Load phone detection and usage config from config file
-        phone_config = self._load_phone_detection_config()
-        self.phone_usage_config = self._load_phone_usage_config()
-
-        self.shared_phone_detector = PhoneDetector(
-            model_size=phone_config.get('model_size', 'n'),
-            confidence_threshold=phone_config.get('confidence_threshold', 0.4)
-        ) if needs_phone_detection else None
-
-        if self.shared_phone_detector:
-            logger.info("Phone detection enabled for PhoneUsageDetection cameras")
-
-        # Shared screen detector (YOLOv8) - only if any camera needs it
-        needs_idle_detection = any(
-            c.get('application') in ['IdleDetection', 'CombinedDetection']
-            for c in self.camera_configs
-        )
-
-        # Load idle detection config from config file
-        self.idle_detection_config = self._load_idle_detection_config()
-
-        self.shared_screen_detector = ScreenDetector(
-            model_size='n',
-            confidence_threshold=0.4
-        ) if needs_idle_detection else None
-
-        if self.shared_screen_detector:
-            logger.info("Screen detection enabled for IdleDetection cameras")
+        # Startup embedding sync - always runs to ensure database is up to date
+        self._sync_embeddings_on_startup()
 
         # Create name-to-ID mapping for activity tracking
         # This requires fetching user data from API
@@ -1083,13 +810,6 @@ class SmartOfficeEngine:
         # Visualization
         self.visualize = Visualization()
         self.frame_annotator = FrameAnnotator()
-
-        # CSV logger for phone events
-        self.csv_logger = CSVLogger(
-            output_dir=kwargs.get('output_dir', 'volumes/storage/person-tracking'),
-            client_slug=client_slug,
-            camera_id=0  # Will be updated per event
-        )
 
         # Initialize camera processor for dashboard streaming
         try:
@@ -1197,135 +917,6 @@ class SmartOfficeEngine:
             return [tuple(line_points[0]), tuple(line_points[1])]
         return None
 
-    def _load_phone_usage_config(self) -> Dict[str, Any]:
-        """Load phone usage detection configuration from config file.
-
-        Returns:
-            Dictionary with V2 phone usage config
-        """
-        config_path = Path('configs/person_tracking/config.yaml')
-
-        # Default V2 configuration (overlap-only)
-        default_config = {
-            'hand_bbox_size': 80.0,
-            'overlap_iou_threshold': 0.01,
-            'min_keypoint_confidence': 0.3,
-            'stop_confirmation_frames': 5
-        }
-
-        try:
-            if config_path.exists():
-                with open(config_path, 'r') as f:
-                    config = yaml.safe_load(f)
-
-                # Get phone usage config from first camera (shared across all)
-                if config and 'cameras' in config and len(config['cameras']) > 0:
-                    camera_config = config['cameras'][0]
-                    phone_usage_config = camera_config.get('phone_usage', {})
-
-                    # Merge with defaults
-                    result = default_config.copy()
-                    result.update(phone_usage_config)
-
-                    logger.info(
-                        f"Loaded phone usage config: "
-                        f"hand_bbox={result['hand_bbox_size']}px, "
-                        f"overlap_iou={result['overlap_iou_threshold']} (overlap-only mode)"
-                    )
-                    return result
-
-        except Exception as e:
-            logger.warning(f"Failed to load phone usage config: {e}")
-
-        logger.info("Using default phone usage config")
-        return default_config
-
-    def _load_idle_detection_config(self) -> Dict[str, Any]:
-        """Load idle detection configuration from config file.
-
-        Returns:
-            Dictionary with idle detection config
-        """
-        config_path = Path('configs/person_tracking/config.yaml')
-
-        # Default configuration
-        default_config = {
-            'screen_distance_threshold': 300.0,  # pixels
-            'head_orientation_threshold': 60.0,  # degrees
-            'min_keypoint_confidence': 0.3,
-            'working_confirmation_frames': 5
-        }
-
-        try:
-            if config_path.exists():
-                with open(config_path, 'r') as f:
-                    config = yaml.safe_load(f)
-
-                # Get idle detection config from first camera (shared across all)
-                if config and 'cameras' in config and len(config['cameras']) > 0:
-                    camera_config = config['cameras'][0]
-                    idle_config = camera_config.get('idle_detection', {})
-
-                    # Merge with defaults
-                    result = default_config.copy()
-                    result.update(idle_config)
-
-                    logger.info(
-                        f"Loaded idle detection config: "
-                        f"screen_dist={result['screen_distance_threshold']}px, "
-                        f"head_angle={result['head_orientation_threshold']}°, "
-                        f"working_conf={result['working_confirmation_frames']} frames"
-                    )
-                    return result
-
-        except Exception as e:
-            logger.warning(f"Failed to load idle detection config: {e}")
-
-        logger.info("Using default idle detection config")
-        return default_config
-
-    def _load_phone_detection_config(self) -> Dict[str, Any]:
-        """Load phone detection configuration from config file.
-
-        Returns:
-            Dictionary with phone detection config (model_size, confidence_threshold)
-        """
-        config_path = Path('configs/person_tracking/config.yaml')
-
-        # Default values
-        default_config = {
-            'model_size': 'n',
-            'confidence_threshold': 0.4
-        }
-
-        try:
-            if config_path.exists():
-                with open(config_path, 'r') as f:
-                    config = yaml.safe_load(f)
-
-                # Get phone detection config from first camera (shared across all)
-                if config and 'cameras' in config and len(config['cameras']) > 0:
-                    camera_config = config['cameras'][0]
-                    phone_config = camera_config.get('phone_detection', {})
-
-                    result = {
-                        'model_size': phone_config.get('model_size', default_config['model_size']),
-                        'confidence_threshold': phone_config.get('confidence_threshold', default_config['confidence_threshold'])
-                    }
-
-                    logger.info(
-                        f"Loaded phone detection config from {config_path}: "
-                        f"model_size={result['model_size']}, threshold={result['confidence_threshold']}"
-                    )
-                    return result
-            else:
-                logger.warning(f"Config file not found: {config_path}, using defaults")
-
-        except Exception as e:
-            logger.error(f"Error loading phone detection config: {e}, using defaults")
-
-        return default_config
-
     def _build_name_to_id_map(self) -> Dict[str, int]:
         """Build mapping of user names to IDs from API.
 
@@ -1361,6 +952,53 @@ class SmartOfficeEngine:
 
         return FaceRecognition(args)
 
+    def _sync_embeddings_on_startup(self) -> None:
+        """Sync missing embeddings on startup.
+
+        This method checks if there are any new users or images in the backend
+        that don't have embeddings in pgvector, and calculates them automatically.
+        """
+        try:
+            logger.info("=" * 80)
+            logger.info("STARTUP EMBEDDING SYNC")
+            logger.info("=" * 80)
+
+            # Import EmbeddingSyncService
+            from .services.embedding_sync import EmbeddingSyncService
+
+            # Initialize sync service
+            sync_service = EmbeddingSyncService(
+                client_slug=self.client_slug,
+                gpu_id=0
+            )
+
+            # Run sync with authenticated API client
+            result = sync_service.sync_missing_embeddings(api_client=self.api_client)
+
+            if result.get('success'):
+                users_processed = result.get('users_processed', 0)
+                embeddings_added = result.get('embeddings_added', 0)
+
+                if users_processed > 0:
+                    logger.info(
+                        f"✅ Startup sync complete: {users_processed} users processed, "
+                        f"{embeddings_added} embeddings added"
+                    )
+
+                    # Reload embeddings into face recognizer
+                    self.face_recognizer.reload_embeddings()
+                    logger.info("Face recognizer reloaded with new embeddings")
+                else:
+                    logger.info("✅ No missing embeddings - database is up to date")
+            else:
+                logger.error(f"❌ Startup sync failed: {result.get('error')}")
+
+            logger.info("=" * 80)
+
+        except Exception as e:
+            logger.error(f"❌ Failed to sync embeddings on startup: {e}")
+            logger.warning("Continuing with existing embeddings...")
+
     def _init_cameras(self) -> None:
         """Initialize stream handlers and camera engines."""
         for config in self.camera_configs:
@@ -1377,14 +1015,11 @@ class SmartOfficeEngine:
                 face_detector=self.face_detector,
                 face_recognizer=self.face_recognizer,
                 person_detector=self.shared_person_detector,
-                phone_detector=self.shared_phone_detector,
-                screen_detector=self.shared_screen_detector,
                 client_slug=self.client_slug,
                 global_id_generator=self.global_id_generator,  # Enable global track IDs
-                phone_usage_config=self.phone_usage_config,  # Pass phone usage config
-                idle_detection_config=self.idle_detection_config,  # Pass idle detection config
                 api_client=self.api_client,  # Pass API client for activity tracking
-                name_to_id_map=self.name_to_id_map  # Pass name-to-ID mapping
+                name_to_id_map=self.name_to_id_map,  # Pass name-to-ID mapping
+                global_track_manager=self.global_track_manager  # Phase 0: instrumentation
             )
             self.camera_engines.append(engine)
 
@@ -1397,7 +1032,9 @@ class SmartOfficeEngine:
 
         for config in self.camera_configs:
             camera_name = config['camera_name'].replace(' ', '_')
-            filename = f"{output_dir}/{camera_name}_{timestamp}.avi"
+            camera_id = config.get('camera_id', 'unknown')
+            # Use XVID codec with .avi format (no ffmpeg required)
+            filename = f"{output_dir}/{camera_id}_{timestamp}.avi"
 
             # Get frame dimensions from stream
             stream_idx = len(self.video_writers)
@@ -1410,14 +1047,25 @@ class SmartOfficeEngine:
             else:
                 w, h = 1920, 1080
 
-            writer = cv2.VideoWriter(
-                filename,
-                cv2.VideoWriter_fourcc(*'XVID'),
-                20,
-                (w, h)
-            )
-            self.video_writers.append(writer)
-            logger.info(f"Video writer initialized: {filename}")
+            try:
+                # Use XVID codec - works without ffmpeg installation
+                writer = cv2.VideoWriter(
+                    filename,
+                    cv2.VideoWriter_fourcc(*'XVID'),
+                    20,  # FPS
+                    (w, h)
+                )
+
+                if writer.isOpened():
+                    self.video_writers.append(writer)
+                    logger.info(f"✅ Video writer initialized: {filename} ({w}x{h}) [XVID codec]")
+                else:
+                    writer.release()
+                    self.video_writers.append(None)
+                    logger.error(f"❌ Failed to open video writer: {filename} ({w}x{h})")
+            except Exception as e:
+                self.video_writers.append(None)
+                logger.error(f"❌ Failed to initialize video writer: {filename} - {e}")
 
     def _init_entry_logger(self, email: str, password: str) -> EntryLogger:
         """Initialize entry logger."""
@@ -1438,6 +1086,10 @@ class SmartOfficeEngine:
         self.running = True
         self.start_time = time.time()
         frame_nums = [0] * len(self.streams)
+
+        # Phase 0: Baseline metrics logging
+        last_metrics_log_time = time.time()
+        metrics_log_interval = 60.0  # Log baseline metrics every 60 seconds
 
         # Start streams
         for stream in self.streams:
@@ -1470,22 +1122,14 @@ class SmartOfficeEngine:
                     engine = self.camera_engines[camera_idx]
 
                     # Process frame
-                    recognized, phone_events, idle_events, processed, phones = engine.process_frame(frame, frame_num)
+                    recognized, processed = engine.process_frame(frame, frame_num)
 
                     # Handle recognized persons
                     for person in recognized:
                         self._handle_recognized_person(person)
 
-                    # Handle phone events
-                    for event in phone_events:
-                        self._handle_phone_event(event)
-
-                    # Handle idle events
-                    for event in idle_events:
-                        self._handle_idle_event(event)
-
-                    # Annotate frame (pass phones to avoid duplicate detection)
-                    annotated = self._annotate_frame(processed, engine, phones)
+                    # Annotate frame
+                    annotated = self._annotate_frame(processed, engine)
                     annotated_frames.append((camera_idx, annotated))
 
                 # Output annotated frames
@@ -1497,7 +1141,8 @@ class SmartOfficeEngine:
                         try:
                             self.camera_processor.update_frame(camera_name, annotated)
                         except Exception as e:
-                            logger.debug(f"Dashboard streaming error: {e}")
+                            # logger.debug(f"Dashboard streaming error: {e}")
+                            pass
 
                     # Save to video file
                     if self.save_video and camera_idx < len(self.video_writers):
@@ -1505,7 +1150,12 @@ class SmartOfficeEngine:
                         if writer:
                             writer.write(annotated)
 
-
+                # Phase 0: Periodic baseline metrics logging
+                current_time = time.time()
+                if current_time - last_metrics_log_time >= metrics_log_interval:
+                    if self.global_track_manager and self.global_track_manager.enabled:
+                        self.global_track_manager.log_baseline_summary()
+                    last_metrics_log_time = current_time
 
         except Exception as e:
             logger.error(f"Error during processing: {e}")
@@ -1549,68 +1199,12 @@ class SmartOfficeEngine:
                 )
                 logger.info(f"UNRECOGNIZED | Sent face from {camera_name} ({status})")
 
-    def _handle_phone_event(self, event: Dict) -> None:
-        """Handle a phone usage event."""
-        event_type = event['event_type']
-        identity = event.get('identity', 'Unknown')
-        camera_name = event['camera_name']
-
-        # Log to CSV
-        self.csv_logger.camera_id = event['camera_id']
-        self.csv_logger.log_event(
-            track_id=event['track_id'],
-            event_type=event_type,
-            person_name=identity,
-            using_phone=event_type == 'phone_usage_started',
-            confidence=0.0,
-            duration=event.get('duration'),
-            timestamp=event['timestamp']
-        )
-
-        # Log to console
-        if event_type == 'phone_usage_started':
-            logger.warning(f"PHONE | {identity} started using phone at {camera_name}")
-        else:
-            duration = event.get('duration', 0)
-            logger.info(f"PHONE | {identity} stopped using phone at {camera_name} ({duration:.1f}s)")
-
-    def _handle_idle_event(self, event: Dict) -> None:
-        """Handle an idle detection event."""
-        event_type = event['event_type']
-        identity = event.get('identity', 'Unknown')
-        camera_name = event['camera_name']
-        confidence = event.get('confidence', 0.0)
-
-        # Log to CSV
-        self.csv_logger.camera_id = event['camera_id']
-        self.csv_logger.log_event(
-            track_id=event['track_id'],
-            event_type=event_type,
-            person_name=identity,
-            using_phone=False,  # Not phone usage
-            confidence=confidence,
-            timestamp=event['timestamp']
-        )
-
-        # Log to console
-        if event_type == 'idle_started':
-            logger.opt(colors=True).warning(
-                f"<yellow>IDLE | {identity} stopped looking at screen at {camera_name} "
-                f"(confidence={confidence:.2f})</yellow>"
-            )
-        else:
-            logger.opt(colors=True).info(
-                f"<green>WORKING | {identity} started looking at screen at {camera_name} "
-                f"(confidence={confidence:.2f})</green>"
-            )
-
-    def _annotate_frame(self, frame: np.ndarray, engine: CameraEngine, phones: List[Dict]) -> np.ndarray:
+    def _annotate_frame(self, frame: np.ndarray, engine: CameraEngine) -> np.ndarray:
         """Annotate frame with detections and status.
 
         Args:
             frame: Processed frame
             engine: Camera engine with state
-            phones: Pre-detected phones (avoids duplicate detection)
 
         Returns:
             Annotated frame
@@ -1626,13 +1220,13 @@ class SmartOfficeEngine:
             # Skip tracks that are not in active_tracks (person not currently detected)
             # track_info is None means the track is not in person_tracker.active_tracks
             if track_info is None:
-                logger.debug(f"Track {state.track_id}: Skipping (not in active_tracks)")
+                # Verbose logging disabled to reduce log noise
+                # logger.debug(f"Track {state.track_id}: Skipping (not in active_tracks)")
                 continue
 
             # Remove bbox immediately when person not detected in current frame (age > 0)
             age = track_info.get('age', 0)
             if age > 0:
-                logger.debug(f"Track {state.track_id}: Skipping bbox (age={age}, not in current frame)")
                 continue
 
             track_data = engine.track_manager.get_track_data(state.track_id)
@@ -1654,17 +1248,15 @@ class SmartOfficeEngine:
                 'keypoints': keypoints,
                 'identity': state.identity,
                 'identity_locked': state.identity_locked,
-                'using_phone': state.using_phone,
                 'track_age': age,  # Add age for frame presence check
                 'in_current_frame': (age == 0)  # Explicit flag: True only if detected in current frame
             })
 
-        # Annotate (phones already passed, no duplicate detection)
+        # Annotate frame
         fps = self.total_frames / (time.time() - self.start_time) if self.start_time else 0
         annotated = self.frame_annotator.annotate_frame(
             frame=frame,
             person_states=person_states,
-            phones=phones,
             fps=fps
         )
 
@@ -1673,6 +1265,21 @@ class SmartOfficeEngine:
     def _cleanup(self) -> None:
         """Clean up resources."""
         logger.info("Shutting down SmartOfficeEngine...")
+
+        # Phase 0: Log final baseline metrics
+        if self.global_track_manager and self.global_track_manager.enabled:
+            logger.info("=" * 80)
+            logger.info("PHASE 0 - FINAL BASELINE METRICS")
+            logger.info("=" * 80)
+            self.global_track_manager.log_baseline_summary()
+            metrics = self.global_track_manager.get_baseline_metrics()
+            logger.info(f"Total tracks created: {metrics['total_tracks_created']}")
+            logger.info(f"Total tracks removed: {metrics['total_tracks_removed']}")
+            logger.info(f"Average track duration: {metrics['avg_track_duration_sec']:.1f}s")
+            logger.info(f"Face visibility rate: {metrics['face_visibility_rate']:.1%}")
+            logger.info(f"Faces detected: {metrics['total_faces_detected']}")
+            logger.info(f"Faces not visible: {metrics['total_faces_not_visible']}")
+            logger.info("=" * 80)
 
         # Stop streams
         for stream in self.streams:

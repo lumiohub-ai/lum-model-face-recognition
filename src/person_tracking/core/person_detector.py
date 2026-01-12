@@ -161,7 +161,8 @@ class PersonDetector:
 
                     detections.append(detection)
 
-            logger.debug(f"Detected {len(detections)} person(s) in frame")
+            # Verbose logging disabled to reduce log noise
+            # logger.debug(f"Detected {len(detections)} person(s) in frame")
             return detections
 
         except Exception as e:

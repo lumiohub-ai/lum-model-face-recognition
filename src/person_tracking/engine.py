@@ -1,7 +1,7 @@
 """PersonTrackingEngine - Main orchestrator for the person tracking pipeline.
 
 This module coordinates all components for person detection, tracking,
-face recognition, and phone usage detection.
+and face recognition.
 """
 
 import time
@@ -17,11 +17,11 @@ from loguru import logger
 from .core.person_detector import PersonDetector
 from .core.person_tracker import PersonTracker
 from .core.track_manager import PersonTrackManager
-from .core.phone_detector import PhoneDetector
-from .core.phone_tracker import PhoneTracker
+# from .core.phone_detector import PhoneDetector  # Removed - not used in current version
+# from .core.phone_tracker import PhoneTracker  # Removed - not used in current version
 from .core.identity_manager import IdentityManager
-from .core.phone_usage_logic_v2 import PhoneUsageDetectorV2
-from .core.phone_usage_filter import PhoneUsageFilter
+# from .core.phone_usage_logic_v2 import PhoneUsageDetectorV2  # Removed - not used in current version
+# from .core.phone_usage_filter import PhoneUsageFilter  # Removed - not used in current version
 from .core.state_manager import PersonStateManager
 from .core.face_adapter import crop_person_roi
 
@@ -61,7 +61,6 @@ class PersonTrackingEngine:
     This class coordinates all components to process video frames and:
     - Detect and track persons
     - Recognize faces and lock identities
-    - Detect phone usage with temporal filtering
     - Emit events for state changes
     - Log results to CSV and API
     """
@@ -100,8 +99,6 @@ class PersonTrackingEngine:
         pc = self.camera_config.person_detection
         tc = self.camera_config.person_tracking
         fc = self.camera_config.face_recognition
-        phd = self.camera_config.phone_detection
-        phu = self.camera_config.phone_usage
 
         # Person Detection
         self.person_detector = PersonDetector(
@@ -154,23 +151,6 @@ class PersonTrackingEngine:
         else:
             self.pgvector_store = None
 
-        # Phone Detection
-        self.phone_detector = PhoneDetector(
-            model_size=phd.model_size,
-            confidence_threshold=phd.confidence_threshold
-        )
-        logger.info(f"Initialized PhoneDetector (YOLOv8{phd.model_size})")
-
-        # Phone Tracking
-        # Use shorter max_age for phones (they move faster than persons)
-        phone_max_age_frames = int(1.0 * target_fps)  # 1 second persistence
-        self.phone_tracker = PhoneTracker(
-            max_age=phone_max_age_frames,
-            min_hits=2,  # Lower threshold for phones
-            iou_threshold=0.25  # Slightly lower for smaller objects
-        )
-        logger.info(f"Initialized PhoneTracker (max_age=1s = {phone_max_age_frames} frames @ {target_fps} FPS)")
-
         # Identity Manager
         self.identity_manager = IdentityManager(
             identity_lock_frames=fc.identity_lock_frames,
@@ -179,22 +159,6 @@ class PersonTrackingEngine:
             similarity_threshold=fc.match_threshold
         )
         logger.info(f"Initialized IdentityManager (M={fc.identity_lock_frames}, consensus={fc.identity_consensus})")
-
-        # Phone Usage Detector (V2: overlap detection only)
-        self.phone_usage_logic = PhoneUsageDetectorV2(
-            hand_bbox_size=getattr(phu, 'hand_bbox_size', 100.0),
-            overlap_iou_threshold=getattr(phu, 'overlap_iou_threshold', 0.15),
-            min_keypoint_confidence=getattr(phu, 'min_keypoint_confidence', 0.4),
-            person_bbox_proximity_threshold=9999.0,  # Effectively disabled
-            wrist_distance_threshold=9999.0  # Effectively disabled - only use overlap checks
-        )
-        logger.info(f"Initialized PhoneUsageDetectorV2 (hand/arm overlap only, stricter thresholds)")
-
-        # Phone Usage Filter (temporal smoothing)
-        self.phone_usage_filter = PhoneUsageFilter(
-            stop_confirmation_frames=getattr(phu, 'stop_confirmation_frames', 10)
-        )
-        logger.info(f"Initialized PhoneUsageFilter (stop_delay={getattr(phu, 'stop_confirmation_frames', 10)} frames)")
 
         # State Manager
         self.state_manager = PersonStateManager(
@@ -240,16 +204,7 @@ class PersonTrackingEngine:
         # Step 2: Update tracker with new detections
         active_tracks, removed_tracks = self.person_tracker.update(detections, frame)
 
-        # Step 3: Detect phones once for the entire frame
-        phone_detections = self.phone_detector.detect_phones(frame)
-
-        # Step 3a: Track phones across frames for temporal persistence
-        tracked_phones, removed_phones = self.phone_tracker.update(phone_detections)
-
-        # Step 3b: Associate tracked phones to persons (one-to-one assignment)
-        phone_assignments = self._associate_phones_to_persons(tracked_phones, active_tracks)
-
-        # Step 3c: Process each active track
+        # Step 3: Process each active track
         for track in active_tracks:
             track_id = track['track_id']
             bbox = track['bbox']
@@ -294,54 +249,12 @@ class PersonTrackingEngine:
             if identity:
                 self.track_manager.set_track_identity(track_id, identity)
 
-            # Step 3d: Phone usage analysis
-            using_phone = False
-            phone_confidence = 0.0
-
-            # Check if this person has been assigned a phone
-            if track_id in phone_assignments:
-                spatial_result = phone_assignments[track_id]
-                # Update filter with positive result
-                self.phone_usage_filter.update(track_id, spatial_result)
-                using_phone = self.phone_usage_filter.is_using_phone(track_id)
-                if using_phone:
-                    phone_confidence = spatial_result['confidence']
-                    method = spatial_result['method']
-                    # Log phone usage with person identity
-                    person_name = identity if identity else f"Unknown (ID:{track_id})"
-                    logger.info(
-                        f"Phone usage detected: {person_name} | "
-                        f"confidence={phone_confidence:.2f} | method={method}"
-                    )
-            else:
-                # No phone assigned, update filter with negative result
-                no_phone_result = {
-                    'using_phone': False,
-                    'confidence': 0.0,
-                    'method': 'none',
-                    'details': {
-                        'hand_overlap': False,
-                        'arm_overlap': False,
-                        'hand_overlap_iou': 0.0,
-                        'arm_overlap_iou': 0.0
-                    }
-                }
-                self.phone_usage_filter.update(track_id, no_phone_result)
-                using_phone = self.phone_usage_filter.is_using_phone(track_id)
-                if using_phone:
-                    phone_confidence = self.phone_usage_filter.get_usage_confidence(track_id)
-
-            # Update track manager with phone usage
-            self.track_manager.set_track_phone_usage(track_id, using_phone)
-
             # Step 4: Update state manager
             self.state_manager.update_person(
                 track_id=track_id,
                 identity=identity,
                 identity_locked=identity_locked,
-                identity_confidence=identity_confidence,
-                using_phone=using_phone,
-                phone_confidence=phone_confidence
+                identity_confidence=identity_confidence
             )
 
         # Step 5: Handle removed tracks
@@ -358,8 +271,7 @@ class PersonTrackingEngine:
                     person_name=track_data.get('identity'),
                     first_seen=track_data.get('first_seen'),
                     last_seen=track_data.get('last_seen'),
-                    total_frames=track_data.get('total_frames', 0),
-                    total_phone_usage_seconds=track_data.get('phone_usage_duration', 0.0)
+                    total_frames=track_data.get('total_frames', 0)
                 )
 
             # Remove from state manager (emits person_exited event)
@@ -367,7 +279,6 @@ class PersonTrackingEngine:
 
             # Clean up other managers
             self.identity_manager.reset_track(track_id)
-            self.phone_usage_filter.reset_track(track_id)
 
         # Step 6: Process and log events
         events = self.state_manager.get_events(clear=True)
@@ -378,7 +289,6 @@ class PersonTrackingEngine:
                 track_id=event.track_id,
                 event_type=event.event_type.value,
                 person_name=event.identity,
-                using_phone=event.event_type.value in ['phone_usage_started', 'phone_usage_stopped'],
                 confidence=event.confidence or 0.0,
                 duration=event.duration,
                 timestamp=event.timestamp
@@ -393,7 +303,7 @@ class PersonTrackingEngine:
             )
 
         # Step 7: Annotate frame
-        annotated_frame = self._annotate_frame(frame, active_tracks, tracked_phones)
+        annotated_frame = self._annotate_frame(frame, active_tracks)
 
         # Update performance metrics
         processing_time = time.time() - start_time
@@ -401,94 +311,6 @@ class PersonTrackingEngine:
         self.frame_count += 1
 
         return annotated_frame, [e.to_dict() for e in events]
-
-    def _associate_phones_to_persons(
-        self,
-        tracked_phones: List[Dict],
-        active_tracks: List[Dict]
-    ) -> Dict[int, Dict]:
-        """
-        Associate tracked phones to persons using one-to-one assignment.
-
-        Each phone can only be assigned to one person (the best match).
-        Uses greedy assignment based on confidence scores.
-        Now works with tracked phones that have phone_track_id and temporal persistence.
-
-        Args:
-            tracked_phones: List of tracked phones (with phone_track_id)
-            active_tracks: List of active person tracks
-
-        Returns:
-            Dictionary mapping person track_id to spatial_result for assigned phones
-        """
-        if not tracked_phones or not active_tracks:
-            return {}
-
-        # Build list of all possible (track_id, phone_track_id, spatial_result) tuples
-        candidates = []
-
-        for track in active_tracks:
-            person_track_id = track['track_id']
-            keypoints = track.get('keypoints')
-
-            if keypoints is None:
-                continue
-
-            # Calculate person height for pixel-to-meter conversion
-            person_height = self.person_detector.calculate_person_height(keypoints)
-
-            for phone in tracked_phones:
-                phone_bbox = phone['bbox']
-                phone_track_id = phone.get('phone_track_id')
-                is_predicted = phone.get('is_predicted', False)
-
-                # Calculate spatial score using V2 detector
-                spatial_result = self.phone_usage_logic.detect_phone_usage(
-                    person_keypoints=keypoints,
-                    phone_bbox=phone_bbox,
-                    person_bbox=track.get('bbox')
-                )
-
-                # Only consider if spatial checks pass
-                if spatial_result['using_phone']:
-                    # Add phone tracking metadata
-                    spatial_result['phone_track_id'] = phone_track_id
-                    spatial_result['is_predicted'] = is_predicted
-                    spatial_result['track_age'] = phone.get('track_age', 0)
-
-                    candidates.append({
-                        'person_track_id': person_track_id,
-                        'phone_track_id': phone_track_id,
-                        'confidence': spatial_result['confidence'],
-                        'spatial_result': spatial_result
-                    })
-
-        # Sort candidates by confidence (highest first)
-        candidates.sort(key=lambda x: x['confidence'], reverse=True)
-
-        # Greedy assignment: assign phones to persons in order of confidence
-        assigned_phones = set()
-        assigned_persons = {}
-
-        for candidate in candidates:
-            phone_track_id = candidate['phone_track_id']
-            person_track_id = candidate['person_track_id']
-
-            # Skip if phone or person already assigned
-            if phone_track_id in assigned_phones or person_track_id in assigned_persons:
-                continue
-
-            # Assign this phone to this person
-            assigned_persons[person_track_id] = candidate['spatial_result']
-            assigned_phones.add(phone_track_id)
-
-            logger.debug(
-                f"Phone track {phone_track_id} assigned to person {person_track_id} "
-                f"(conf={candidate['confidence']:.2f}, "
-                f"age={candidate['spatial_result'].get('track_age', 0)})"
-            )
-
-        return assigned_persons
 
     def _recognize_face_in_person(
         self,
@@ -583,15 +405,13 @@ class PersonTrackingEngine:
     def _annotate_frame(
         self,
         frame: np.ndarray,
-        tracks: List[Dict],
-        phones: List[Dict]
+        tracks: List[Dict]
     ) -> np.ndarray:
         """Annotate frame with detection results.
 
         Args:
             frame: Input frame
             tracks: List of active tracks
-            phones: List of detected phones
 
         Returns:
             Annotated frame
@@ -615,18 +435,13 @@ class PersonTrackingEngine:
             if state:
                 identity = state.identity
                 identity_locked = state.identity_locked
-                using_phone = state.using_phone
             else:
                 identity = None
                 identity_locked = False
-                using_phone = False
 
-            # Determine box color and thickness based on state
-            # Priority: Phone usage (red, thick) > Unrecognized (yellow) > Recognized (green)
-            if using_phone:
-                color = (0, 0, 255)  # Red (BGR) for phone usage
-                thickness = 4  # Thicker border for phone users
-            elif not identity:
+            # Determine box color based on state
+            # Unrecognized (yellow) vs Recognized (green)
+            if not identity:
                 color = (0, 255, 255)  # Yellow (BGR) for unrecognized users
                 thickness = 2
             else:
@@ -637,19 +452,8 @@ class PersonTrackingEngine:
             x1, y1, x2, y2 = map(int, bbox[:4])
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
 
-            # Draw label (identity only, no track ID)
-            label_parts = []
-            if identity:
-                # Show friendly message based on phone usage
-                if using_phone:
-                    label_parts.append(f"{identity} is using phone")
-                else:
-                    label_parts.append(identity)
-            elif using_phone:
-                # Show phone usage even without identity
-                label_parts.append("PHONE")
-
-            label = " | ".join(label_parts) if label_parts else None
+            # Draw label (identity only)
+            label = identity if identity else None
 
             # Draw label only if there's content
             if label:
@@ -773,7 +577,6 @@ class PersonTrackingEngine:
             'tracker_stats': self.person_tracker.get_statistics(),
             'track_manager_stats': self.track_manager.get_statistics(),
             'identity_manager_stats': self.identity_manager.get_statistics(),
-            'phone_filter_stats': self.phone_usage_filter.get_statistics(),
             'state_manager_stats': self.state_manager.get_statistics()
         }
 
@@ -793,7 +596,6 @@ class PersonTrackingEngine:
         self.person_tracker.reset()
         self.track_manager.reset()
         self.identity_manager.reset()
-        self.phone_usage_filter.reset()
         self.state_manager.reset()
 
         self.frame_count = 0

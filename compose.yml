@@ -19,7 +19,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5434}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition} -d ${POSTGRES_DB:-face_embeddings}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -69,6 +69,7 @@ services:
 
       # Database configuration
       USE_PGVECTOR: ${USE_PGVECTOR:-true}
+      USE_API_FOR_CAMERAS: ${USE_API_FOR_CAMERAS:-false}
       POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
       POSTGRES_PORT: ${POSTGRES_PORT:-5434}
       POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
@@ -80,7 +81,7 @@ services:
       REDIS_PORT: ${REDIS_PORT:-6379}
 
       # Logging
-      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
       # Backend API (optional)
       SO_BACKEND_API_URL: ${SO_BACKEND_API_URL:-}
@@ -96,6 +97,10 @@ services:
       REQUESTS_CA_BUNDLE: ""
       CURL_CA_BUNDLE: ""
 
+      # Suppress FFmpeg verbose logging
+      OPENCV_FFMPEG_LOGLEVEL: "-8"
+      AV_LOG_FORCE_NOCOLOR: "1"
+
       # Performance
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
@@ -110,10 +115,10 @@ services:
       - ./logs/person-tracking:/var/log/face-recognition
       # Credentials (if needed)
       - ./credentials:/app/face-recognition/credentials
-      # Model cache (persist downloaded models)
-      - model-cache:/root/.cache
-      # InsightFace models (pre-downloaded to avoid SSL errors)
-      - ./insightface_models/buffalo_l:/home/fr-user/.insightface/models/buffalo_l:ro
+      # Model cache in data directory (fr-user has write access)
+      - ./volumes/models/insightface:/home/fr-user/.insightface
+      # InsightFace models will be downloaded automatically on first run
+      # - ./insightface_models/buffalo_l:/home/fr-user/.insightface/models/buffalo_l:ro
     depends_on:
       postgres:
         condition: service_healthy

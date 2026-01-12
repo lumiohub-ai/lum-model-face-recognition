@@ -3,7 +3,6 @@
 import os
 import cv2
 import threading
-import queue
 import time
 import logging
 import gc
@@ -27,18 +26,26 @@ class StreamHandler:
         self.is_video = self.is_video_file(src)
         self.logger = logger
 
-        # Configure RTSP options for better compatibility
+        # Configure RTSP options for better compatibility and smooth playback
         if isinstance(src, str) and src.startswith('rtsp://'):
+            # Set FFmpeg options BEFORE creating VideoCapture
+            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+                'rtsp_transport;tcp|'        # Use TCP for reliability
+                'buffer_size;1024000|'       # 1MB buffer for network stability
+                'max_delay;500000|'          # Max 0.5s delay
+                'fflags;nobuffer|'           # Minimize buffering for real-time
+                'flags;low_delay'            # Low latency mode
+            )
             self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
-            # Set RTSP transport to TCP (more reliable than UDP)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            # Additional FFmpeg options for RTSP
-            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|rtsp_flags;prefer_tcp'
+            # Set buffer size: 3 frames is optimal for real-time playback
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
         else:
             self.cap = cv2.VideoCapture(src)
         self.stopped = False
         self.lock = threading.Lock()
-        self.frame_queue = queue.Queue(maxsize=30)  # Buffer up to 30 frames to avoid dropping
+        # NO QUEUE - use latest frame only to prevent jitter and lag
+        self.latest_frame = None
+        self.latest_ret = False
         self.reconnect_delay = 1  # Initial delay between reconnection attempts
         self.max_delay = 30  # Maximum delay between reconnection attempts
         self.last_gc_time = time.time()
@@ -81,9 +88,16 @@ class StreamHandler:
         while True:  # Infinite reconnection loop
             # Configure RTSP options for better compatibility
             if isinstance(self.src, str) and self.src.startswith('rtsp://'):
+                # Set same FFmpeg options as initial connection
+                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+                    'rtsp_transport;tcp|'
+                    'buffer_size;1024000|'
+                    'max_delay;500000|'
+                    'fflags;nobuffer|'
+                    'flags;low_delay'
+                )
                 self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|rtsp_flags;prefer_tcp'
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
             else:
                 self.cap = cv2.VideoCapture(self.src)
             ret, _ = self.cap.read()
@@ -144,13 +158,11 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
 
-            # Add frame to queue (block if full to ensure we don't skip frames)
-            try:
-                self.frame_queue.put((ret, frame), timeout=1.0)
-            except queue.Full:
-                # If queue is full, log warning but continue
-                # This means processing is slower than capture rate
-                self.logger.warning("Frame queue full - processing may be too slow")
+            # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
+            # This prevents jitter by ensuring we never show old frames
+            with self.lock:
+                self.latest_ret = ret
+                self.latest_frame = frame
 
             # Periodically run garbage collection
             current_time = time.time()
@@ -174,15 +186,12 @@ class StreamHandler:
 
             return ret, frame
 
-        try:
-            if not self.frame_queue.empty():
-                self.ret, self.frame = self.frame_queue.get(timeout=0.5)
-            # If queue is empty but we have a last valid frame, return it
-            return self.ret, self.frame
-        except queue.Empty:
-            # Queue is empty and no frame was received in time
-            if not self.stopped:
-                self.logger.warning("No frame available in queue")
+        # LATEST FRAME ONLY: Return the most recent frame from background thread
+        # No queue, no old frames, no jitter
+        with self.lock:
+            if self.latest_frame is not None:
+                self.ret = self.latest_ret
+                self.frame = self.latest_frame
             return self.ret, self.frame
 
     def get_first_frame(self) -> Any:
@@ -199,13 +208,6 @@ class StreamHandler:
             if self.stopped:
                 return
             self.stopped = True
-
-        # Clear the queue
-        try:
-            while not self.frame_queue.empty():
-                self.frame_queue.get_nowait()
-        except queue.Empty:
-            pass
 
         if self.thread is not None:
             self.thread.join()

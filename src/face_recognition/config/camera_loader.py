@@ -130,7 +130,7 @@ def load_cameras_from_env() -> List[Dict[str, Any]]:
             'camera_name': 'Entry Camera',
             'camera_type': 'IN',
             'video_path': os.getenv('HB_IN'),
-            'application': 'FaceRecognision',
+            'application': ['attendance'],
             'match_threshold': float(os.getenv('MATCH_THRESHOLD', '0.3')),
             'roi': None,
             'line_points': None
@@ -143,7 +143,7 @@ def load_cameras_from_env() -> List[Dict[str, Any]]:
             'camera_name': 'Exit Camera',
             'camera_type': 'OUT',
             'video_path': os.getenv('HB_OUT'),
-            'application': 'FaceRecognision',
+            'application': ['attendance'],
             'match_threshold': float(os.getenv('MATCH_THRESHOLD', '0.3')),
             'roi': None,
             'line_points': None
@@ -156,7 +156,7 @@ def load_cameras_from_env() -> List[Dict[str, Any]]:
             'camera_name': 'Management Camera',
             'camera_type': 'MANAGEMENT',
             'video_path': os.getenv('HB_IN_MANAGEMENT'),
-            'application': 'FaceRecognision',
+            'application': ['attendance'],
             'match_threshold': float(os.getenv('MATCH_THRESHOLD', '0.3')),
             'roi': None,
             'line_points': None
@@ -231,7 +231,7 @@ def convert_to_smart_office_format(cameras: List[Dict[str, Any]]) -> List[Dict[s
             'camera_name': cam.get('camera_name', 'Unknown'),
             'cam_type': cam.get('camera_type', 'IN').upper(),
             'stream_url': cam.get('video_path', ''),
-            'application': cam.get('application', 'FaceRecognision'),
+            'application': cam.get('application', ['attendance']),
             'match_threshold': float(cam.get('match_threshold', 0.3)),
             'roi': cam.get('roi'),
             'line_points': cam.get('line_points')

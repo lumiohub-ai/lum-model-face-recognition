@@ -1,6 +1,5 @@
-# Person Tracking & Phone Usage Detection - Configuration
-# This configuration file defines settings for person tracking, face recognition,
-# and phone usage detection.
+# Person Tracking & Face Recognition - Configuration
+# This configuration file defines settings for person tracking and face recognition.
 
 # Project settings
 project_name: "person_tracking"
@@ -32,21 +31,6 @@ cameras:
       identity_consensus: 0.60        # 60% votes needed (3/5)
       min_window_duration_ms: 333     # ~5 frames at 15 FPS
 
-    # Phone Detection (YOLOv8)
-    phone_detection:
-      model_size: "n"            # n/s/m/l/x (n=nano, fastest)
-      confidence_threshold: 0.45  # 0.0-1.0 (increased to reduce false phone detections)
-
-    # Phone Usage Detection (HAND OVERLAP ONLY - Strict)
-    phone_usage:
-      # Detection sensitivity - Phone must overlap with at least one HAND
-      hand_bbox_size: 100              # pixels - bounding box around wrist for overlap detection
-      overlap_iou_threshold: 0.15      # IoU threshold (0.15 = 15% overlap required, strict)
-      min_keypoint_confidence: 0.4     # minimum wrist keypoint confidence
-
-      # Temporal filtering
-      stop_confirmation_frames: 10     # frames without phone before stopping detection
-
     # Performance
     performance:
       target_fps: 17              # target frames per second
@@ -56,9 +40,7 @@ cameras:
     # Storage
     storage:
       save_annotated_frames: false
-      save_phone_usage_clips: true
       output_dir: "volumes/storage/person-tracking"
-      clip_duration_seconds: 10
 
 # Database configuration (shared with face recognition service)
 database:

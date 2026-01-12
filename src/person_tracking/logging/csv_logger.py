@@ -1,7 +1,7 @@
 """
 CSV Logger for Person Tracking Events.
 
-Logs person tracking and phone usage events to CSV files for:
+Logs person tracking events to CSV files for:
 - Offline analysis
 - Auditing
 - Compliance reporting
@@ -56,7 +56,6 @@ class CSVLogger:
             'track_id',
             'event_type',
             'person_name',
-            'using_phone',
             'confidence',
             'duration_seconds',
             'camera_id'
@@ -68,7 +67,6 @@ class CSVLogger:
             'first_seen',
             'last_seen',
             'total_frames',
-            'total_phone_usage_seconds',
             'camera_id'
         ]
 
@@ -103,7 +101,6 @@ class CSVLogger:
         track_id: int,
         event_type: str,
         person_name: Optional[str] = None,
-        using_phone: Optional[bool] = None,
         confidence: Optional[float] = None,
         duration: Optional[float] = None,
         timestamp: Optional[datetime] = None
@@ -113,11 +110,10 @@ class CSVLogger:
 
         Args:
             track_id: Track identifier
-            event_type: Event type (e.g., 'phone_usage_started')
+            event_type: Event type (e.g., 'identity_locked')
             person_name: Person name (if recognized)
-            using_phone: Phone usage status
             confidence: Confidence score
-            duration: Duration in seconds (for phone usage events)
+            duration: Duration in seconds
             timestamp: Event timestamp (defaults to now)
         """
         if timestamp is None:
@@ -128,7 +124,6 @@ class CSVLogger:
             'track_id': track_id,
             'event_type': event_type,
             'person_name': person_name or '',
-            'using_phone': using_phone if using_phone is not None else '',
             'confidence': f"{confidence:.3f}" if confidence is not None else '',
             'duration_seconds': f"{duration:.2f}" if duration is not None else '',
             'camera_id': self.camera_id
@@ -157,8 +152,7 @@ class CSVLogger:
         person_name: Optional[str],
         first_seen: datetime,
         last_seen: datetime,
-        total_frames: int,
-        total_phone_usage_seconds: float
+        total_frames: int
     ) -> None:
         """
         Log summary for a person (when they exit frame).
@@ -169,7 +163,6 @@ class CSVLogger:
             first_seen: First seen timestamp
             last_seen: Last seen timestamp
             total_frames: Total number of frames tracked
-            total_phone_usage_seconds: Total phone usage time
         """
         summary_data = {
             'track_id': track_id,
@@ -177,7 +170,6 @@ class CSVLogger:
             'first_seen': first_seen.isoformat(),
             'last_seen': last_seen.isoformat(),
             'total_frames': total_frames,
-            'total_phone_usage_seconds': f"{total_phone_usage_seconds:.2f}",
             'camera_id': self.camera_id
         }
 
@@ -189,8 +181,7 @@ class CSVLogger:
             logger.debug(
                 f"Summary logged: Track={track_id} | "
                 f"Person={person_name or 'Unknown'} | "
-                f"Frames={total_frames} | "
-                f"Phone={total_phone_usage_seconds:.1f}s"
+                f"Frames={total_frames}"
             )
 
         except Exception as e:
@@ -208,7 +199,6 @@ class CSVLogger:
                 track_id=event.get('track_id'),
                 event_type=event.get('event_type'),
                 person_name=event.get('person_name'),
-                using_phone=event.get('using_phone'),
                 confidence=event.get('confidence'),
                 duration=event.get('duration'),
                 timestamp=event.get('timestamp')

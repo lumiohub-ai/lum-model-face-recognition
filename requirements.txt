@@ -8,7 +8,7 @@ prettytable~=3.12.0
 # opencv-python-headless~=4.12.0.88  # Removed: comes with ultralytics (opencv-python)
 
 # Person Tracking (YOLOv8)
-# ultralytics>=8.0.0  # Removed: installed from wheels separately
+ultralytics>=8.0.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 # scipy>=1.10.0  # Removed: comes with ultralytics
@@ -27,7 +27,7 @@ ftfy~=6.3.1
 regex~=2024.11.6
 lap~=0.5.12
 filterpy~=1.4.5
-# onnxruntime-gpu~=1.21.0  # Removed: installed from wheels separately
+onnxruntime-gpu~=1.21.0
 dotenv~=0.9.9
 gcsfs~=2025.3.2
 # API server dependencies

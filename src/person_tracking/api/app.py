@@ -2,7 +2,7 @@
 FastAPI Application for Person Tracking (Mock Implementation).
 
 Provides REST API endpoints for:
-- Logging phone usage events
+- Logging person tracking events
 - Querying person tracking status
 - Health checks
 
@@ -35,7 +35,6 @@ class EventCreate(BaseModel):
     camera_id: int = Field(..., description="Camera ID")
     event_type: str = Field(..., description="Event type")
     person_name: Optional[str] = Field(None, description="Person name (if recognized)")
-    using_phone: Optional[bool] = Field(None, description="Phone usage status")
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confidence score")
     duration: Optional[float] = Field(None, ge=0.0, description="Duration in seconds")
     timestamp: Optional[datetime] = Field(None, description="Event timestamp")
@@ -46,9 +45,8 @@ class EventCreate(BaseModel):
             "example": {
                 "track_id": 1,
                 "camera_id": 1,
-                "event_type": "phone_usage_started",
+                "event_type": "identity_locked",
                 "person_name": "John Doe",
-                "using_phone": True,
                 "confidence": 0.95,
                 "timestamp": "2025-11-24T10:30:00"
             }
@@ -62,9 +60,6 @@ class PersonStatus(BaseModel):
     identity: Optional[str] = None
     identity_locked: bool = False
     identity_confidence: float = 0.0
-    using_phone: bool = False
-    phone_confidence: float = 0.0
-    phone_usage_duration: float = 0.0
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     total_frames: int = 0
@@ -75,7 +70,6 @@ class StatusResponse(BaseModel):
     camera_id: int
     total_persons: int
     identified_persons: int
-    using_phone_count: int
     persons: List[PersonStatus]
 
 
@@ -142,7 +136,6 @@ async def create_event(event: EventCreate):
         f"[MOCK API] Event received: {event.event_type} | "
         f"Track={event.track_id} | "
         f"Person={event.person_name or 'Unknown'} | "
-        f"Phone={event.using_phone} | "
         f"Confidence={event.confidence}"
     )
 
@@ -159,13 +152,10 @@ async def create_event(event: EventCreate):
             'track_id': event.track_id,
             'camera_id': event.camera_id,
             'identity': event.person_name,
-            'using_phone': event.using_phone or False,
             'events': []
         }
 
     mock_person_states[event.track_id]['events'].append(event.event_type)
-    if event.using_phone is not None:
-        mock_person_states[event.track_id]['using_phone'] = event.using_phone
     if event.person_name:
         mock_person_states[event.track_id]['identity'] = event.person_name
 
@@ -201,19 +191,16 @@ async def get_status(camera_id: Optional[int] = None):
             camera_id=p.get('camera_id', 1),
             identity=p.get('identity'),
             identity_locked=p.get('identity') is not None,
-            using_phone=p.get('using_phone', False),
             total_frames=len(p.get('events', []))
         ))
 
     # Calculate stats
     identified_count = sum(1 for p in person_statuses if p.identity is not None)
-    using_phone_count = sum(1 for p in person_statuses if p.using_phone)
 
     return StatusResponse(
         camera_id=camera_id or 0,
         total_persons=len(person_statuses),
         identified_persons=identified_count,
-        using_phone_count=using_phone_count,
         persons=person_statuses
     )
 

@@ -79,7 +79,6 @@ class FrameAnnotator:
             'locked': (0, 255, 0),       # Green - locked identity
             'tentative': (0, 255, 255),  # Yellow - tentative identity
             'unknown': (0, 0, 255),      # Red - unknown
-            'phone': (255, 0, 0),        # Blue - phone
             'text': (255, 255, 255),     # White - text
             'background': (0, 0, 0),     # Black - label background
         }
@@ -88,7 +87,6 @@ class FrameAnnotator:
         self,
         frame: np.ndarray,
         person_states: List[Dict],
-        phones: Optional[List[Dict]] = None,
         fps: float = 0.0,
         show_stats: bool = True
     ) -> np.ndarray:
@@ -97,7 +95,6 @@ class FrameAnnotator:
         Args:
             frame: Input frame (BGR format)
             person_states: List of person state dictionaries
-            phones: List of detected phone dictionaries
             fps: Current FPS to display
             show_stats: Whether to show statistics overlay
 
@@ -105,11 +102,6 @@ class FrameAnnotator:
             Annotated frame
         """
         annotated = frame.copy()
-
-        # Draw phones first (behind persons)
-        if phones:
-            for phone in phones:
-                self.draw_phone(annotated, phone)
 
         # Draw each person
         for state in person_states:
@@ -123,8 +115,7 @@ class FrameAnnotator:
             self.draw_stats(
                 annotated,
                 fps=fps,
-                num_persons=len(person_states),
-                num_phones=len(phones) if phones else 0
+                num_persons=len(person_states)
             )
 
         return annotated
@@ -144,7 +135,6 @@ class FrameAnnotator:
                 - keypoints: np.ndarray (17, 3) or None
                 - identity: str or None
                 - identity_locked: bool
-                - using_phone: bool
                 - trajectory: list of (x, y) points or None
                 - track_age: int (0 if in current frame, >0 if aging)
                 - in_current_frame: bool (True if detected in current frame)
@@ -154,7 +144,6 @@ class FrameAnnotator:
         keypoints = state.get('keypoints')
         identity = state.get('identity')
         identity_locked = state.get('identity_locked', False)
-        using_phone = state.get('using_phone', False)
         trajectory = state.get('trajectory')
 
         # Safety check: skip if track_age > 0 (person not in current frame)
@@ -162,11 +151,9 @@ class FrameAnnotator:
         if track_age > 0:
             return  # Don't draw bbox for aging tracks
 
-        # Determine color based on phone usage FIRST, then identity state
-        # Priority: Phone usage > Identity locked > Tentative identity > Unknown
-        if using_phone:
-            color = (0, 255, 255)  # Yellow - phone usage (highest priority)
-        elif identity_locked:
+        # Determine color based on identity state
+        # Priority: Identity locked > Tentative identity > Unknown
+        if identity_locked:
             color = self.colors['locked']  # Green - locked identity
         elif identity:
             color = (255, 0, 255)  # Magenta - tentative identity (changed from yellow)
@@ -192,7 +179,6 @@ class FrameAnnotator:
             track_id,
             identity,
             identity_locked,
-            using_phone,
             color
         )
 
@@ -281,7 +267,6 @@ class FrameAnnotator:
         track_id: int,
         identity: Optional[str],
         identity_locked: bool,
-        using_phone: bool,
         color: Tuple[int, int, int]
     ) -> None:
         """Draw label above person bounding box.
@@ -292,7 +277,6 @@ class FrameAnnotator:
             track_id: Track ID
             identity: Person identity or None
             identity_locked: Whether identity is locked
-            using_phone: Whether person is using phone
             color: Background color
         """
         x1, y1 = int(bbox[0]), int(bbox[1])
@@ -301,18 +285,11 @@ class FrameAnnotator:
         parts = [f"ID:{track_id}"]
 
         if identity:
-            # Show friendly message based on phone usage
-            if using_phone:
-                parts.append(f"{identity} is using phone")
-            else:
-                parts.append(identity)
+            parts.append(identity)
 
             # Add lock status indicator only if not locked (for debugging)
             if not identity_locked:
                 parts.append("?")
-        elif using_phone:
-            # Show phone usage even without identity
-            parts.append("PHONE")
 
         label = " | ".join(parts)
 
@@ -374,49 +351,11 @@ class FrameAnnotator:
 
             cv2.line(frame, pt1, pt2, color, thickness)
 
-    def draw_phone(
-        self,
-        frame: np.ndarray,
-        phone: Dict[str, Any]
-    ) -> None:
-        """Draw phone detection box.
-
-        Args:
-            frame: Frame to draw on
-            phone: Phone dictionary with 'bbox' key
-        """
-        bbox = phone.get('bbox', [0, 0, 0, 0])
-        confidence = phone.get('confidence', 0.0)
-
-        x1, y1, x2, y2 = map(int, bbox[:4])
-
-        # Draw box
-        cv2.rectangle(
-            frame,
-            (x1, y1),
-            (x2, y2),
-            self.colors['phone'],
-            self.line_thickness
-        )
-
-        # Draw label
-        label = f"Phone {confidence:.2f}"
-        cv2.putText(
-            frame,
-            label,
-            (x1, y1 - 5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            self.font_scale * 0.8,
-            self.colors['phone'],
-            1
-        )
-
     def draw_stats(
         self,
         frame: np.ndarray,
         fps: float,
         num_persons: int,
-        num_phones: int,
         position: str = 'top_left'
     ) -> None:
         """Draw statistics overlay on frame.
@@ -425,13 +364,11 @@ class FrameAnnotator:
             frame: Frame to draw on
             fps: Current FPS
             num_persons: Number of tracked persons
-            num_phones: Number of detected phones
             position: Position of overlay ('top_left', 'top_right')
         """
         lines = [
             f"FPS: {fps:.1f}",
-            f"Persons: {num_persons}",
-            f"Phones: {num_phones}"
+            f"Persons: {num_persons}"
         ]
 
         # Calculate position

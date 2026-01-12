@@ -563,7 +563,8 @@ class APIClient:
 
         Args:
             application: Optional filter for camera application type
-                        (e.g., 'FaceRecognision')
+                        (e.g., 'attendance', 'unrecognized', 'activity')
+                        Note: Camera application field is a JSONB array
 
         Returns:
             List of camera configuration dictionaries
@@ -585,11 +586,22 @@ class APIClient:
             cameras = response.json()
 
             # Filter by application if specified
+            # Application field is a JSONB array: ["attendance", "unrecognized", "activity"]
             if application:
-                cameras = [
-                    cam for cam in cameras
-                    if cam.get('application') == application
-                ]
+                filtered_cameras = []
+                for cam in cameras:
+                    cam_apps = cam.get('application', [])
+                    # Handle both array and legacy string format
+                    if isinstance(cam_apps, list):
+                        if application in cam_apps:
+                            filtered_cameras.append(cam)
+                    elif isinstance(cam_apps, str):
+                        # Legacy format or single string
+                        if cam_apps == application:
+                            filtered_cameras.append(cam)
+                cameras = filtered_cameras
+
+                logger.info(f"Filtered {len(cameras)} camera(s) with application='{application}'")
 
             return cameras
 
@@ -600,7 +612,7 @@ class APIClient:
     def get_face_recognition_camera_configs(self) -> Dict[str, List[Any]]:
         """Fetch and parse camera configurations for face recognition.
 
-        Retrieves cameras with application='FaceRecognision' and parses them
+        Retrieves cameras with 'attendance' application enabled and parses them
         into the format required by HBFace initialization.
 
         Returns:
@@ -614,13 +626,13 @@ class APIClient:
             - line_points: List of virtual line points (or None if no lines)
 
         Raises:
-            ValueError: If no cameras found with application='FaceRecognision'
+            ValueError: If no cameras found with 'attendance' application
         """
-        # Fetch cameras with application='FaceRecognision'
-        cameras = self.get_cameras(application='FaceRecognision')
+        # Fetch cameras with 'attendance' application enabled
+        cameras = self.get_cameras(application='attendance')
 
         if not cameras:
-            raise ValueError("No cameras found with application='FaceRecognision'")
+            raise ValueError("No cameras found with 'attendance' application enabled")
 
         # Parse camera configs into HBFace parameters
         cam_types = []

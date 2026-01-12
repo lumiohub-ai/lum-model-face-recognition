@@ -101,8 +101,8 @@ def main():
         password=os.getenv("SA_PASSWORD"),
         client_slug=os.getenv("HB_CLIENTSLUG"),
         api_host=os.getenv("API_HOST"),
-        # Fetch cameras for all application types
-        applications=['FaceRecognision', 'PhoneUsageDetection', 'IdleDetection', 'CombinedDetection'],
+        # Fetch cameras with attendance application enabled
+        applications=['attendance'],
         # Load settings from config file
         output_dir=config.get('output_dir', 'volumes/storage/person-tracking'),
         save_video=config.get('save_video', False),

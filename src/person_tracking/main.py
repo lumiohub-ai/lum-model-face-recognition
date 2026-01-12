@@ -2,7 +2,7 @@
 """Main entry point for the Person Tracking system.
 
 This script initializes and runs the person tracking pipeline for
-detecting persons, recognizing faces, and detecting phone usage.
+detecting persons and recognizing faces.
 
 Configuration is loaded from:
 1. YAML config file: configs/person_tracking/config.yaml
@@ -122,7 +122,6 @@ class PersonTrackingApp:
                 logger.info(f"Initializing Camera {camera_id}: {camera_config.camera_name}")
                 logger.info(f"  Source: {video_path}")
                 logger.info(f"  Person Model: YOLOv8{camera_config.person_detection.model_size}-pose")
-                logger.info(f"  Phone Model: YOLOv8{camera_config.phone_detection.model_size}")
 
                 # Create stream handler
                 stream = StreamHandler(
@@ -140,7 +139,7 @@ class PersonTrackingApp:
                 self.engines[camera_id] = engine
 
                 # Initialize video writer if save_video is enabled
-                if camera_config.storage.save_phone_usage_clips:
+                if camera_config.storage.save_annotated_frames:
                     output_dir = Path(camera_config.storage.output_dir) / self.config.client_slug / f"camera_{camera_id}"
                     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -289,7 +288,7 @@ class PersonTrackingApp:
         identity = event.get('identity', 'Unknown')
         confidence = event.get('confidence', 0.0)
 
-        if event_type in ['identity_locked', 'phone_usage_started', 'phone_usage_stopped']:
+        if event_type in ['identity_locked']:
             logger.info(
                 f"[Camera {camera_id}] EVENT: {event_type} | "
                 f"Track: {track_id} | "
