@@ -152,14 +152,19 @@ class CameraEngine:
         and passed in __init__, not created here.
         """
         # Person Tracking (per-camera for isolated state)
+        # BoT-SORT uses external detections from PersonDetector (single YOLO pass)
         self.person_tracker = PersonTracker(
-            tracker_type='botsort',
-            max_age=60,  # Reduced from 60 to quickly remove ghost bboxes (~1 sec at 30fps)
-            min_hits=3,
-            iou_threshold=0.3,  # Lower threshold for better re-identification when person returns
+            tracker_type='botsort',  # Use BoT-SORT (IoU + Kalman filter)
+            max_age=60,  # Keep tracks alive for ~2 seconds at 30fps
+            min_hits=3,  # Require 3 consecutive detections before confirming track
+            iou_threshold=0.8,  # IoU threshold for matching (BoT-SORT default)
             global_id_generator=self.global_id_generator,  # Enable global track IDs
             global_track_manager=self.global_track_manager,  # Phase 0: instrumentation
-            camera_id=self.camera_id
+            camera_id=self.camera_id,
+            confidence_threshold=self.person_detector.confidence_threshold,
+            with_reid=False,  # Disable ReID (falls back to IoU + Kalman - still better than simple IoU)
+            frame_rate=30,  # Assume 30 FPS for tracker buffer calculation
+            device='cuda:0' if self.person_detector.device == 'cuda' else 'cpu'
         )
 
         # Track Manager
@@ -741,6 +746,7 @@ class SmartOfficeEngine:
                          Default: ['attendance']
                          Options: 'attendance', 'unrecognized', 'activity'
             **kwargs: Additional configuration
+                     - person_detection_threshold: Person detection confidence (default: 0.5)
         """
         self.client_slug = client_slug
         self.api_host = api_host
@@ -749,6 +755,9 @@ class SmartOfficeEngine:
         # Store credentials for entry logger
         self._email = email
         self._password = password
+
+        # Store configuration
+        self.config = kwargs
 
         # Initialize API client
         self.api_client = APIClient(
@@ -776,7 +785,6 @@ class SmartOfficeEngine:
         self.global_id_generator = GlobalTrackIDGenerator(start_id=1)
         logger.info("Global track ID generator enabled - track IDs will be unique across all cameras")
 
-        # Phase 0: Initialize GlobalTrackManager (stub for instrumentation)
         self.global_track_manager = GlobalTrackManager()
         if self.global_track_manager.enabled:
             logger.info("GlobalTrackManager enabled - collecting baseline metrics")
@@ -786,11 +794,15 @@ class SmartOfficeEngine:
         self.face_detector = FaceDetector(gpu_id=0, model_name='buffalo_l')
         self.face_recognizer = self._init_face_recognizer()
 
-        # Shared person detector (YOLOv8-Pose)
+        # Shared person detector (YOLOv8 - faster than YOLOv8-Pose)
+        # Set use_pose=True if you want skeleton visualization (slower)
+        person_conf_threshold = self.config.get('person_detection_threshold', 0.5)
         self.shared_person_detector = PersonDetector(
             model_size='s',
-            confidence_threshold=0.5
+            confidence_threshold=person_conf_threshold,
+            use_pose=False  # False = YOLOv8 (faster), True = YOLOv8-Pose (skeleton viz)
         )
+        logger.info(f"Person detection threshold: {person_conf_threshold}")
 
         # Startup embedding sync - always runs to ensure database is up to date
         self._sync_embeddings_on_startup()
@@ -1027,14 +1039,28 @@ class SmartOfficeEngine:
         """Initialize video writers for saving output."""
         from datetime import datetime
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        os.makedirs(output_dir, exist_ok=True)
+        now = datetime.now()
+        date = now.strftime("%Y%m%d")
+        time = now.strftime("%H%M%S")
+
+        # Create output directory and check permissions
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            # Test if directory is writable
+            test_file = os.path.join(output_dir, '.write_test')
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+            logger.info(f"Output directory ready: {output_dir}")
+        except Exception as e:
+            logger.error(f"❌ Output directory not writable: {output_dir} - {e}")
+            return
 
         for config in self.camera_configs:
             camera_name = config['camera_name'].replace(' ', '_')
-            camera_id = config.get('camera_id', 'unknown')
-            # Use XVID codec with .avi format (no ffmpeg required)
-            filename = f"{output_dir}/{camera_id}_{timestamp}.avi"
+            status = config.get('cam_type', 'IN').upper()  # IN or OUT
+            # Format: status_cameraName_date_time.avi
+            filename = f"{output_dir}/{status}_{camera_name}_{date}_{time}.avi"
 
             # Get frame dimensions from stream
             stream_idx = len(self.video_writers)
@@ -1047,25 +1073,38 @@ class SmartOfficeEngine:
             else:
                 w, h = 1920, 1080
 
+            logger.debug(f"Attempting to create video writer: {filename} ({w}x{h})")
+
             try:
-                # Use XVID codec - works without ffmpeg installation
+                # Use MJPEG codec - most reliable for OpenCV, no external dependencies
+                # MJPEG = Motion JPEG, always available in OpenCV
+                fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                logger.debug(f"FourCC code: {fourcc}")
+
                 writer = cv2.VideoWriter(
                     filename,
-                    cv2.VideoWriter_fourcc(*'XVID'),
+                    fourcc,
                     20,  # FPS
                     (w, h)
                 )
 
                 if writer.isOpened():
                     self.video_writers.append(writer)
-                    logger.info(f"✅ Video writer initialized: {filename} ({w}x{h}) [XVID codec]")
+                    logger.info(f"✅ Video writer initialized: {filename} ({w}x{h}) [MJPEG codec]")
                 else:
                     writer.release()
                     self.video_writers.append(None)
+                    # More detailed error message
+                    import subprocess
+                    cv_build_info = cv2.getBuildInformation()
                     logger.error(f"❌ Failed to open video writer: {filename} ({w}x{h})")
+                    logger.error(f"OpenCV version: {cv2.__version__}")
+                    logger.debug(f"OpenCV build info:\n{cv_build_info}")
             except Exception as e:
                 self.video_writers.append(None)
-                logger.error(f"❌ Failed to initialize video writer: {filename} - {e}")
+                logger.error(f"❌ Exception initializing video writer: {filename} - {e}")
+                import traceback
+                logger.error(traceback.format_exc())
 
     def _init_entry_logger(self, email: str, password: str) -> EntryLogger:
         """Initialize entry logger."""
@@ -1087,10 +1126,8 @@ class SmartOfficeEngine:
         self.start_time = time.time()
         frame_nums = [0] * len(self.streams)
 
-        # Phase 0: Baseline metrics logging
         last_metrics_log_time = time.time()
-        metrics_log_interval = 60.0  # Log baseline metrics every 60 seconds
-
+        metrics_log_interval = 60.0
         # Start streams
         for stream in self.streams:
             if not stream.is_video:

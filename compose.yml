@@ -100,6 +100,7 @@ services:
       # Suppress FFmpeg verbose logging
       OPENCV_FFMPEG_LOGLEVEL: "-8"
       AV_LOG_FORCE_NOCOLOR: "1"
+      MPLCONFIGDIR: /tmp/matplotlib
 
       # Performance
       NVIDIA_VISIBLE_DEVICES: all

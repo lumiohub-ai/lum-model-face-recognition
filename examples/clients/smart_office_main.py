@@ -92,8 +92,6 @@ def main():
     logger.info(f"Client: {os.getenv('HB_CLIENTSLUG')}")
     logger.info(f"API Host: {os.getenv('API_HOST')}")
     logger.info(f"pgvector: {os.getenv('USE_PGVECTOR', 'true')}")
-    logger.info(f"Save Video: {config.get('save_video', False)}")
-    logger.info(f"Output Dir: {config.get('output_dir', 'volumes/storage/person-tracking')}")
 
     # Initialize SmartOfficeEngine
     engine = SmartOfficeEngine(
@@ -101,12 +99,11 @@ def main():
         password=os.getenv("SA_PASSWORD"),
         client_slug=os.getenv("HB_CLIENTSLUG"),
         api_host=os.getenv("API_HOST"),
-        # Fetch cameras with attendance application enabled
         applications=['attendance'],
-        # Load settings from config file
         output_dir=config.get('output_dir', 'volumes/storage/person-tracking'),
         save_video=config.get('save_video', False),
-        show=config.get('show', False)
+        show=config.get('show', False),
+        person_detection_threshold=config.get('person_detection_threshold', 0.5)
     )
 
     # Run the engine

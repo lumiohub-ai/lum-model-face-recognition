@@ -2,14 +2,27 @@
 Person Tracker using BoT-SORT (or ByteTrack/OC-SORT).
 
 Assigns and maintains stable TrackIDs for persons across video frames.
-Integrates with Ultralytics tracking API for multi-object tracking.
+Uses boxmot library with external detections (single YOLO pass).
 """
 
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 from numpy.typing import NDArray
-from ultralytics import YOLO
 from loguru import logger
+import sys
+from pathlib import Path
+
+# Add boxmot to path
+boxmot_path = Path(__file__).parent.parent.parent.parent / "modules" / "yolo_tracking"
+if str(boxmot_path) not in sys.path:
+    sys.path.insert(0, str(boxmot_path))
+
+try:
+    from boxmot.trackers.botsort.bot_sort import BoTSORT
+    BOTSORT_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"BoT-SORT not available: {e}. Falling back to simple IoU tracking.")
+    BOTSORT_AVAILABLE = False
 
 
 class PersonTracker:
@@ -29,7 +42,11 @@ class PersonTracker:
         model_size: str = "s",
         global_id_generator: Optional['GlobalTrackIDGenerator'] = None,
         global_track_manager: Optional['GlobalTrackManager'] = None,
-        camera_id: int = 0
+        camera_id: int = 0,
+        confidence_threshold: float = 0.5,
+        with_reid: bool = True,
+        frame_rate: int = 30,
+        device: str = 'cuda:0'
     ):
         """
         Initialize Person Tracker.
@@ -39,10 +56,14 @@ class PersonTracker:
             max_age: Maximum frames to keep track without updates (in frames, not seconds)
             min_hits: Minimum consecutive hits before track is confirmed
             iou_threshold: IoU threshold for track association
-            model_size: YOLOv8 model size (needed for tracker initialization)
+            model_size: YOLOv8 model size (legacy, not used)
             global_id_generator: Optional global ID generator for cross-camera unique IDs
             global_track_manager: Optional GlobalTrackManager for Phase 0 instrumentation
             camera_id: Camera identifier for logging
+            confidence_threshold: Detection confidence threshold
+            with_reid: Enable ReID appearance features (default: True)
+            frame_rate: Frame rate for tracker buffer calculation
+            device: Device for ReID model ('cuda:0' or 'cpu')
         """
         self.tracker_type = tracker_type.lower()
         self.max_age = max_age
@@ -51,12 +72,10 @@ class PersonTracker:
         self.global_id_generator = global_id_generator
         self.global_track_manager = global_track_manager
         self.camera_id = camera_id
-
-        logger.info(
-            f"Initializing PersonTracker with {tracker_type.upper()} "
-            f"(max_age={max_age}, min_hits={min_hits}, iou={iou_threshold}, "
-            f"global_ids={'enabled' if global_id_generator else 'disabled'})"
-        )
+        self.confidence_threshold = confidence_threshold
+        self.with_reid = with_reid
+        self.frame_rate = frame_rate
+        self.device = device
 
         # Initialize tracking state
         self.active_tracks: Dict[int, Dict] = {}  # {track_id: track_data}
@@ -64,15 +83,53 @@ class PersonTracker:
         self.next_track_id = 1  # Only used if global_id_generator is None
         self.frame_count = 0
 
-        # Track configuration for ultralytics
-        self.tracker_config = {
-            'tracker_type': self.tracker_type,
-            'max_age': max_age,
-            'min_hits': min_hits,
-            'iou_threshold': iou_threshold
-        }
+        # Track ID mapping (BoT-SORT ID -> our track ID)
+        self.tracker_to_our_id: Dict[int, int] = {}
 
-        logger.info(f"PersonTracker initialized with {tracker_type.upper()}")
+        # Initialize BoT-SORT tracker
+        self.botsort = None
+        if BOTSORT_AVAILABLE and tracker_type == 'botsort':
+            try:
+                # Calculate thresholds
+                track_high_thresh = max(0.5, confidence_threshold)
+                track_low_thresh = max(0.1, confidence_threshold * 0.5)
+                new_track_thresh = min(0.7, max(0.4, confidence_threshold))
+
+                self.botsort = BoTSORT(
+                    model_weights=None,  # Will be loaded automatically if with_reid=True
+                    device=device,
+                    fp16=False,
+                    per_class=False,
+                    track_high_thresh=track_high_thresh,  # High confidence threshold (min 0.5)
+                    track_low_thresh=track_low_thresh,  # Lower threshold for 2nd round (min 0.1)
+                    new_track_thresh=new_track_thresh,  # Threshold for new tracks (0.4-0.7)
+                    track_buffer=max_age,  # Buffer size = max_age
+                    match_thresh=min(0.9, max(0.7, iou_threshold)),  # IoU threshold (0.7-0.9)
+                    proximity_thresh=0.5,  # Proximity threshold for ReID
+                    appearance_thresh=0.25,  # Appearance similarity threshold
+                    cmc_method="sof",  # Camera motion compensation
+                    frame_rate=frame_rate,
+                    fuse_first_associate=False,
+                    with_reid=with_reid,  # Enable/disable ReID
+                    custom_features=None  # We'll provide custom features if needed
+                )
+                logger.info(
+                    f"BoT-SORT initialized: ReID={'enabled' if with_reid else 'disabled'}, "
+                    f"device={device}, conf={confidence_threshold}, iou={iou_threshold}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize BoT-SORT: {e}", exc_info=True)
+                logger.warning("Falling back to simple IoU tracking")
+                self.botsort = None
+        else:
+            logger.info(f"Using simple IoU tracking (BoT-SORT not available or type={tracker_type})")
+
+        logger.info(
+            f"PersonTracker initialized: {tracker_type.upper()} "
+            f"(max_age={max_age}, min_hits={min_hits}, iou={iou_threshold}, "
+            f"global_ids={'enabled' if global_id_generator else 'disabled'}, "
+            f"mode={'BoT-SORT' if self.botsort else 'Simple IoU'})"
+        )
 
     def update(
         self,
@@ -99,8 +156,11 @@ class PersonTracker:
             self._age_tracks()
             return self._get_active_tracks(), self.removed_tracks
 
-        # Convert detections to tracking format
-        track_results = self._track_detections(detections)
+        # Use BoT-SORT if available, otherwise use simple IoU
+        if self.botsort is not None and frame is not None:
+            track_results = self._track_with_botsort(frame, detections)
+        else:
+            track_results = self._track_detections(detections)
 
         # Update active tracks
         self._update_active_tracks(track_results)
@@ -183,6 +243,108 @@ class PersonTracker:
                 )
 
         return tracked
+
+    def _track_with_botsort(self, frame: NDArray, detections: List[Dict]) -> List[Dict]:
+        """
+        Perform tracking using boxmot BoT-SORT with external detections.
+
+        Args:
+            frame: Input video frame
+            detections: List of detections from PersonDetector
+
+        Returns:
+            List of tracked detections with track_id assigned
+        """
+        try:
+            # Convert detections to BoT-SORT format: (N, 6) array [x1, y1, x2, y2, conf, class]
+            if len(detections) == 0:
+                dets = np.empty((0, 6))
+            else:
+                dets = []
+                for det in detections:
+                    bbox = det['bbox']  # [x1, y1, x2, y2]
+                    conf = det['confidence']
+                    cls = 0  # Person class
+                    dets.append([bbox[0], bbox[1], bbox[2], bbox[3], conf, cls])
+                dets = np.array(dets, dtype=np.float32)
+
+            # Run BoT-SORT tracking (uses external detections, not YOLO)
+            tracks = self.botsort.update(dets, frame)  # Returns (N, 6) [x1, y1, x2, y2, track_id, conf, cls, det_ind]
+
+            tracked = []
+
+            if tracks is not None and len(tracks) > 0:
+                for track in tracks:
+                    # Parse BoT-SORT output: [x1, y1, x2, y2, track_id, conf, cls, det_ind]
+                    bbox = track[0:4]
+                    botsort_id = int(track[4])
+                    conf = float(track[5])
+                    det_idx = int(track[7]) if len(track) > 7 else None
+
+                    # Map BoT-SORT ID to our track ID (with global ID support)
+                    if botsort_id not in self.tracker_to_our_id:
+                        # New track - assign our ID
+                        if self.global_id_generator:
+                            our_track_id = self.global_id_generator.get_next_id()
+                        else:
+                            our_track_id = self.next_track_id
+                            self.next_track_id += 1
+
+                        self.tracker_to_our_id[botsort_id] = our_track_id
+
+                        # Phase 0: Log track creation
+                        if self.global_track_manager:
+                            self.global_track_manager.on_track_created(
+                                camera_id=self.camera_id,
+                                local_track_id=our_track_id,
+                                bbox=bbox,
+                                frame_num=self.frame_count
+                            )
+                    else:
+                        our_track_id = self.tracker_to_our_id[botsort_id]
+
+                    # Get keypoints from original detection if we have the index
+                    keypoints = None
+                    if det_idx is not None and 0 <= det_idx < len(detections):
+                        keypoints = detections[det_idx].get('keypoints')
+
+                    tracked_det = {
+                        'track_id': our_track_id,
+                        'bbox': bbox.tolist(),
+                        'confidence': conf,
+                        'keypoints': keypoints,
+                        'frame_num': self.frame_count
+                    }
+
+                    tracked.append(tracked_det)
+
+                    # Update track data
+                    if our_track_id not in self.active_tracks:
+                        self.active_tracks[our_track_id] = {
+                            'track_id': our_track_id,
+                            'age': 0,
+                            'hits': 1,
+                            'first_frame': self.frame_count,
+                            'bbox': bbox
+                        }
+                    else:
+                        self.active_tracks[our_track_id]['age'] = 0
+                        self.active_tracks[our_track_id]['hits'] += 1
+                        self.active_tracks[our_track_id]['bbox'] = bbox
+
+                    # Phase 0: Update track frame counter
+                    if self.global_track_manager:
+                        self.global_track_manager.on_track_update(
+                            camera_id=self.camera_id,
+                            local_track_id=our_track_id
+                        )
+
+            return tracked
+
+        except Exception as e:
+            logger.error(f"Error in BoT-SORT tracking: {e}", exc_info=True)
+            # Fallback to simple IoU tracking on error
+            return self._track_detections(detections)
 
     def _match_detection_to_track(self, bbox: NDArray) -> Optional[int]:
         """

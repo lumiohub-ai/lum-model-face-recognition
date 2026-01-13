@@ -137,7 +137,8 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 		curl \
 		nano \
 		libgl1-mesa-glx \
-		libglib2.0-0 && \
+		libglib2.0-0 \
+		libxvidcore4 && \
 	update-ca-certificates && \
 	apt-get clean -y && \
 	sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \

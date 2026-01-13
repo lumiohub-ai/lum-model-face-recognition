@@ -332,3 +332,7 @@ node_modules/
 
 # VSCode settings (override partial ignore above)
 .vscode/
+
+# Additional files to ignore
+*.legent
+buffalo_l.zip

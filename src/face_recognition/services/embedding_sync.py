@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..core.detector import FaceDetector
 from ..storage.pgvector_store import PgVectorStore
+from ..storage.url_utils import normalize_image_url
 from .image_fetcher import ImageFetcher
 
 
@@ -488,20 +489,21 @@ class EmbeddingSyncService:
             existing_names, existing_embs = self.store.get_all_embeddings()
             logger.info(f"Existing embeddings in pgvector: {len(existing_embs)}")
 
-            # Build index of existing user_id -> image_urls
+            # Build index of existing user_id -> normalized image_urls
             from sqlalchemy import text
             existing_images = {}
             with self.store.db_config.get_connection() as conn:
                 result = conn.execute(text(f"""
-                    SELECT user_id, ARRAY_AGG(image_url) as image_urls
+                    SELECT user_id, ARRAY_AGG(image_url_norm) as image_urls_norm
                     FROM {self.store.schema_name}.face_embeddings
+                    WHERE image_url_norm IS NOT NULL
                     GROUP BY user_id
                 """))
 
                 for row in result:
                     user_id = row[0]
-                    image_urls = row[1] if row[1] else []
-                    existing_images[user_id] = set(image_urls)
+                    image_urls_norm = row[1] if row[1] else []
+                    existing_images[user_id] = set(image_urls_norm)
 
             logger.info(f"Existing users in pgvector: {len(existing_images)}")
 
@@ -547,20 +549,29 @@ class EmbeddingSyncService:
                     user_copy['image_urls'] = normalized_image_urls
                     users_to_process.append(user_copy)
                 else:
-                    # User exists - check for new images
-                    existing_user_images = existing_images[user_id]
-                    backend_image_urls = {img.get('original') for img in normalized_image_urls if img.get('original')}
+                    # User exists - check for new images by comparing normalized URLs
+                    existing_user_images_norm = existing_images[user_id]
+                    # Normalize backend URLs for comparison
+                    backend_image_urls_norm = {
+                        normalize_image_url(img.get('original'))
+                        for img in normalized_image_urls
+                        if img.get('original')
+                    }
 
-                    new_images = backend_image_urls - existing_user_images
+                    new_images_norm = backend_image_urls_norm - existing_user_images_norm
 
-                    if new_images:
-                        logger.info(f"📸 New images detected for {user_name}: {len(new_images)} images")
-                        # Create user dict with only new images
+                    if new_images_norm:
+                        logger.info(f"📸 New images detected for {user_name}: {len(new_images_norm)} images")
+                        # Create user dict with only new images (match by normalized URL)
+                        new_image_dicts = [
+                            img for img in normalized_image_urls
+                            if normalize_image_url(img.get('original')) in new_images_norm
+                        ]
                         users_to_process.append({
                             'id': user.get('id'),
                             'full_name': user_name,
                             'external_id': external_id,
-                            'image_urls': [img for img in normalized_image_urls if img.get('original') in new_images]
+                            'image_urls': new_image_dicts
                         })
 
             if not users_to_process:

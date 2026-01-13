@@ -7,6 +7,7 @@ from sqlalchemy import text
 from loguru import logger
 from .db_config import DatabaseConfig
 from .validators import validate_client_slug, validate_schema_name
+from .url_utils import normalize_image_url
 
 
 class PgVectorStore:
@@ -47,8 +48,11 @@ class PgVectorStore:
         embedding: np.ndarray,
         external_id: Optional[str] = None,
         metadata: Optional[Dict] = None
-    ) -> int:
-        """Add a single face embedding to database.
+    ) -> Optional[int]:
+        """Add a single face embedding to database (idempotent).
+
+        Uses INSERT ... ON CONFLICT DO NOTHING to prevent duplicates
+        based on (user_id, normalized_image_url).
 
         Args:
             user_id: Backend user ID
@@ -59,12 +63,15 @@ class PgVectorStore:
             metadata: Additional metadata (landmarks, bbox, etc.)
 
         Returns:
-            int: ID of inserted embedding
+            int: ID of inserted embedding, or None if already exists
 
         Raises:
             Exception: If database operation fails
         """
         try:
+            # Normalize URL for stable identity
+            image_url_norm = normalize_image_url(image_url)
+
             # Convert numpy array to list for PostgreSQL
             embedding_list = embedding.tolist()
 
@@ -74,22 +81,29 @@ class PgVectorStore:
             with self.db_config.get_connection() as conn:
                 result = conn.execute(text(f"""
                     INSERT INTO {self.schema_name}.face_embeddings
-                    (user_id, user_name, external_id, image_url, embedding, embedding_metadata)
-                    VALUES (:user_id, :user_name, :external_id, :image_url, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
+                    (user_id, user_name, external_id, image_url, image_url_norm, embedding, embedding_metadata)
+                    VALUES (:user_id, :user_name, :external_id, :image_url, :image_url_norm, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
+                    ON CONFLICT (user_id, image_url_norm) DO NOTHING
                     RETURNING id
                 """), {
                     'user_id': user_id,
                     'user_name': user_name,
                     'external_id': external_id,
                     'image_url': image_url,
+                    'image_url_norm': image_url_norm,
                     'embedding': str(embedding_list),
                     'metadata': metadata_json
                 })
                 conn.commit()
 
-                embedding_id = result.fetchone()[0]
-                logger.info(f"Added embedding {embedding_id} for user {user_id} ({user_name}) - vector dim: {len(embedding_list)}")
-                return embedding_id
+                row = result.fetchone()
+                if row:
+                    embedding_id = row[0]
+                    logger.info(f"Added embedding {embedding_id} for user {user_id} ({user_name}) - vector dim: {len(embedding_list)}")
+                    return embedding_id
+                else:
+                    logger.debug(f"Embedding already exists for user {user_id}, image: {image_url_norm}")
+                    return None
 
         except Exception as e:
             logger.error(f"Failed to add embedding for user {user_id}: {e}")
