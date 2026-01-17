@@ -15,11 +15,24 @@ A unified system for real-time person tracking and face recognition, designed fo
 ### 1. Clone the Repository
 
 ```bash
-git clone --recursive <repo-url> so.model-face-recognition
+git clone --recursive  https://github.com/humblebeeai/so.model-face-recognition.git
 cd so.model-face-recognition
 ```
 
-### 2. Configure Environment
+### 2. Checkout to MCMOT branch
+
+```bash
+git checkout MCMOT
+```
+
+### 3. Ensure all submodules are clonned correctlly
+
+```bash
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+### 4. Configure Environment
 
 ```bash
 # Copy example configs
@@ -105,6 +118,21 @@ Cameras can be configured via:
 | `./compose.sh enter` | Enter container shell |
 | `./compose.sh ps` | List running containers |
 | `./compose.sh clean` | Remove containers and images |
+
+## Development Setup
+
+For development, copy the dev compose override template:
+
+```bash
+cp templates/compose/compose.override.dev.yml compose.override.yml
+```
+
+This enables:
+- Source code mounting (hot reload - just restart to apply changes)
+- Debug logging (`LOG_LEVEL: DEBUG`)
+- Interactive terminal
+
+Docker Compose automatically uses `compose.override.yml` when present.
 
 ## Architecture
 
