@@ -5,7 +5,6 @@ This package provides a comprehensive face recognition system with:
 - Real-time face detection and tracking
 - Face recognition with embedding-based matching
 - Multi-camera support
-- Dashboard visualization
 - API integration for attendance tracking
 """
 
@@ -13,7 +12,7 @@ from .__version__ import __version__
 from .smart_office_engine import SmartOfficeEngine
 
 # Core components
-from .core import FaceEngine, FaceDetector, FaceTracker, FaceRecognizer, TrackManager
+from .core import FaceDetector, FaceRecognizer, ModelFactory, FrameProcessor
 
 # Configuration
 from .config import ConfigurationManager, SystemConfig
@@ -22,14 +21,14 @@ from .config import constants
 # Logging
 from .logging import setup_structured_logging, EntryLogger, CSVLogger
 
-# Dashboard
-from .dashboard import Visualization
+# Services
+from .services import EmbeddingSyncService, EngineLifecycle
 
 # Storage
-from .storage import Database, CloudStorageManager
+from .storage import PgVectorStore
 
 # Video processing
-from .video import StreamHandler, FrameProcessor
+from .video import StreamHandler, StreamManager
 
 # API
 from .api import APIClient, AuthenticationService
@@ -49,11 +48,10 @@ __all__ = [
     "SmartOfficeEngine",
 
     # Core
-    "FaceEngine",
     "FaceDetector",
-    "FaceTracker",
     "FaceRecognizer",
-    "TrackManager",
+    "ModelFactory",
+    "FrameProcessor",
 
     # Configuration
     "ConfigurationManager",
@@ -65,16 +63,16 @@ __all__ = [
     "EntryLogger",
     "CSVLogger",
 
-    # Dashboard
-    "Visualization",
+    # Services
+    "EmbeddingSyncService",
+    "EngineLifecycle",
 
     # Storage
-    "Database",
-    "CloudStorageManager",
+    "PgVectorStore",
 
     # Video
     "StreamHandler",
-    "FrameProcessor",
+    "StreamManager",
 
     # API
     "APIClient",

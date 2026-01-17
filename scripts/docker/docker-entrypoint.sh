@@ -14,4 +14,4 @@ find "${FR_LOGS_DIR}" "${FR_TMP_DIR}" -type f -exec chmod 664 {} + 2>/dev/null |
 echo "INFO: Starting SmartOfficeEngine..."
 sleep 2
 
-exec python3 -m examples.clients.smart_office_main
+exec python3 -m src.main

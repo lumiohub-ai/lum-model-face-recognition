@@ -1,111 +1,173 @@
-# Face recognition and Smart-Office System
+# Smart Office - Person Tracking & Face Recognition
 
-[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://choosealicense.com/licenses/mit)
-[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/bybatkhuu/model.python-template/2.build-publish.yml?logo=GitHub)](https://github.com/bybatkhuu/model.python-template/actions/workflows/2.build-publish.yml)
-[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/bybatkhuu/model.python-template?logo=GitHub&color=blue)](https://github.com/bybatkhuu/model.python-template/releases)
+A unified system for real-time person tracking and face recognition, designed for smart office attendance and monitoring.
 
+## Features
 
-# Installation Guide
+- **Person Tracking**: YOLOv8 + BoT-SORT for stable person detection and tracking
+- **Face Recognition**: InsightFace (buffalo_l) for accurate face identification
+- **Cross-Camera Tracking**: Global track IDs across multiple cameras (MCMOT ReID)
+- **Attendance Logging**: Automatic IN/OUT status tracking with API integration
+- **pgvector Storage**: Scalable face embedding storage with PostgreSQL
+
+## Quick Start
+
 ### 1. Clone the Repository
-```bash
-git clone --recursive so.model-face-recognition
-cd so.model-face-recognition```
-
-### 2. Prepare Configuration Files
-
-Copy example configuration templates:
 
 ```bash
-cp templates/compose/compose.override.dev.yml compose.override.dev.yml
+git clone --recursive <repo-url> so.model-face-recognition
+cd so.model-face-recognition
+```
+
+### 2. Configure Environment
+
+```bash
+# Copy example configs
 cp .env.example .env
-```
-### 3. Update Environment Variables
-Open .env and update the following:
 
-- Set input source (RTSP or video path)
+# Edit .env with your settings
+nano .env
+```
+
+**Required settings in `.env`:**
+
 ```bash
-HB_IN = rtsp://your_camera_stream
+# API credentials
+SA_EMAIL=your_admin_email
+SA_PASSWORD=your_admin_password
+HB_CLIENTSLUG=your_organization_slug
+API_HOST=http://your-backend-api:7091
+
+# Camera streams (if not using API)
+HB_IN=rtsp://camera_in_stream
+HB_OUT=rtsp://camera_out_stream
 ```
-- Adjust any other variables as needed for your local environment.
 
-### 4. Update Client and Configuration Files
+### 3. Build and Run
 
-Edit examples/clients/main.py to match your client configuration.
-Update the api_host field in configs/config.yaml to point to your API endpoint.
-
-### 5. Add Face Embeddings5. Add Face Embeddings
-Place your face embedding file (main.pkl) in: ```volumes/src/embeddings/```
-
-# Build and Run the Application
-
-## Build Docker Containers
-
- ```bash
- ./compose.sh build
-```
-## Run the Application
 ```bash
-./compose.sh test -l
+# Build Docker containers
+./compose.sh build
+
+# Start the application (with logs)
+./compose.sh start -l
+
+# Or start in background
+./compose.sh start
 ```
 
-## Stop Containers
+### 4. View Logs
+
+```bash
+./compose.sh logs
+```
+
+### 5. Stop
+
 ```bash
 ./compose.sh stop
 ```
 
+## Configuration
 
-## 📚 Documentation
+### Feature Flags (`configs/config.yaml`)
 
-- [Description](https://docs.google.com/document/d/1DaPsSgqk6UXJVogyn9UbPGN5JYFbu2do8p9r11yKAKA)
-- [Methodology and Evaluation](https://docs.google.com/document/d/1SsCB4fBA2nK6PQISYrcaki0moe4ID7Mwm4J2cF_g9i0)
+```yaml
+# Feature flags
+enable_global_tracking: true   # Cross-camera person tracking
+enable_attendance_logging: true
+use_pgvector: true             # Face embedding storage
+use_api_for_cameras: true      # Load cameras from API
 
---- 
+# Recognition settings
+match_threshold: 0.3           # Face similarity threshold
+person_detection_threshold: 0.45
+face_detection_padding: 20.0   # % padding around faces
+```
 
-## Video recording using ffmpeg
-### Simple video recording 
-```bash 
+### Camera Configuration
+
+Cameras can be configured via:
+
+1. **Backend API** (recommended): Set `use_api_for_cameras: true`
+2. **Environment variables**: Set `HB_IN`, `HB_OUT` in `.env`
+
+## compose.sh Commands
+
+| Command | Description |
+|---------|-------------|
+| `./compose.sh build` | Build Docker images |
+| `./compose.sh start` | Start containers |
+| `./compose.sh start -l` | Start with live logs |
+| `./compose.sh stop` | Stop containers |
+| `./compose.sh restart` | Restart containers |
+| `./compose.sh logs` | View logs |
+| `./compose.sh enter` | Enter container shell |
+| `./compose.sh ps` | List running containers |
+| `./compose.sh clean` | Remove containers and images |
+
+## Architecture
+
+```text
+src/
+├── main.py                    # Application entry point
+├── face_recognition/          # Face detection & recognition
+│   ├── core/                  # Detector, recognizer
+│   ├── services/              # Embedding sync, image fetcher
+│   ├── storage/               # pgvector store
+│   └── smart_office_engine.py # Main orchestrator
+└── person_tracking/           # Person detection & tracking
+    ├── core/                  # Person detector, tracker, ReID
+    └── video/                 # Frame annotation
+```
+
+## Requirements
+
+- Docker with NVIDIA GPU support
+- NVIDIA Driver 525+
+- CUDA 12.2 compatible GPU
+
+## Troubleshooting
+
+**Container won't start:**
+
+```bash
+# Check logs
+./compose.sh logs
+
+# Verify GPU access
+docker run --rm --gpus all nvidia/cuda:12.2.2-base-ubuntu20.04 nvidia-smi
+```
+
+**Camera connection issues:**
+
+- Verify RTSP URL is accessible
+- Check firewall settings
+- Ensure camera credentials are correct
+
+## Video Recording (ffmpeg)
+
+### Simple recording
+
+```bash
 ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -c copy output.mp4
 ```
 
-### Scheduled Video Recording
-
-You can schedule video recording from an RTSP camera using `ffmpeg` together with the `at` command.
-
-#### When the camera **has audio**
+### Scheduled recording
 
 ```bash
-echo 'ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -t 3000 -an -c:v copy output.mp4' | at 17:45
-```
-#### When the camera does not have audio
-```bash
+# Record for 3000 seconds starting at 17:45
 echo 'ffmpeg -rtsp_transport tcp -i "rtsp://<camera-link>" -t 3000 -c copy output.mp4' | at 17:45
-```
 
-rtsp://<camera-link> → Replace with your camera’s RTSP stream URL.
-
--t 3000 → Duration of recording in seconds (adjust as needed).
-
--an → Disable audio (useful when you only want video).
-
--c:v copy / -c copy → Copy streams without re-encoding for efficiency.
-
-at 17:45 → Time to schedule the recording (24-hour format).
-
-#### Check scheduled jobs
-```bash
+# Check scheduled jobs
 atq
-```
-#### Remove a scheduled job
-```bash
+
+# Remove a scheduled job
 atrm <job-number>
 ```
 
+## References
 
-
-## 📑  Research References
-
-- [Face ReID Model](https://github.com/timesler/facenet-pytorch)
-- [Track Evaluation](https://github.com/JonathonLuiten/TrackEval)
-- [Detection and Tracking Model](https://github.com/ultralytics/ultralytics)
-- [Face Detection Models](https://github.com/akanametov/yolo-face)
-
+- [InsightFace](https://github.com/deepinsight/insightface) - Face recognition
+- [Ultralytics](https://github.com/ultralytics/ultralytics) - YOLOv8 detection
+- [BoT-SORT](https://github.com/NirAharon/BoT-SORT) - Multi-object tracking

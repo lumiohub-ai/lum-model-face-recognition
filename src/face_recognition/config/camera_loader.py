@@ -1,12 +1,14 @@
-"""Camera configuration loader from YAML files with environment variable support.
+"""Camera configuration loader from YAML files, API, and environment variables.
 
-This module provides utilities to load camera configurations from YAML files
-instead of fetching them from the API, supporting environment variable interpolation.
+This module provides utilities to load camera configurations from:
+1. API (recommended for production)
+2. YAML files with environment variable interpolation
+3. Environment variables (fallback)
 """
 
 import os
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import yaml
 from loguru import logger
 
@@ -263,3 +265,126 @@ def convert_to_system_setup_format(cameras: List[Dict[str, Any]]) -> Dict[str, L
         result['line_points'].append(cam.get('line_points'))
 
     return result
+
+
+# =============================================================================
+# API Camera Loading
+# =============================================================================
+
+
+def parse_roi(roi_points: Optional[List]) -> Optional[Tuple[int, int, int, int]]:
+    """Parse ROI points from API format.
+
+    Args:
+        roi_points: List of [[x1, y1], [x2, y2]] coordinates from API
+
+    Returns:
+        Tuple of (x1, y1, x2, y2) or None if invalid
+    """
+    if roi_points and len(roi_points) >= 2:
+        return tuple(roi_points[0] + roi_points[1])
+    return None
+
+
+def parse_line_points(line_points: Optional[List]) -> Optional[List[Tuple[int, int]]]:
+    """Parse virtual line points from API format.
+
+    Args:
+        line_points: List of [[x1, y1], [x2, y2]] coordinates from API
+
+    Returns:
+        List of (x, y) tuples or None if invalid
+    """
+    if line_points and len(line_points) >= 2:
+        return [tuple(line_points[0]), tuple(line_points[1])]
+    return None
+
+
+def load_cameras_from_api(
+    api_client: Any,
+    applications: List[str]
+) -> List[Dict[str, Any]]:
+    """Load camera configurations from API.
+
+    Args:
+        api_client: Authenticated APIClient instance
+        applications: List of application types to fetch (e.g., ['attendance'])
+
+    Returns:
+        List of camera configuration dictionaries in SmartOfficeEngine format
+    """
+    all_configs = []
+
+    for application in applications:
+        cameras = api_client.get_cameras(application=application)
+
+        for cam in cameras:
+            config = {
+                'camera_id': cam.get('id'),
+                'camera_name': cam.get('name', 'Unknown'),
+                'cam_type': cam.get('camera_type', 'IN').upper(),
+                'stream_url': cam.get('stream_url', ''),
+                'application': cam.get('application', application),
+                'match_threshold': float(cam.get('matching_threshold', 0.3)),
+                'roi': parse_roi(cam.get('roi_points')),
+                'line_points': parse_line_points(cam.get('virtual_line_points'))
+            }
+            all_configs.append(config)
+
+            logger.info(
+                f"Camera: {config['camera_name']} | "
+                f"Type: {config['cam_type']} | "
+                f"App: {application}"
+            )
+
+    return all_configs
+
+
+def load_cameras(
+    api_client: Any,
+    use_api: bool,
+    applications: List[str],
+    config_path: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Load camera configurations from API or file.
+
+    This is the main entry point for loading cameras.
+
+    Args:
+        api_client: Authenticated APIClient instance
+        use_api: Whether to load from API (True) or file/env (False)
+        applications: List of application types to filter
+        config_path: Optional path to YAML config file
+
+    Returns:
+        List of camera configuration dictionaries
+
+    Raises:
+        ValueError: If no cameras configured
+    """
+    if use_api:
+        logger.info("Loading camera configs from API (use_api_for_cameras=true)")
+        configs = load_cameras_from_api(api_client, applications)
+    else:
+        logger.info("Loading camera configs from config file")
+        cameras = get_camera_configs(config_path)
+        configs = convert_to_smart_office_format(cameras)
+
+        # Filter by applications if specified
+        if applications:
+            filtered_configs = []
+            for config in configs:
+                app = config.get('application')
+                # Handle both string and list application values
+                if isinstance(app, list):
+                    if any(a in applications for a in app):
+                        filtered_configs.append(config)
+                elif app in applications:
+                    filtered_configs.append(config)
+            configs = filtered_configs
+
+    if not configs:
+        raise ValueError("No cameras configured. Check config file or API.")
+
+    logger.info(f"Loaded {len(configs)} camera configuration(s)")
+    return configs

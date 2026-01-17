@@ -1,9 +1,9 @@
-"""Video stream handling and frame processing."""
+"""Video stream handling."""
 
 from .stream_handler import StreamHandler
-from .frame_processor import FrameProcessor
+from .stream_manager import StreamManager
 
 __all__ = [
     "StreamHandler",
-    "FrameProcessor",
+    "StreamManager",
 ]

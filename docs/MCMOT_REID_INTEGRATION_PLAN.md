@@ -1395,7 +1395,10 @@ This plan provides a **safe, phased migration** to add global track IDs:
 2. **Phase 1**: GlobalTrackManager v1 - body ReID only, conservative (low risk)
 3. **Phase 2**: Optimization - caching, batching (performance)
 4. **Phase 3**: Track-end matching (accuracy improvement)
-5. **Phase 4**: Safety mechanisms (robustness)
+5. **Phase 4**: Safety mechanisms (robustnes
+
+
+s)
 6. **Phase 5**: Production rollout (gradual)
 
 **Future Work** (optional, after v1 stable):

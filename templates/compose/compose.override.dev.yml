@@ -1,11 +1,26 @@
+# Development override - use with: docker compose -f compose.yml -f templates/compose/compose.override.dev.yml up
+#
+# Features:
+# - Source code mounted for hot reload
+# - No auto-restart (see errors immediately)
+# - Debug logging enabled
+# - Interactive terminal
 
 services:
-  face-recognition:
-    image: face-recognition:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+  person-tracking:
     volumes:
-      - ./src:/app/src
-      - ./examples:/app/examples
-    # command: ["/bin/bash"]
+      # Mount source code for development (hot reload)
+      - ./src:/app/face-recognition/src
+      # Mount configs for easy editing
+      - ./configs:/app/face-recognition/configs
+    environment:
+      # Debug logging
+      LOG_LEVEL: DEBUG
+      # Python development settings
+      PYTHONUNBUFFERED: 1
+      PYTHONDONTWRITEBYTECODE: 1
+    # Don't auto-restart on crash (see errors)
+    restart: "no"
+    # Interactive terminal for debugging
+    tty: true
+    stdin_open: true

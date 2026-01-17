@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Add project root to path
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from face_recognition import (
@@ -28,7 +28,6 @@ def main():
     log_startup_info(
         client_slug=os.getenv('HB_CLIENTSLUG'),
         api_host=os.getenv('API_HOST'),
-        pgvector=os.getenv('USE_PGVECTOR', 'true'),
     )
 
     # Initialize SmartOfficeEngine
@@ -38,10 +37,7 @@ def main():
         client_slug=os.getenv("HB_CLIENTSLUG"),
         api_host=os.getenv("API_HOST"),
         applications=['attendance'],
-        output_dir=config.get('output_dir', 'volumes/storage/person-tracking'),
-        save_video=config.get('save_video', False),
-        show=config.get('show', False),
-        person_detection_threshold=config.get('person_detection_threshold', 0.5)
+        **config  # Pass all config settings
     )
 
     # Run the engine

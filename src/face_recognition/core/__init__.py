@@ -1,15 +1,13 @@
-"""Core face processing components: detection, tracking, and recognition."""
+"""Core face processing components: detection and recognition."""
 
 from .detector import FaceDetector
-from .tracker import FaceTracker
 from .recognizer import FaceRecognition as FaceRecognizer  # Alias for consistency
-from .track_manager import TrackManager
-from .engine import FaceEngine
+from .model_factory import ModelFactory
+from .processing import FrameProcessor
 
 __all__ = [
     "FaceDetector",
-    "FaceTracker",
     "FaceRecognizer",
-    "TrackManager",
-    "FaceEngine",
+    "ModelFactory",
+    "FrameProcessor",
 ]

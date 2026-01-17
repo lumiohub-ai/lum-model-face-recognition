@@ -67,9 +67,7 @@ services:
       HB_OUT: ${HB_OUT:-}
       HB_IN_MANAGEMENT: ${HB_IN_MANAGEMENT:-}
 
-      # Database configuration
-      USE_PGVECTOR: ${USE_PGVECTOR:-true}
-      USE_API_FOR_CAMERAS: ${USE_API_FOR_CAMERAS:-false}
+      # Database configuration (feature flags now in configs/config.yaml)
       POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
       POSTGRES_PORT: ${POSTGRES_PORT:-5434}
       POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
@@ -111,7 +109,7 @@ services:
       # Development: Mount source code for hot reload (if supported)
       - ./src:/app/face-recognition/src
       # Configuration
-      - ./configs/person_tracking:/app/face-recognition/configs/person_tracking
+      - ./configs:/app/face-recognition/configs
       # Output storage
       - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
       # Logs
@@ -139,34 +137,6 @@ services:
     # Development: Show logs in color
     tty: true
     stdin_open: true
-
-  # Optional: API service for querying events
-  person-tracking-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: humblebeeintel/person-tracking:latest
-    container_name: person-tracking-api
-    environment:
-      HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
-      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    volumes:
-      - ./src:/app/face-recognition/src:ro
-    ports:
-      - "${API_PORT:-5002}:5002"
-    depends_on:
-      - postgres
-      - redis
-    command: ["uvicorn", "src.person_tracking.api.app:app", "--host", "0.0.0.0", "--port", "5002"]
-    profiles:
-      - api  # Only starts with: docker-compose --profile api up
-    restart: unless-stopped
 
 volumes:
   postgres_data:
