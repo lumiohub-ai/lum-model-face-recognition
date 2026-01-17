@@ -23,7 +23,7 @@ from .config import constants
 from .logging import setup_structured_logging, EntryLogger, CSVLogger
 
 # Dashboard
-from .dashboard import CameraProcessor, Visualization
+from .dashboard import Visualization
 
 # Storage
 from .storage import Database, CloudStorageManager
@@ -33,6 +33,16 @@ from .video import StreamHandler, FrameProcessor
 
 # API
 from .api import APIClient, AuthenticationService
+
+# Startup utilities
+from .startup import (
+    init_smart_office_app,
+    load_config,
+    load_dotenv_if_exists,
+    validate_environment,
+    setup_logging,
+    log_startup_info,
+)
 
 __all__ = [
     # Main entry points
@@ -56,7 +66,6 @@ __all__ = [
     "CSVLogger",
 
     # Dashboard
-    "CameraProcessor",
     "Visualization",
 
     # Storage
@@ -70,6 +79,14 @@ __all__ = [
     # API
     "APIClient",
     "AuthenticationService",
+
+    # Startup utilities
+    "init_smart_office_app",
+    "load_config",
+    "load_dotenv_if_exists",
+    "validate_environment",
+    "setup_logging",
+    "log_startup_info",
 
     # Version
     "__version__",

@@ -46,7 +46,9 @@ class FaceEngine:
         self.fs = gcsfs.GCSFileSystem(token=os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
 
         # Get face detection padding from args or environment (default: 20%)
-        padding_percent = getattr(args, 'face_padding', None) or \
+        # Priority: args.face_detection_padding > args.face_padding > env var
+        padding_percent = getattr(args, 'face_detection_padding', None) or \
+                         getattr(args, 'face_padding', None) or \
                          float(os.getenv('FACE_DETECTION_PADDING', '20.0'))
 
         # Initialize specialized components

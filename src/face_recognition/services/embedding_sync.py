@@ -23,17 +23,21 @@ class EmbeddingSyncService:
     - Image added/deleted: Update specific embeddings
     """
 
-    def __init__(self, client_slug: str, gpu_id: int = 0):
+    def __init__(self, client_slug: str, gpu_id: int = 0, config: Optional[Dict] = None):
         """Initialize embedding sync service.
 
         Args:
             client_slug: Organization slug (e.g., 'humblebee', 'dev')
             gpu_id: GPU device ID for face detection
+            config: Optional config dict (from config.yaml)
         """
         self.client_slug = client_slug
 
-        # Get face detection padding from environment (default: 20%)
-        padding_percent = float(os.getenv('FACE_DETECTION_PADDING', '20.0'))
+        # Get face detection padding from config or environment (default: 20%)
+        if config and 'face_detection_padding' in config:
+            padding_percent = float(config.get('face_detection_padding', 20.0))
+        else:
+            padding_percent = float(os.getenv('FACE_DETECTION_PADDING', '20.0'))
         self.detector = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
 
         self.store = PgVectorStore(client_slug)
@@ -507,6 +511,78 @@ class EmbeddingSyncService:
 
             logger.info(f"Existing users in pgvector: {len(existing_images)}")
 
+            # === TWO-WAY SYNC: Detect and remove stale embeddings ===
+
+            # Build set of backend user IDs
+            backend_user_ids = {str(user.get('id')) for user in all_users}
+            pgvector_user_ids = set(existing_images.keys())
+
+            # Find stale users (in pgvector but not in backend)
+            stale_user_ids = pgvector_user_ids - backend_user_ids
+            users_deleted = 0
+            images_deleted = 0
+
+            # Delete embeddings for stale users
+            for user_id in stale_user_ids:
+                logger.info(f"Stale user detected: {user_id} - removing all embeddings")
+                count = self.store.delete_all_for_user(user_id)
+                users_deleted += 1
+                images_deleted += count
+
+            # Build a mapping of user_id -> user data for backend users
+            backend_users_by_id = {str(user.get('id')): user for user in all_users}
+
+            # Find stale images for users that exist in both
+            stale_images_by_user = {}
+            for user_id in (pgvector_user_ids & backend_user_ids):
+                user = backend_users_by_id.get(user_id)
+                if not user:
+                    continue
+
+                raw_image_urls = user.get('image_urls', [])
+                if not raw_image_urls:
+                    # User has no images in backend but has embeddings in pgvector
+                    # All their embeddings are stale
+                    stale_images_by_user[user_id] = existing_images[user_id]
+                    continue
+
+                # Handle case where image_urls is a single string instead of array
+                if isinstance(raw_image_urls, str):
+                    raw_image_urls = [raw_image_urls]
+
+                # Normalize backend image URLs
+                backend_images_norm = set()
+                for img in raw_image_urls:
+                    if isinstance(img, dict):
+                        original_url = img.get('original')
+                    elif isinstance(img, str):
+                        original_url = img
+                    else:
+                        continue
+                    if original_url:
+                        backend_images_norm.add(normalize_image_url(original_url))
+
+                # Find images in pgvector but not in backend
+                pgvector_images = existing_images[user_id]
+                stale_images = pgvector_images - backend_images_norm
+
+                if stale_images:
+                    stale_images_by_user[user_id] = stale_images
+
+            # Delete stale images
+            for user_id, stale_images in stale_images_by_user.items():
+                user = backend_users_by_id.get(user_id, {})
+                user_name = user.get('full_name', 'Unknown')
+                logger.info(f"Stale images detected for {user_name} ({user_id}): {len(stale_images)} images - removing embeddings")
+                for image_url_norm in stale_images:
+                    count = self.store.delete_by_image_url_norm(user_id, image_url_norm)
+                    images_deleted += count
+
+            if users_deleted > 0 or images_deleted > 0:
+                logger.info(f"Stale embeddings removed: {users_deleted} users, {images_deleted} images")
+
+            # === END TWO-WAY SYNC ===
+
             # Find missing users and images
             users_to_process = []
 
@@ -575,12 +651,17 @@ class EmbeddingSyncService:
                         })
 
             if not users_to_process:
-                logger.info("✅ No missing embeddings detected - database is up to date")
+                if users_deleted > 0 or images_deleted > 0:
+                    logger.info(f"✅ Two-way sync complete: 0 added, {users_deleted} users deleted, {images_deleted} images deleted")
+                else:
+                    logger.info("✅ No missing embeddings detected - database is up to date")
                 return {
                     'success': True,
                     'users_processed': 0,
                     'embeddings_added': 0,
-                    'message': 'Database is up to date'
+                    'users_deleted': users_deleted,
+                    'images_deleted': images_deleted,
+                    'message': 'Database is up to date' if (users_deleted == 0 and images_deleted == 0) else 'Stale embeddings removed'
                 }
 
             # Process missing users/images
@@ -619,12 +700,14 @@ class EmbeddingSyncService:
                     results['failed_users'].append(user_id)
 
             logger.info(
-                f"✅ Sync complete: {results['users_processed']} users processed, "
-                f"{results['embeddings_added']} embeddings added"
+                f"✅ Two-way sync complete: {results['embeddings_added']} added, "
+                f"{users_deleted} users deleted, {images_deleted} images deleted"
             )
 
             return {
                 'success': True,
+                'users_deleted': users_deleted,
+                'images_deleted': images_deleted,
                 **results
             }
 

@@ -206,6 +206,33 @@ class PgVectorStore:
             logger.error(f"Failed to delete embedding for {image_url}: {e}")
             raise
 
+    def delete_by_image_url_norm(self, user_id: str, image_url_norm: str) -> int:
+        """Delete embedding by user_id and normalized image URL.
+
+        Args:
+            user_id: Backend user ID
+            image_url_norm: Normalized image URL to delete
+
+        Returns:
+            int: Number of embeddings deleted (should be 0 or 1)
+        """
+        try:
+            with self.db_config.get_connection() as conn:
+                result = conn.execute(text(f"""
+                    DELETE FROM {self.schema_name}.face_embeddings
+                    WHERE user_id = :user_id AND image_url_norm = :image_url_norm
+                """), {'user_id': user_id, 'image_url_norm': image_url_norm})
+                conn.commit()
+
+                count = result.rowcount
+                if count > 0:
+                    logger.debug(f"Deleted {count} embedding for normalized URL: {image_url_norm}")
+                return count
+
+        except Exception as e:
+            logger.error(f"Failed to delete embedding for normalized URL {image_url_norm}: {e}")
+            raise
+
     def delete_user_embeddings(self, user_name: str) -> int:
         """Delete all embeddings for a user by user_name.
 

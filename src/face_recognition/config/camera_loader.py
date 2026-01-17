@@ -6,7 +6,6 @@ instead of fetching them from the API, supporting environment variable interpola
 
 import os
 import re
-from pathlib import Path
 from typing import List, Dict, Any, Optional
 import yaml
 from loguru import logger
@@ -184,8 +183,7 @@ def get_camera_configs(config_path: Optional[str] = None) -> List[Dict[str, Any]
     Priority:
     1. If config_path provided and exists, load from YAML file
     2. If CAMERAS_CONFIG env var set, load from that path
-    3. Check default path: configs/cameras.yaml
-    4. Fall back to environment variables (HB_IN, HB_OUT, etc.)
+    3. Fall back to environment variables (HB_IN, HB_OUT, etc.)
 
     Args:
         config_path: Optional path to cameras YAML config file
@@ -205,12 +203,7 @@ def get_camera_configs(config_path: Optional[str] = None) -> List[Dict[str, Any]
     if env_config_path and os.path.exists(env_config_path):
         return load_cameras_from_yaml(env_config_path)
 
-    # Priority 3: Default path
-    default_path = Path(__file__).parent.parent.parent.parent / 'configs' / 'cameras.yaml'
-    if default_path.exists():
-        return load_cameras_from_yaml(str(default_path))
-
-    # Priority 4: Fall back to environment variables
+    # Priority 3: Fall back to environment variables
     logger.info("No camera config file found, loading from environment variables")
     return load_cameras_from_env()
 
