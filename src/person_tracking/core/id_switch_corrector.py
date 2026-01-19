@@ -4,7 +4,7 @@ Detects and corrects track ID switches using face embeddings.
 Implements multi-tier correction strategy for robust tracking.
 """
 
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 from loguru import logger
 
@@ -158,53 +158,6 @@ class IDSwitchCorrector:
 
         return True
 
-    def find_matching_track_by_embedding(
-        self,
-        embedding: np.ndarray,
-        exclude_track_id: Optional[int] = None,
-        identity_filter: Optional[str] = None
-    ) -> Optional[Tuple[int, float]]:
-        """Find track with matching embedding (TIER 1 - Prevention).
-
-        Your optimization: Only compare against tracks with specific identity.
-
-        Args:
-            embedding: Face embedding to match
-            exclude_track_id: Track to exclude from matching
-            identity_filter: Only match against tracks with this identity (optimization!)
-
-        Returns:
-            Tuple of (track_id, distance) if match found, None otherwise
-        """
-        best_track_id = None
-        best_distance = float('inf')
-
-        for track_id in self.track_embeddings.keys():
-            # Skip excluded track
-            if exclude_track_id is not None and track_id == exclude_track_id:
-                continue
-
-            # OPTIMIZATION: Only compare tracks with matching identity
-            if identity_filter is not None:
-                track_identity = self.track_identities.get(track_id)
-                if track_identity != identity_filter:
-                    continue  # Skip different person
-
-            avg_embedding = self.get_average_embedding(track_id)
-            if avg_embedding is None:
-                continue
-
-            distance = self.cosine_distance(embedding, avg_embedding)
-
-            if distance < self.embedding_threshold and distance < best_distance:
-                best_distance = distance
-                best_track_id = track_id
-
-        if best_track_id is not None:
-            return (best_track_id, best_distance)
-
-        return None
-
     def find_duplicate_tracks(self) -> List[Tuple[int, int, float]]:
         """Find tracks with same identity but different IDs (TIER 3 - Delayed).
 
@@ -266,18 +219,3 @@ class IDSwitchCorrector:
 
         if track_id in self.track_identities:
             del self.track_identities[track_id]
-
-    def get_statistics(self) -> Dict:
-        """Get correction statistics.
-
-        Returns:
-            Dictionary with stats
-        """
-        total_corrections = sum(self.correction_history.values())
-
-        return {
-            'total_tracks': len(self.track_embeddings),
-            'tracks_with_identity': len(self.track_identities),
-            'total_corrections': total_corrections,
-            'unique_corrections': len(self.correction_history)
-        }

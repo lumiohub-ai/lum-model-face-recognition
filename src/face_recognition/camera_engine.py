@@ -62,15 +62,6 @@ class GlobalTrackIDGenerator:
             self._current_id += 1
             return track_id
 
-    def get_current_id(self) -> int:
-        """Get current track ID without incrementing.
-
-        Returns:
-            Current track ID value
-        """
-        with self._lock:
-            return self._current_id
-
 
 class CameraEngine:
     """Engine for processing a single camera stream.
@@ -763,11 +754,3 @@ class CameraEngine:
         # Remove from person_tracker's active_tracks
         if source_track_id in self.person_tracker.active_tracks:
             del self.person_tracker.active_tracks[source_track_id]
-
-    def reset(self) -> None:
-        """Reset all tracking state."""
-        self.person_tracker.reset()
-        self.track_manager.reset()
-        self.identity_manager.reset()
-        self.state_manager.reset()
-        self.frame_count = 0

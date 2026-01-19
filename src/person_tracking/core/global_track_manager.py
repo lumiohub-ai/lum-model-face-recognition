@@ -262,13 +262,12 @@ class GlobalTrackManager:
                 self._device = torch.device('cpu')
                 logger.warning("CUDA not available, using CPU for ReID")
 
-            backend = ReidAutoBackend(
+            reid_auto = ReidAutoBackend(
                 weights=weights_path,
                 device=self._device,
                 half=self.reid_half_precision
             )
-
-            self._body_reid_model = backend.get_backend()
+            self._body_reid_model = reid_auto.get_backend()
             logger.info(f"Body ReID model loaded: {self.reid_model_name} on {self._device}")
 
         except Exception as e:
@@ -654,26 +653,19 @@ class GlobalTrackManager:
         try:
             start_time = time.time()
 
-            # Preprocess for OSNet (128x256)
-            crop_resized = cv2.resize(person_crop, (128, 256))
+            # Create a bounding box covering the entire crop
+            h, w = person_crop.shape[:2]
+            xyxys = np.array([[0, 0, w, h]])
 
-            # Convert BGR to RGB
-            crop_rgb = cv2.cvtColor(crop_resized, cv2.COLOR_BGR2RGB)
+            # Extract features using boxmot API (expects xyxys and full image)
+            embedding = self._body_reid_model.get_features(xyxys, person_crop)
 
-            # Convert to tensor
-            crop_tensor = torch.from_numpy(crop_rgb).permute(2, 0, 1).float()
-            crop_tensor = crop_tensor.unsqueeze(0) / 255.0
-            crop_tensor = crop_tensor.to(self._device)
+            if embedding is None or embedding.size == 0:
+                return None
 
-            # Extract features
-            with torch.no_grad():
-                embedding = self._body_reid_model(crop_tensor)
-
-            # Convert to numpy and normalize
-            embedding = embedding.cpu().numpy()[0]
-            norm = np.linalg.norm(embedding)
-            if norm > 0:
-                embedding = embedding / norm
+            # Embedding is already normalized by get_features, but ensure it's 1D
+            if embedding.ndim > 1:
+                embedding = embedding.flatten()
 
             # Record extraction time
             extraction_time_ms = (time.time() - start_time) * 1000
@@ -770,9 +762,6 @@ class GlobalTrackManager:
                 f"TRACK_INACTIVE | global_id={global_id} camera={camera_id} "
                 f"local_id={local_track_id}"
             )
-
-        # Clean up mapping (after some delay to allow re-association)
-        # For now, keep mapping - will be cleaned in periodic_validation
 
         # Clean up embedding cache
         cache_key = (camera_id, local_track_id)
@@ -897,66 +886,6 @@ class GlobalTrackManager:
         track.camera_tracks = {
             primary_camera: track.camera_tracks[primary_camera]
         }
-
-    def periodic_validation(self) -> None:
-        """Run periodic checks for data consistency."""
-        current_time = time.time()
-
-        # Rate limit validation
-        if current_time - self._last_validation_time < self.validation_interval_sec:
-            return
-
-        self._last_validation_time = current_time
-
-        # Check 1: Detect and fix conflicts
-        conflicts = self.detect_impossible_merges()
-        for conflict in conflicts:
-            if conflict['severity'] == 'HIGH':
-                self.split_global_track(conflict['global_id'])
-
-        # Check 2: Archive old global tracks
-        cutoff_time = datetime.now() - timedelta(
-            minutes=self.archive_after_inactive_min
-        )
-        inactive_tracks = []
-
-        for global_id, track in self.global_tracks.items():
-            if track.last_seen < cutoff_time:
-                # All camera tracks inactive
-                if all(not ct.active for ct in track.camera_tracks.values()):
-                    inactive_tracks.append(global_id)
-
-        for global_id in inactive_tracks:
-            track = self.global_tracks.pop(global_id)
-            duration = track.get_duration_seconds()
-            logger.info(
-                f"ARCHIVE_TRACK | global_id={global_id} duration={duration:.1f}s "
-                f"cameras={list(track.camera_tracks.keys())}"
-            )
-
-            # Clean up mappings
-            for cam_id, cam_track in track.camera_tracks.items():
-                local_id = cam_track.local_track_id
-                if (cam_id in self.local_to_global and
-                    local_id in self.local_to_global[cam_id]):
-                    del self.local_to_global[cam_id][local_id]
-
-        # Check 3: Cache cleanup
-        self._cleanup_embedding_cache()
-
-        # Log metrics
-        self.metrics.log_summary()
-
-    def _cleanup_embedding_cache(self) -> None:
-        """Remove stale cache entries."""
-        cutoff_time = datetime.now() - timedelta(minutes=5)
-        stale_keys = [
-            key for key, cached in self.embedding_cache.items()
-            if cached.timestamp < cutoff_time
-        ]
-
-        for key in stale_keys:
-            del self.embedding_cache[key]
 
     # =========================================================================
     # Phase 0 Compatibility Methods
@@ -1098,10 +1027,6 @@ class GlobalTrackManager:
         """Get global ID for a local track."""
         return self.local_to_global[camera_id].get(local_track_id)
 
-    def get_global_track(self, global_id: int) -> Optional[GlobalTrack]:
-        """Get GlobalTrack by ID."""
-        return self.global_tracks.get(global_id)
-
     def find_global_track_by_identity(self, identity: str) -> Optional[GlobalTrack]:
         """
         Find an active global track by face identity.
@@ -1200,26 +1125,6 @@ class GlobalTrackManager:
             f"old_global={old_global_id} -> new_global={new_global_id}"
         )
         return True
-
-    def get_all_camera_appearances(
-        self,
-        global_id: int
-    ) -> List[Dict[str, Any]]:
-        """Get all camera appearances for a global track."""
-        track = self.global_tracks.get(global_id)
-        if track is None:
-            return []
-
-        return [
-            {
-                'camera_id': cam_id,
-                'local_track_id': cam_track.local_track_id,
-                'first_seen': cam_track.first_seen.isoformat(),
-                'last_seen': cam_track.last_seen.isoformat(),
-                'active': cam_track.active
-            }
-            for cam_id, cam_track in track.camera_tracks.items()
-        ]
 
 
 class GlobalTrackingMetrics:

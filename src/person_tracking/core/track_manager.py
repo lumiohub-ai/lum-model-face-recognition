@@ -187,29 +187,6 @@ class PersonTrackManager:
 
         return data
 
-    def get_latest_keypoints(
-        self,
-        track_id: int,
-        num_frames: int = 1
-    ) -> Optional[List[NDArray]]:
-        """
-        Get latest keypoints for a track.
-
-        Args:
-            track_id: Track identifier
-            num_frames: Number of latest frames to retrieve
-
-        Returns:
-            List of keypoint arrays or None
-        """
-        if track_id not in self.track_keypoints_history:
-            return None
-
-        frames = sorted(self.track_keypoints_history[track_id].keys())[-num_frames:]
-        keypoints = [self.track_keypoints_history[track_id][f] for f in frames]
-
-        return keypoints if keypoints else None
-
     def get_latest_bbox(self, track_id: int) -> Optional[NDArray]:
         """
         Get latest bounding box for a track.
@@ -228,41 +205,6 @@ class PersonTrackManager:
             return None
 
         return self.track_bbox_history[track_id][frames[-1]]
-
-    def set_track_identity(
-        self,
-        track_id: int,
-        identity: Optional[str]
-    ) -> None:
-        """
-        Set identity (person name) for a track.
-
-        Args:
-            track_id: Track identifier
-            identity: Person name or None for unknown
-        """
-        self.track_identity[track_id] = identity
-        logger.debug(f"Track {track_id} identity set to: {identity}")
-
-    def get_trajectory(
-        self,
-        track_id: int,
-        num_points: Optional[int] = None
-    ) -> List[tuple]:
-        """
-        Get movement trajectory for a track.
-
-        Args:
-            track_id: Track identifier
-            num_points: Optional limit to last N points
-
-        Returns:
-            List of (x, y, frame_num) tuples
-        """
-        trajectory = self.track_trajectories.get(track_id, [])
-        if num_points:
-            trajectory = trajectory[-num_points:]
-        return trajectory
 
     def remove_track(self, track_id: int) -> Dict[str, Any]:
         """
@@ -298,56 +240,3 @@ class PersonTrackManager:
         # Verbose logging disabled to reduce log noise
         # logger.debug(f"Track {track_id} removed from manager")
         return final_data
-
-    def get_active_tracks(self) -> List[int]:
-        """
-        Get list of currently active track IDs.
-
-        Returns:
-            List of track IDs
-        """
-        return list(self.track_bbox_history.keys())
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """
-        Get track manager statistics.
-
-        Returns:
-            Dictionary with stats
-        """
-        total_tracks = len(self.track_bbox_history)
-        identified_tracks = sum(
-            1 for identity in self.track_identity.values()
-            if identity is not None
-        )
-
-        # Calculate total frames stored
-        total_frames = sum(
-            len(history) for history in self.track_bbox_history.values()
-        )
-
-        return {
-            'total_active_tracks': total_tracks,
-            'identified_tracks': identified_tracks,
-            'total_frames_stored': total_frames,
-            'max_history_frames': self.max_history_frames
-        }
-
-    def reset(self) -> None:
-        """Reset all track data."""
-        self.track_bbox_history.clear()
-        self.track_keypoints_history.clear()
-        self.track_confidence_history.clear()
-        self.track_crop_history.clear()
-        self.track_first_seen.clear()
-        self.track_last_seen.clear()
-        self.track_trajectories.clear()
-        self.track_identity.clear()
-        logger.info("Track manager reset")
-
-    def __repr__(self) -> str:
-        """String representation."""
-        return (
-            f"PersonTrackManager(active_tracks={len(self.track_bbox_history)}, "
-            f"max_history={self.max_history_frames})"
-        )

@@ -200,10 +200,8 @@ class SmartOfficeEngine:
                 if self.save_video:
                     self.stream_manager.write_frames(annotated_frames)
 
-                # Periodic validation and metrics
+                # Periodic metrics logging
                 current_time = time.time()
-                self.frame_processor.run_periodic_validation()
-
                 if current_time - last_metrics_log_time >= metrics_log_interval:
                     self.frame_processor.log_metrics()
                     last_metrics_log_time = current_time
@@ -224,7 +222,3 @@ class SmartOfficeEngine:
             show_display=self.show_display,
             total_frames=self.frame_processor.total_frames
         )
-
-    def reload_embeddings(self) -> None:
-        """Reload face embeddings from database."""
-        self.models.reload_embeddings()

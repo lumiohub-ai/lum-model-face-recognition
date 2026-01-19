@@ -195,11 +195,6 @@ class FrameProcessor:
 
         return annotated
 
-    def run_periodic_validation(self) -> None:
-        """Run periodic validation on global track manager."""
-        if self.global_track_manager and self.global_track_manager.enabled:
-            self.global_track_manager.periodic_validation()
-
     def log_metrics(self) -> None:
         """Log baseline metrics summary."""
         if self.global_track_manager and self.global_track_manager.enabled:

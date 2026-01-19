@@ -15,7 +15,6 @@ from .smart_office_engine import SmartOfficeEngine
 from .core import FaceDetector, FaceRecognizer, ModelFactory, FrameProcessor
 
 # Configuration
-from .config import ConfigurationManager, SystemConfig
 from .config import constants
 
 # Logging
@@ -54,8 +53,6 @@ __all__ = [
     "FrameProcessor",
 
     # Configuration
-    "ConfigurationManager",
-    "SystemConfig",
     "constants",
 
     # Logging

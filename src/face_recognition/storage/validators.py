@@ -67,31 +67,3 @@ def validate_schema_name(schema_name: str) -> str:
         raise ValueError(f"schema_name too long: {len(schema_name)} chars (max 63)")
 
     return schema_name
-
-
-def sanitize_identifier(identifier: str, max_length: int = 63) -> str:
-    """Sanitize a SQL identifier (table, column, schema name).
-
-    Args:
-        identifier: SQL identifier to sanitize
-        max_length: Maximum allowed length (default: 63 for PostgreSQL)
-
-    Returns:
-        str: Sanitized identifier
-
-    Raises:
-        ValueError: If identifier is invalid after sanitization
-    """
-    if not identifier:
-        raise ValueError("Identifier cannot be empty")
-
-    # Remove any non-alphanumeric characters except underscore
-    sanitized = re.sub(r'[^a-z0-9_]', '', identifier.lower())
-
-    if not sanitized:
-        raise ValueError(f"Identifier '{identifier}' contains no valid characters")
-
-    if len(sanitized) > max_length:
-        raise ValueError(f"Identifier too long: {len(sanitized)} chars (max {max_length})")
-
-    return sanitized

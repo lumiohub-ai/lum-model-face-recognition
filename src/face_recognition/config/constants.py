@@ -34,34 +34,6 @@ MIN_FRAMES_FOR_RECOGNITION = 3
 DEFAULT_MINIMUM_FACE_SIZE = 30
 
 # ============================================================================
-# Video Processing Constants
-# ============================================================================
-
-# Default frame dimensions for display
-DISPLAY_FRAME_WIDTH = 1280
-DISPLAY_FRAME_HEIGHT = 720
-
-# Concatenated frame dimensions
-CONCAT_FRAME_WIDTH = 1920
-CONCAT_FRAME_HEIGHT = 720
-
-# FPS calculation window (number of frames)
-FPS_CALCULATION_WINDOW = 30
-
-# ============================================================================
-# API Constants
-# ============================================================================
-
-# Default API timeout in seconds
-DEFAULT_API_TIMEOUT = 30
-
-# Maximum retry attempts for API calls
-MAX_API_RETRY_ATTEMPTS = 3
-
-# Retry delay (exponential backoff base in seconds)
-API_RETRY_BASE_DELAY = 1
-
-# ============================================================================
 # Storage Constants
 # ============================================================================
 
@@ -136,34 +108,6 @@ IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp"]
 VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv"]
 
 # ============================================================================
-# Camera/Stream Constants
-# ============================================================================
-
-# Camera types
-CAMERA_TYPE_IN = "IN"
-CAMERA_TYPE_OUT = "OUT"
-CAMERA_TYPE_MANAGEMENT = "MANAGEMENT"
-
-# Stream reconnection settings
-STREAM_RECONNECT_DELAY_SECONDS = 5
-STREAM_MAX_RECONNECT_ATTEMPTS = 10
-
-# Frame queue size for streaming
-FRAME_QUEUE_MAXSIZE = 1
-
-# ============================================================================
-# Recognition Status Constants
-# ============================================================================
-
-STATUS_RECOGNIZED = "RECOGNIZED"
-STATUS_UNRECOGNIZED = "UNRECOGNIZED"
-STATUS_PARTIAL_MATCH = "PARTIAL_MATCH"
-
-# Entry/Exit status
-STATUS_IN = "IN"
-STATUS_OUT = "OUT"
-
-# ============================================================================
 # Validation Constants
 # ============================================================================
 
@@ -177,14 +121,3 @@ MAX_GPU_ID = 7  # Typical maximum GPU count
 MIN_FACE_SIZE = 10
 MAX_FACE_SIZE = 10000
 
-# ============================================================================
-# HTTP Status Codes (for reference)
-# ============================================================================
-
-HTTP_OK = 200
-HTTP_CREATED = 201
-HTTP_BAD_REQUEST = 400
-HTTP_UNAUTHORIZED = 401
-HTTP_FORBIDDEN = 403
-HTTP_NOT_FOUND = 404
-HTTP_INTERNAL_SERVER_ERROR = 500

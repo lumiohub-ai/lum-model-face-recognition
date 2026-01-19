@@ -236,37 +236,6 @@ def convert_to_smart_office_format(cameras: List[Dict[str, Any]]) -> List[Dict[s
     return converted
 
 
-def convert_to_system_setup_format(cameras: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
-    """Convert camera configs to SystemSetup format.
-
-    Args:
-        cameras: List of camera configs from YAML
-
-    Returns:
-        Dictionary with lists for each camera config field
-    """
-    result = {
-        'cam_types': [],
-        'video_path': [],
-        'camera_id': [],
-        'camera_name': [],
-        'match_threshold': [],
-        'roi': [],
-        'line_points': []
-    }
-
-    for cam in cameras:
-        result['cam_types'].append(cam.get('camera_type', 'IN').upper())
-        result['video_path'].append(cam.get('video_path', ''))
-        result['camera_id'].append(cam.get('camera_id'))
-        result['camera_name'].append(cam.get('camera_name', 'Unknown'))
-        result['match_threshold'].append(float(cam.get('match_threshold', 0.3)))
-        result['roi'].append(cam.get('roi'))
-        result['line_points'].append(cam.get('line_points'))
-
-    return result
-
-
 # =============================================================================
 # API Camera Loading
 # =============================================================================
