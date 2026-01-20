@@ -79,51 +79,6 @@ class APIClient:
 
         return response
 
-    def get_org_unique_id(self) -> Optional[str]:
-        """Fetch the unique_id of the organization matching this client's slug.
-
-        Returns:
-            The organization's unique_id if found, None otherwise
-        """
-        if not self.auth.is_authenticated():
-            logger.error("Not authenticated")
-            return None
-
-        url = f"{self.base_url}/organizations"
-
-        def make_request():
-            headers = {
-                "Authorization": f"Bearer {self.token}",
-                "Accept": "application/json",
-            }
-            return self.session.get(url, headers=headers, timeout=10)
-
-        try:
-            response = make_request()
-            response = self._handle_token_expiry(response, make_request)
-            response.raise_for_status()
-        except Exception as e:
-            logger.warning(f"[get_org_unique_id] Request failed: {e}")
-            return None
-
-        try:
-            data = response.json()
-        except ValueError:
-            logger.warning("[get_org_unique_id] Invalid JSON response")
-            return None
-
-        unique_id = next(
-            (org["unique_id"] for org in data if org.get("slug") == self.client_slug),
-            None
-        )
-
-        if not unique_id:
-            logger.warning(
-                f"[get_org_unique_id] No organization found for slug '{self.client_slug}'"
-            )
-
-        return unique_id
-
     def get_users(self) -> List[Dict[str, Any]]:
         """Retrieve all users from the API.
 
@@ -608,74 +563,6 @@ class APIClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch cameras: {str(e)}")
             return []
-
-    def get_face_recognition_camera_configs(self) -> Dict[str, List[Any]]:
-        """Fetch and parse camera configurations for face recognition.
-
-        Retrieves cameras with 'attendance' application enabled and parses them
-        into the format required by HBFace initialization.
-
-        Returns:
-            Dictionary containing camera configuration lists with keys:
-            - cam_types: List of camera types (IN/OUT)
-            - video_path: List of stream URLs
-            - camera_name: List of camera names
-            - camera_id: List of camera IDs
-            - match_threshold: List of matching thresholds
-            - roi: List of ROI tuples (or None if no ROIs)
-            - line_points: List of virtual line points (or None if no lines)
-
-        Raises:
-            ValueError: If no cameras found with 'attendance' application
-        """
-        # Fetch cameras with 'attendance' application enabled
-        cameras = self.get_cameras(application='attendance')
-
-        if not cameras:
-            raise ValueError("No cameras found with 'attendance' application enabled")
-
-        # Parse camera configs into HBFace parameters
-        cam_types = []
-        video_paths = []
-        camera_names = []
-        camera_ids = []
-        match_thresholds = []
-        roi_list = []
-        line_points_list = []
-
-        for cam in cameras:
-            # Map API fields to HBFace parameters
-            cam_types.append(cam.get('camera_type', '').upper())
-            camera_ids.append(int(cam.get('id')))
-            camera_names.append(cam.get('name', ''))
-            video_paths.append(cam.get('stream_url', ''))
-            match_thresholds.append(float(cam.get('matching_threshold', 0.5)))
-
-            # Handle optional ROI points: [[x1, y1], [x2, y2]] -> (x1, y1, x2, y2)
-            roi_points = cam.get('roi_points')
-            if roi_points and len(roi_points) >= 2:
-                roi_list.append(tuple(roi_points[0] + roi_points[1]))
-            else:
-                roi_list.append(None)
-
-            # Handle optional virtual line points: [[x1, y1], [x2, y2]]
-            virtual_line = cam.get('virtual_line_points')
-            if virtual_line and len(virtual_line) >= 2:
-                line_points_list.append([tuple(virtual_line[0]), tuple(virtual_line[1])])
-            else:
-                line_points_list.append(None)
-
-        logger.info(f"Loaded {len(cameras)} camera configurations from API")
-
-        return {
-            'cam_types': cam_types,
-            'video_path': video_paths,
-            'camera_name': camera_names,
-            'camera_id': camera_ids,
-            'match_threshold': match_thresholds,
-            'roi': roi_list if any(roi_list) else None,
-            'line_points': line_points_list if any(line_points_list) else None,
-        }
 
     def send_user_location(
         self,

@@ -5,7 +5,6 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import cv2
 import numpy as np
 from loguru import logger
 
@@ -258,60 +257,6 @@ class EntryLogger:
             Response object if successful, None otherwise
         """
         return self.api_client.send_unrecognized_face(face, status)
-
-    def visualize_entries(self, frame: np.ndarray, max_text_width: int = 0) -> None:
-        """Visualize recent entries on the frame.
-
-        Args:
-            frame: Frame to add visualization to
-            max_text_width: Maximum width of the text display
-        """
-        padding = 10
-        base_y = 30
-
-        # Calculate max text width
-        for entry in self.recent_entries:
-            text_size = cv2.getTextSize(entry, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-            max_text_width = max(max_text_width, text_size[0])
-
-        # Draw entry boxes
-        for i, entry in enumerate(self.recent_entries):
-            top_right_x = frame.shape[1] - max_text_width - padding * 2
-            cv2.rectangle(
-                frame,
-                (top_right_x, base_y - 25 + i * 35),
-                (frame.shape[1] - 10, base_y + i * 35 + 5),
-                (0, 0, 0),
-                -1,
-            )
-            cv2.putText(
-                frame,
-                entry,
-                (top_right_x + 5, base_y + i * 35),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2,
-            )
-
-    def send_annotated_frame(
-        self,
-        frame: np.ndarray,
-        camera_type: str,
-        camera_id: int
-    ) -> Optional[Any]:
-        """Send annotated frame to dashboard and optionally to API.
-
-        Args:
-            frame: Annotated frame to send
-            camera_type: Camera type (IN/OUT)
-            camera_id: Camera index (0, 1, 2, etc.)
-
-        Returns:
-            Response object if API upload successful, None otherwise
-        """
-        # Upload to external API
-        return self.api_client.upload_annotated_frame(frame, camera_id, camera_type)
 
     def save_status_info(self, video_name: str = 'status_info') -> str:
         """Get the path to the status information log file.

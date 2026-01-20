@@ -98,34 +98,6 @@ class FaceDetector:
         faces = self.model.get(padded_image)
         return faces
 
-    def compute_embedding(
-        self,
-        image: np.ndarray,
-        alpha: float = 0.9
-    ) -> Optional[np.ndarray]:
-        """Compute face embedding for a given image.
-
-        Args:
-            image: Input image array (BGR format)
-            alpha: Normalization factor for the embedding (not used in current implementation)
-
-        Returns:
-            Face embedding vector or None if no face is detected
-        """
-        faces = self.detect(image)
-
-        if not faces:
-            return None
-
-        # Use the first detected face
-        face = faces[0]
-        emb = face.embedding
-
-        # Apply normalization (alpha is currently not used, kept for compatibility)
-        emb = emb / np.linalg.norm(emb)
-
-        return emb
-
     def extract_face_features(self, image: np.ndarray) -> List[dict]:
         """Extract comprehensive face features including boxes, embeddings, and landmarks.
 
@@ -160,7 +132,3 @@ class FaceDetector:
             })
 
         return face_features
-'''
-
-
-'''

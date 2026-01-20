@@ -5,11 +5,10 @@ Manages comprehensive state for each tracked person and emits events
 when state changes occur (identity locked, person entered/exited, etc.).
 """
 
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
-from dataclasses import dataclass, asdict
-import time
+from dataclasses import dataclass
 import numpy as np
 from loguru import logger
 
@@ -44,15 +43,6 @@ class PersonState:
     # Stats
     total_frames: int = 0
 
-    def to_dict(self) -> Dict:
-        """Convert to dictionary."""
-        data = asdict(self)
-        # Convert datetime to ISO format
-        for key in ['first_seen', 'last_seen', 'identity_locked_at']:
-            if data[key]:
-                data[key] = data[key].isoformat()
-        return data
-
 
 @dataclass
 class PersonEvent:
@@ -67,26 +57,6 @@ class PersonEvent:
     confidence: Optional[float] = None
     duration: Optional[float] = None
     metadata: Optional[Dict] = None
-
-    def to_dict(self) -> Dict:
-        """Convert to dictionary."""
-        data = {
-            'event_type': self.event_type.value,
-            'track_id': self.track_id,
-            'camera_id': self.camera_id,
-            'timestamp': self.timestamp.isoformat(),
-        }
-
-        if self.identity is not None:
-            data['identity'] = self.identity
-        if self.confidence is not None:
-            data['confidence'] = self.confidence
-        if self.duration is not None:
-            data['duration'] = self.duration
-        if self.metadata:
-            data['metadata'] = self.metadata
-
-        return data
 
 
 class PersonStateManager:
@@ -309,54 +279,3 @@ class PersonStateManager:
             List of person states
         """
         return list(self.person_states.values())
-
-    def get_events(self, clear: bool = True) -> List[PersonEvent]:
-        """
-        Get queued events.
-
-        Args:
-            clear: Whether to clear event queue after retrieval
-
-        Returns:
-            List of events
-        """
-        events = self.event_queue.copy()
-
-        if clear:
-            self.event_queue.clear()
-
-        return events
-
-    def get_statistics(self) -> Dict:
-        """
-        Get state manager statistics.
-
-        Returns:
-            Dictionary with stats
-        """
-        total_persons = len(self.person_states)
-        identified_persons = sum(
-            1 for s in self.person_states.values()
-            if s.identity_locked
-        )
-
-        return {
-            'camera_id': self.camera_id,
-            'total_persons': total_persons,
-            'identified_persons': identified_persons,
-            'events_queued': len(self.event_queue)
-        }
-
-    def reset(self) -> None:
-        """Reset all state data."""
-        self.person_states.clear()
-        self.event_queue.clear()
-        logger.info("State manager reset")
-
-    def __repr__(self) -> str:
-        """String representation."""
-        return (
-            f"PersonStateManager(camera={self.camera_id}, "
-            f"persons={len(self.person_states)}, "
-            f"events={len(self.event_queue)})"
-        )

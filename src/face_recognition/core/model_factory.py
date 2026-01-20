@@ -61,11 +61,13 @@ class ModelFactory:
         """Get or create person detector (lazy initialization)."""
         if self._person_detector is None:
             person_conf_threshold = self.config.get('person_detection_threshold', 0.5)
-            logger.info(f"Initializing PersonDetector (threshold: {person_conf_threshold})...")
+            model_version = self.config.get('person_detection_model', 'yolo26')
+            logger.info(f"Initializing PersonDetector ({model_version}, threshold: {person_conf_threshold})...")
             self._person_detector = PersonDetector(
                 model_size='s',
                 confidence_threshold=person_conf_threshold,
-                use_pose=False  # False = YOLOv8 (faster), True = YOLOv8-Pose (skeleton)
+                use_pose=False,
+                model_version=model_version  # 'yolo26' (NMS-free, faster) or 'yolov8'
             )
         return self._person_detector
 

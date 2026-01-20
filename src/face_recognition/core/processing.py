@@ -164,16 +164,15 @@ class FrameProcessor:
                         keypoints = kp_history[-1]
 
             # Get global ID for display (if global tracking is enabled)
-            display_id = state.track_id
+            global_id = None
             if self.global_track_manager and self.global_track_manager.enabled:
                 global_id = self.global_track_manager.get_global_id(
                     engine.camera_id, state.track_id
                 )
-                if global_id is not None:
-                    display_id = global_id
 
             person_states.append({
-                'track_id': display_id,
+                'track_id': state.track_id,
+                'global_id': global_id,
                 'bbox': bbox if bbox is not None else [0, 0, 0, 0],
                 'keypoints': keypoints,
                 'identity': state.identity,
@@ -194,11 +193,6 @@ class FrameProcessor:
         )
 
         return annotated
-
-    def run_periodic_validation(self) -> None:
-        """Run periodic validation on global track manager."""
-        if self.global_track_manager and self.global_track_manager.enabled:
-            self.global_track_manager.periodic_validation()
 
     def log_metrics(self) -> None:
         """Log baseline metrics summary."""

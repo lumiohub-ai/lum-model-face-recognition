@@ -140,6 +140,7 @@ class FrameAnnotator:
                 - in_current_frame: bool (True if detected in current frame)
         """
         track_id = state.get('track_id', 0)
+        global_id = state.get('global_id')
         bbox = state.get('bbox', [0, 0, 0, 0])
         keypoints = state.get('keypoints')
         identity = state.get('identity')
@@ -177,6 +178,7 @@ class FrameAnnotator:
             frame,
             bbox,
             track_id,
+            global_id,
             identity,
             identity_locked,
             color
@@ -265,6 +267,7 @@ class FrameAnnotator:
         frame: np.ndarray,
         bbox: List[float],
         track_id: int,
+        global_id: Optional[int],
         identity: Optional[str],
         identity_locked: bool,
         color: Tuple[int, int, int]
@@ -274,15 +277,19 @@ class FrameAnnotator:
         Args:
             frame: Frame to draw on
             bbox: Bounding box [x1, y1, x2, y2]
-            track_id: Track ID
+            track_id: Local track ID
+            global_id: Global track ID (cross-camera) or None
             identity: Person identity or None
             identity_locked: Whether identity is locked
             color: Background color
         """
         x1, y1 = int(bbox[0]), int(bbox[1])
 
-        # Build label text
-        parts = [f"ID:{track_id}"]
+        # Build label text - show both local and global IDs for debugging
+        if global_id is not None:
+            parts = [f"L:{track_id} G:{global_id}"]
+        else:
+            parts = [f"ID:{track_id}"]
 
         if identity:
             parts.append(identity)
@@ -304,8 +311,8 @@ class FrameAnnotator:
         # Draw background rectangle
         cv2.rectangle(
             frame,
-            (x1, y1 - label_h - 10),
-            (x1 + label_w + 4, y1),
+            (x1, y1),
+            (x1 + label_w + 4, y1 + label_h + 10), # Adjusted to be inside the bbox, at the top
             color,
             -1
         )
@@ -314,7 +321,7 @@ class FrameAnnotator:
         cv2.putText(
             frame,
             label,
-            (x1 + 2, y1 - 5),
+            (x1 + 2, y1 + label_h + 5), # Adjusted to be inside the bbox, with padding
             cv2.FONT_HERSHEY_SIMPLEX,
             self.font_scale,
             self.colors['text'],
@@ -406,85 +413,3 @@ class FrameAnnotator:
                 (0, 255, 0),
                 2
             )
-
-    def draw_event_notification(
-        self,
-        frame: np.ndarray,
-        event_text: str,
-        duration_frames: int = 30
-    ) -> None:
-        """Draw event notification banner.
-
-        Args:
-            frame: Frame to draw on
-            event_text: Event text to display
-            duration_frames: How long to show (not implemented here)
-        """
-        h, w = frame.shape[:2]
-
-        # Draw banner at bottom
-        banner_height = 40
-        cv2.rectangle(
-            frame,
-            (0, h - banner_height),
-            (w, h),
-            (50, 50, 50),
-            -1
-        )
-
-        # Draw text
-        cv2.putText(
-            frame,
-            event_text,
-            (10, h - 12),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            2
-        )
-
-    @staticmethod
-    def create_grid_view(
-        frames: List[np.ndarray],
-        grid_size: Tuple[int, int] = (2, 2),
-        cell_size: Tuple[int, int] = (640, 480)
-    ) -> np.ndarray:
-        """Create a grid view of multiple camera frames.
-
-        Args:
-            frames: List of frames
-            grid_size: (rows, cols) of grid
-            cell_size: (width, height) of each cell
-
-        Returns:
-            Combined grid frame
-        """
-        rows, cols = grid_size
-        cell_w, cell_h = cell_size
-
-        # Create empty grid
-        grid = np.zeros(
-            (rows * cell_h, cols * cell_w, 3),
-            dtype=np.uint8
-        )
-
-        # Place each frame
-        for idx, frame in enumerate(frames):
-            if idx >= rows * cols:
-                break
-
-            row = idx // cols
-            col = idx % cols
-
-            # Resize frame to cell size
-            resized = cv2.resize(frame, cell_size)
-
-            # Place in grid
-            y1 = row * cell_h
-            y2 = y1 + cell_h
-            x1 = col * cell_w
-            x2 = x1 + cell_w
-
-            grid[y1:y2, x1:x2] = resized
-
-        return grid

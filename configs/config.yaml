@@ -13,6 +13,7 @@ resize_width: 1280  # Resize frame width for processing (null = no resize)
 # Recognition settings
 match_threshold: 0.3  # Face similarity threshold for matching
 person_detection_threshold: 0.45  # Person detection confidence threshold (0.0-1.0)
+person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
 
 # Feature flags
 enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)

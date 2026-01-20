@@ -194,14 +194,6 @@ class StreamHandler:
                 self.frame = self.latest_frame
             return self.ret, self.frame
 
-    def get_first_frame(self) -> Any:
-        """Get the first frame that was captured from the video source.
-
-        Returns:
-            The first frame captured from the video source
-        """
-        return self.frame
-
     def stop(self) -> None:
         """Stop the frame reading thread and release resources."""
         with self.lock:
@@ -212,16 +204,3 @@ class StreamHandler:
         if self.thread is not None:
             self.thread.join()
         self.cap.release()
-        # cv2.destroyAllWindows()
-
-    def __enter__(self) -> "StreamHandler":
-        """Context manager entry method.
-
-        Returns:
-            Started StreamHandler instance
-        """
-        return self.start()
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        """Context manager exit method that ensures resources are properly released."""
-        self.stop()

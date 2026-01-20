@@ -7,8 +7,8 @@ albumentations~=1.4.0
 prettytable~=3.12.0
 # opencv-python-headless~=4.12.0.88  # Removed: comes with ultralytics (opencv-python)
 
-# Person Tracking (YOLOv8)
-ultralytics>=8.0.0
+# Person Tracking (YOLOv8/YOLO26)
+ultralytics>=8.3.60
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 # scipy>=1.10.0  # Removed: comes with ultralytics

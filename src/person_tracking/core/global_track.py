@@ -164,30 +164,6 @@ class GlobalTrack:
         self.identity = identity
         self.identity_locked = locked
 
-    def compute_averaged_embedding(self) -> Optional[np.ndarray]:
-        """Compute averaged embedding from top-K embeddings."""
-        if len(self.body_top_k) == 0:
-            return None
-
-        # Average top-K embeddings
-        embeddings = [e.embedding for e in self.body_top_k]
-        avg = np.mean(embeddings, axis=0)
-
-        # Normalize
-        norm = np.linalg.norm(avg)
-        if norm > 0:
-            avg = avg / norm
-
-        return avg
-
     def get_duration_seconds(self) -> float:
         """Get total duration this track has been active."""
         return (self.last_seen - self.first_seen).total_seconds()
-
-    def __repr__(self) -> str:
-        cameras = list(self.camera_tracks.keys())
-        identity_str = f", identity='{self.identity}'" if self.identity else ""
-        return (
-            f"GlobalTrack(id={self.global_id}, cameras={cameras}, "
-            f"active={self.active}, duration={self.get_duration_seconds():.1f}s{identity_str})"
-        )

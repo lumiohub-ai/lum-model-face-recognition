@@ -193,6 +193,13 @@ FROM base AS app
 
 WORKDIR "${FR_DIR}"
 
+# Download ReID model weights (cached layer - rarely changes)
+ARG REID_WEIGHTS_URL="https://huggingface.co/paulosantiago/osnet_x0_25_msmt17/resolve/main/osnet_x0_25_msmt17.pt"
+ARG REID_WEIGHTS_PATH="volumes/models/weights/osnet_x0_25_msmt17.pt"
+RUN mkdir -p "$(dirname ${REID_WEIGHTS_PATH})" && \
+    curl -fSL --retry 3 --retry-delay 5 -o "${REID_WEIGHTS_PATH}" "${REID_WEIGHTS_URL}" && \
+    chmod 644 "${REID_WEIGHTS_PATH}"
+
 # Copy entrypoint scripts first (rarely change)
 COPY --chown=${UID}:${GID} --chmod=770 ./scripts/docker/*.sh /usr/local/bin/
 

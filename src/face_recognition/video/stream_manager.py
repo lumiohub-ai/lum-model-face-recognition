@@ -196,14 +196,3 @@ class StreamManager:
         """Clean up all resources."""
         self.stop_streams()
         self.release_writers()
-
-    @property
-    def total_frames(self) -> int:
-        """Get total frames read across all cameras."""
-        return sum(self.frame_nums)
-
-    def get_camera_name(self, camera_idx: int) -> str:
-        """Get camera name by index."""
-        if camera_idx < len(self.camera_configs):
-            return self.camera_configs[camera_idx].get('camera_name', f'Camera {camera_idx}')
-        return f'Camera {camera_idx}'

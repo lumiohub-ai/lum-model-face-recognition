@@ -1,12 +1,13 @@
 """
-Person Detector using YOLOv8 or YOLOv8-Pose.
+Person Detector using YOLOv8/YOLO26 or Pose variants.
 
 Detects persons in video frames using Ultralytics YOLO models.
-- YOLOv8: Fast person detection (2-3x faster, recommended)
-- YOLOv8-Pose: Person detection + 17 pose keypoints (COCO format, slower)
+- YOLO26: Latest model with NMS-free end-to-end design (recommended)
+- YOLOv8: Fast person detection
+- Pose variants: Person detection + 17 pose keypoints (COCO format, slower)
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 import numpy as np
 from numpy.typing import NDArray
 from ultralytics import YOLO
@@ -22,7 +23,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class PersonDetector:
     """
-    Person detection using YOLOv8 or YOLOv8-Pose.
+    Person detection using YOLOv8/YOLO26 or Pose variants.
 
     This detector identifies persons in video frames and extracts:
     - Bounding boxes (x1, y1, x2, y2)
@@ -36,8 +37,9 @@ class PersonDetector:
         13: Left Knee, 14: Right Knee, 15: Left Ankle, 16: Right Ankle
 
     Performance:
-        - YOLOv8 (use_pose=False): ~30-40 FPS on GPU, 2-3x faster, recommended
-        - YOLOv8-Pose (use_pose=True): ~12-18 FPS on GPU, for skeleton visualization
+        - YOLO26 (model_version='yolo26'): NMS-free, ~43% faster CPU inference
+        - YOLOv8 (model_version='yolov8'): ~30-40 FPS on GPU
+        - Pose variants (use_pose=True): ~12-18 FPS on GPU, for skeleton visualization
     """
 
     def __init__(
@@ -46,23 +48,26 @@ class PersonDetector:
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
         device: Optional[str] = None,
-        use_pose: bool = False  # NEW: Toggle between YOLOv8 and YOLOv8-Pose
+        use_pose: bool = False,
+        model_version: str = "yolo26"  # 'yolo26' or 'yolov8'
     ):
         """
         Initialize Person Detector.
 
         Args:
-            model_size: YOLOv8 model size (n/s/m/l/x)
+            model_size: Model size (n/s/m/l/x)
                        n=nano, s=small, m=medium, l=large, x=xlarge
             confidence_threshold: Minimum confidence for detection (0.0-1.0)
-            iou_threshold: IoU threshold for NMS
+            iou_threshold: IoU threshold for NMS (ignored for YOLO26 which is NMS-free)
             device: Device to run model on ('cuda', 'cpu', or None for auto)
-            use_pose: Use YOLOv8-Pose for keypoints (slower) or regular YOLOv8 (faster)
+            use_pose: Use Pose variant for keypoints (slower) or regular detection (faster)
+            model_version: 'yolo26' (recommended, NMS-free) or 'yolov8'
         """
         self.model_size = model_size
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.use_pose = use_pose
+        self.model_version = model_version.lower()
 
         # Auto-detect device
         if device is None:
@@ -70,14 +75,23 @@ class PersonDetector:
         else:
             self.device = device
 
-        model_type = "YOLOv8-Pose" if use_pose else "YOLOv8"
+        # Build model type string for logging
+        if self.model_version == "yolo26":
+            model_type = "YOLO26-Pose" if use_pose else "YOLO26"
+        else:
+            model_type = "YOLOv8-Pose" if use_pose else "YOLOv8"
+
         logger.info(
             f"Initializing PersonDetector with {model_type}{model_size} "
             f"on device: {self.device}"
         )
 
-        # Load YOLOv8 or YOLOv8-Pose model
-        model_name = f"yolov8{model_size}-pose.pt" if use_pose else f"yolov8{model_size}.pt"
+        # Build model filename based on version and pose setting
+        if self.model_version == "yolo26":
+            model_name = f"yolo26{model_size}-pose.pt" if use_pose else f"yolo26{model_size}.pt"
+        else:
+            model_name = f"yolov8{model_size}-pose.pt" if use_pose else f"yolov8{model_size}.pt"
+
         try:
             self.model = YOLO(model_name)
             logger.info(f"{model_type} model loaded: {model_name}")
@@ -86,15 +100,15 @@ class PersonDetector:
             self.model.to(self.device)
 
         except Exception as e:
-            logger.error(f"Failed to load {model_type} model: {e}")
+            logger.error(f"Failed to load {model_type}{model_size} model: {e}")
             raise RuntimeError(f"Failed to load model {model_name}: {e}")
 
         # Model info
-        self.input_size = 640  # YOLOv8 default
+        self.input_size = 640  # YOLO default input size
         self.num_keypoints = 17 if use_pose else 0  # COCO format (only if using pose)
 
         logger.info(
-            f"PersonDetector initialized: conf={confidence_threshold}, "
+            f"PersonDetector initialized: model={model_name}, conf={confidence_threshold}, "
             f"iou={iou_threshold}, device={self.device}, pose={use_pose}"
         )
 
@@ -124,7 +138,7 @@ class PersonDetector:
             return []
 
         try:
-            # Run YOLOv8-Pose inference
+            # Run YOLO inference
             results = self.model(
                 frame,
                 conf=self.confidence_threshold,
@@ -184,181 +198,3 @@ class PersonDetector:
         except Exception as e:
             logger.error(f"Error during person detection: {e}")
             return []
-
-    def get_visible_keypoints(
-        self,
-        keypoints: NDArray,
-        min_confidence: float = 0.3
-    ) -> Dict[str, NDArray]:
-        """
-        Get visible keypoints above confidence threshold.
-
-        Args:
-            keypoints: Keypoints array (17, 3) [x, y, confidence]
-            min_confidence: Minimum confidence for visibility
-
-        Returns:
-            Dictionary mapping keypoint names to coordinates
-        """
-        keypoint_names = [
-            'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
-            'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
-            'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
-            'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
-        ]
-
-        visible_keypoints = {}
-        for idx, name in enumerate(keypoint_names):
-            if keypoints[idx, 2] >= min_confidence:
-                visible_keypoints[name] = keypoints[idx, :2]
-
-        return visible_keypoints
-
-    def get_keypoint_by_name(
-        self,
-        keypoints: NDArray,
-        name: str,
-        min_confidence: float = 0.3
-    ) -> Optional[NDArray]:
-        """
-        Get a specific keypoint by name if visible.
-
-        Args:
-            keypoints: Keypoints array (17, 3)
-            name: Keypoint name (e.g., 'nose', 'left_wrist')
-            min_confidence: Minimum confidence
-
-        Returns:
-            Keypoint coordinates [x, y] or None if not visible
-        """
-        keypoint_map = {
-            'nose': 0, 'left_eye': 1, 'right_eye': 2,
-            'left_ear': 3, 'right_ear': 4,
-            'left_shoulder': 5, 'right_shoulder': 6,
-            'left_elbow': 7, 'right_elbow': 8,
-            'left_wrist': 9, 'right_wrist': 10,
-            'left_hip': 11, 'right_hip': 12,
-            'left_knee': 13, 'right_knee': 14,
-            'left_ankle': 15, 'right_ankle': 16
-        }
-
-        if name not in keypoint_map:
-            logger.warning(f"Unknown keypoint name: {name}")
-            return None
-
-        idx = keypoint_map[name]
-        if keypoints[idx, 2] >= min_confidence:
-            return keypoints[idx, :2]
-        return None
-
-    def calculate_person_height(self, keypoints: NDArray) -> Optional[float]:
-        """
-        Estimate person height from keypoints.
-
-        Args:
-            keypoints: Keypoints array (17, 3)
-
-        Returns:
-            Estimated height in pixels, or None if not enough keypoints
-        """
-        # Try nose to ankle distance
-        nose = self.get_keypoint_by_name(keypoints, 'nose')
-        left_ankle = self.get_keypoint_by_name(keypoints, 'left_ankle')
-        right_ankle = self.get_keypoint_by_name(keypoints, 'right_ankle')
-
-        if nose is not None and (left_ankle is not None or right_ankle is not None):
-            ankle = left_ankle if left_ankle is not None else right_ankle
-            height = np.linalg.norm(nose - ankle)
-            return float(height)
-
-        # Fallback: try shoulder to ankle
-        left_shoulder = self.get_keypoint_by_name(keypoints, 'left_shoulder')
-        right_shoulder = self.get_keypoint_by_name(keypoints, 'right_shoulder')
-
-        if (left_shoulder is not None or right_shoulder is not None) and \
-           (left_ankle is not None or right_ankle is not None):
-            shoulder = left_shoulder if left_shoulder is not None else right_shoulder
-            ankle = left_ankle if left_ankle is not None else right_ankle
-            # Multiply by ~1.3 to account for head
-            height = np.linalg.norm(shoulder - ankle) * 1.3
-            return float(height)
-
-        return None
-
-    def visualize_detections(
-        self,
-        frame: NDArray,
-        detections: List[Dict],
-        draw_bbox: bool = True,
-        draw_keypoints: bool = True,
-        draw_skeleton: bool = True
-    ) -> NDArray:
-        """
-        Visualize detections on frame.
-
-        Args:
-            frame: Input frame
-            detections: List of detection dicts
-            draw_bbox: Draw bounding boxes
-            draw_keypoints: Draw keypoint circles
-            draw_skeleton: Draw skeleton connections
-
-        Returns:
-            Annotated frame
-        """
-        import cv2
-
-        annotated = frame.copy()
-
-        # COCO skeleton connections
-        skeleton = [
-            (0, 1), (0, 2), (1, 3), (2, 4),  # Head
-            (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),  # Arms
-            (5, 11), (6, 12), (11, 12),  # Torso
-            (11, 13), (13, 15), (12, 14), (14, 16)  # Legs
-        ]
-
-        for det in detections:
-            bbox = det['bbox']
-            keypoints = det['keypoints']
-            conf = det['confidence']
-
-            # Draw bounding box
-            if draw_bbox:
-                x1, y1, x2, y2 = map(int, bbox)
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(
-                    annotated,
-                    f"{conf:.2f}",
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 255, 0),
-                    2
-                )
-
-            # Draw skeleton
-            if draw_skeleton:
-                for start_idx, end_idx in skeleton:
-                    if keypoints[start_idx, 2] > 0.3 and keypoints[end_idx, 2] > 0.3:
-                        start_point = tuple(map(int, keypoints[start_idx, :2]))
-                        end_point = tuple(map(int, keypoints[end_idx, :2]))
-                        cv2.line(annotated, start_point, end_point, (255, 0, 0), 2)
-
-            # Draw keypoints
-            if draw_keypoints:
-                for idx in range(len(keypoints)):
-                    if keypoints[idx, 2] > 0.3:
-                        x, y = map(int, keypoints[idx, :2])
-                        cv2.circle(annotated, (x, y), 3, (0, 0, 255), -1)
-
-        return annotated
-
-    def __repr__(self) -> str:
-        """String representation."""
-        model_type = f"yolov8{self.model_size}-pose" if self.use_pose else f"yolov8{self.model_size}"
-        return (
-            f"PersonDetector(model={model_type}, "
-            f"conf={self.confidence_threshold}, iou={self.iou_threshold}, "
-            f"device={self.device})"
-        )
