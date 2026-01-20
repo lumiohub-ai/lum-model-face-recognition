@@ -1,9 +1,10 @@
 """
-Person Detector using YOLOv8 or YOLOv8-Pose.
+Person Detector using YOLOv8/YOLO26 or Pose variants.
 
 Detects persons in video frames using Ultralytics YOLO models.
-- YOLOv8: Fast person detection (2-3x faster, recommended)
-- YOLOv8-Pose: Person detection + 17 pose keypoints (COCO format, slower)
+- YOLO26: Latest model with NMS-free end-to-end design (recommended)
+- YOLOv8: Fast person detection
+- Pose variants: Person detection + 17 pose keypoints (COCO format, slower)
 """
 
 from typing import List, Dict, Optional
@@ -22,7 +23,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class PersonDetector:
     """
-    Person detection using YOLOv8 or YOLOv8-Pose.
+    Person detection using YOLOv8/YOLO26 or Pose variants.
 
     This detector identifies persons in video frames and extracts:
     - Bounding boxes (x1, y1, x2, y2)
@@ -36,8 +37,9 @@ class PersonDetector:
         13: Left Knee, 14: Right Knee, 15: Left Ankle, 16: Right Ankle
 
     Performance:
-        - YOLOv8 (use_pose=False): ~30-40 FPS on GPU, 2-3x faster, recommended
-        - YOLOv8-Pose (use_pose=True): ~12-18 FPS on GPU, for skeleton visualization
+        - YOLO26 (model_version='yolo26'): NMS-free, ~43% faster CPU inference
+        - YOLOv8 (model_version='yolov8'): ~30-40 FPS on GPU
+        - Pose variants (use_pose=True): ~12-18 FPS on GPU, for skeleton visualization
     """
 
     def __init__(
@@ -46,23 +48,26 @@ class PersonDetector:
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
         device: Optional[str] = None,
-        use_pose: bool = False  # NEW: Toggle between YOLOv8 and YOLOv8-Pose
+        use_pose: bool = False,
+        model_version: str = "yolo26"  # 'yolo26' or 'yolov8'
     ):
         """
         Initialize Person Detector.
 
         Args:
-            model_size: YOLOv8 model size (n/s/m/l/x)
+            model_size: Model size (n/s/m/l/x)
                        n=nano, s=small, m=medium, l=large, x=xlarge
             confidence_threshold: Minimum confidence for detection (0.0-1.0)
-            iou_threshold: IoU threshold for NMS
+            iou_threshold: IoU threshold for NMS (ignored for YOLO26 which is NMS-free)
             device: Device to run model on ('cuda', 'cpu', or None for auto)
-            use_pose: Use YOLOv8-Pose for keypoints (slower) or regular YOLOv8 (faster)
+            use_pose: Use Pose variant for keypoints (slower) or regular detection (faster)
+            model_version: 'yolo26' (recommended, NMS-free) or 'yolov8'
         """
         self.model_size = model_size
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.use_pose = use_pose
+        self.model_version = model_version.lower()
 
         # Auto-detect device
         if device is None:
@@ -70,14 +75,23 @@ class PersonDetector:
         else:
             self.device = device
 
-        model_type = "YOLOv8-Pose" if use_pose else "YOLOv8"
+        # Build model type string for logging
+        if self.model_version == "yolo26":
+            model_type = "YOLO26-Pose" if use_pose else "YOLO26"
+        else:
+            model_type = "YOLOv8-Pose" if use_pose else "YOLOv8"
+
         logger.info(
             f"Initializing PersonDetector with {model_type}{model_size} "
             f"on device: {self.device}"
         )
 
-        # Load YOLOv8 or YOLOv8-Pose model
-        model_name = f"yolov8{model_size}-pose.pt" if use_pose else f"yolov8{model_size}.pt"
+        # Build model filename based on version and pose setting
+        if self.model_version == "yolo26":
+            model_name = f"yolo26{model_size}-pose.pt" if use_pose else f"yolo26{model_size}.pt"
+        else:
+            model_name = f"yolov8{model_size}-pose.pt" if use_pose else f"yolov8{model_size}.pt"
+
         try:
             self.model = YOLO(model_name)
             logger.info(f"{model_type} model loaded: {model_name}")
@@ -86,15 +100,15 @@ class PersonDetector:
             self.model.to(self.device)
 
         except Exception as e:
-            logger.error(f"Failed to load {model_type} model: {e}")
+            logger.error(f"Failed to load {model_type}{model_size} model: {e}")
             raise RuntimeError(f"Failed to load model {model_name}: {e}")
 
         # Model info
-        self.input_size = 640  # YOLOv8 default
+        self.input_size = 640  # YOLO default input size
         self.num_keypoints = 17 if use_pose else 0  # COCO format (only if using pose)
 
         logger.info(
-            f"PersonDetector initialized: conf={confidence_threshold}, "
+            f"PersonDetector initialized: model={model_name}, conf={confidence_threshold}, "
             f"iou={iou_threshold}, device={self.device}, pose={use_pose}"
         )
 
@@ -124,7 +138,7 @@ class PersonDetector:
             return []
 
         try:
-            # Run YOLOv8-Pose inference
+            # Run YOLO inference
             results = self.model(
                 frame,
                 conf=self.confidence_threshold,

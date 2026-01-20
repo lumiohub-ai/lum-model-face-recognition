@@ -179,7 +179,9 @@ class SmartOfficeEngine:
         """Run the main processing loop."""
         self.lifecycle.mark_started()
         last_metrics_log_time = time.time()
+        last_validation_time = time.time()
         metrics_log_interval = 60.0
+        validation_interval = 30.0
 
         # Start streams
         self.stream_manager.start_streams()
@@ -200,8 +202,16 @@ class SmartOfficeEngine:
                 if self.save_video:
                     self.stream_manager.write_frames(annotated_frames)
 
-                # Periodic metrics logging
+                # Periodic tasks
                 current_time = time.time()
+
+                # Periodic validation (Phase 4)
+                if current_time - last_validation_time >= validation_interval:
+                    if self.models.global_track_manager:
+                        self.models.global_track_manager.periodic_validation()
+                    last_validation_time = current_time
+
+                # Periodic metrics logging
                 if current_time - last_metrics_log_time >= metrics_log_interval:
                     self.frame_processor.log_metrics()
                     last_metrics_log_time = current_time

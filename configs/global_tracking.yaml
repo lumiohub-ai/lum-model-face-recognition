@@ -4,7 +4,7 @@
 global_tracking:
   # Feature flag - set to true to enable global tracking
   # Can also be controlled via ENABLE_GLOBAL_TRACKING environment variable
-  enabled: false
+  enabled: true
 
   # Body ReID model configuration
   body_reid:

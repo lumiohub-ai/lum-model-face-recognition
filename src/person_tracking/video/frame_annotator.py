@@ -140,6 +140,7 @@ class FrameAnnotator:
                 - in_current_frame: bool (True if detected in current frame)
         """
         track_id = state.get('track_id', 0)
+        global_id = state.get('global_id')
         bbox = state.get('bbox', [0, 0, 0, 0])
         keypoints = state.get('keypoints')
         identity = state.get('identity')
@@ -177,6 +178,7 @@ class FrameAnnotator:
             frame,
             bbox,
             track_id,
+            global_id,
             identity,
             identity_locked,
             color
@@ -265,6 +267,7 @@ class FrameAnnotator:
         frame: np.ndarray,
         bbox: List[float],
         track_id: int,
+        global_id: Optional[int],
         identity: Optional[str],
         identity_locked: bool,
         color: Tuple[int, int, int]
@@ -274,15 +277,19 @@ class FrameAnnotator:
         Args:
             frame: Frame to draw on
             bbox: Bounding box [x1, y1, x2, y2]
-            track_id: Track ID
+            track_id: Local track ID
+            global_id: Global track ID (cross-camera) or None
             identity: Person identity or None
             identity_locked: Whether identity is locked
             color: Background color
         """
         x1, y1 = int(bbox[0]), int(bbox[1])
 
-        # Build label text
-        parts = [f"ID:{track_id}"]
+        # Build label text - show both local and global IDs for debugging
+        if global_id is not None:
+            parts = [f"L:{track_id} G:{global_id}"]
+        else:
+            parts = [f"ID:{track_id}"]
 
         if identity:
             parts.append(identity)
@@ -304,8 +311,8 @@ class FrameAnnotator:
         # Draw background rectangle
         cv2.rectangle(
             frame,
-            (x1, y1 - label_h - 10),
-            (x1 + label_w + 4, y1),
+            (x1, y1),
+            (x1 + label_w + 4, y1 + label_h + 10), # Adjusted to be inside the bbox, at the top
             color,
             -1
         )
@@ -314,7 +321,7 @@ class FrameAnnotator:
         cv2.putText(
             frame,
             label,
-            (x1 + 2, y1 - 5),
+            (x1 + 2, y1 + label_h + 5), # Adjusted to be inside the bbox, with padding
             cv2.FONT_HERSHEY_SIMPLEX,
             self.font_scale,
             self.colors['text'],
