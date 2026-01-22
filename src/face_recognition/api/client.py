@@ -1,6 +1,7 @@
 
 """API client for SmartOffice backend integration."""
 
+import base64
 import io
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -512,6 +513,56 @@ class APIClient:
             logger.error(f"Send {activity_type} request failed: {str(e)}")
             return None
 
+    def get_user_action(
+        self,
+        image: np.ndarray,
+        vlm_api_url: str = "http://localhost:8001",
+        timeout: int = 30
+    ) -> Optional[Dict[str, Any]]:
+        """Get user action from VLM API.
+
+        Args:
+            image: Person crop image (numpy array, BGR format)
+            vlm_api_url: URL of VLM API service
+            timeout: Request timeout in seconds
+
+        Returns:
+            Dictionary with action result, or None if failed
+            Example: {"action": "using phone", "raw_output": "...", "inference_time_ms": 245}
+        """
+        try:
+            # Encode image to base64
+            success, buffer = cv2.imencode('.jpg', image)
+            if not success:
+                logger.error("Failed to encode image for VLM API")
+                return None
+
+            image_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
+
+            # Prepare request
+            payload = {"image": image_b64}
+            url = f"{vlm_api_url}/api/recognize-action"
+
+            # Send request (no authentication needed for VLM API)
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=timeout,
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.status_code not in [200, 201]:
+                logger.error(
+                    f"VLM API request failed with status {response.status_code}: "
+                    f"{response.text}"
+                )
+                return None
+
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"VLM API request failed: {str(e)}")
+            return None
 
     def get_cameras(self, application: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get cameras from the API, optionally filtered by application.
@@ -668,3 +719,4 @@ class APIClient:
         except requests.exceptions.RequestException as e:
             logger.debug(f"API upload request failed: {str(e)}")
             return None
+

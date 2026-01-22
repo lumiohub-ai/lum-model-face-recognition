@@ -91,7 +91,7 @@ class SmartOfficeEngine:
             raise ValueError("No cameras configured. Check config file or API.")
 
         # Initialize models via factory
-        self.models = ModelFactory(self.config, client_slug)
+        self.models = ModelFactory(self.config, client_slug, self.api_client)
         self.models.initialize_all()
 
         # Sync embeddings on startup
@@ -152,7 +152,8 @@ class SmartOfficeEngine:
                 global_id_generator=self.models.global_id_generator,
                 api_client=self.api_client,
                 name_to_id_map=self.name_to_id_map,
-                global_track_manager=self.models.global_track_manager
+                global_track_manager=self.models.global_track_manager,
+                action_recognizer=self.models.action_recognizer  # Add action recognizer
             )
             engines.append(engine)
 
@@ -225,6 +226,9 @@ class SmartOfficeEngine:
 
     def _cleanup(self) -> None:
         """Clean up resources."""
+        # Stop action recognizer workers
+        self.models.cleanup()
+
         self.lifecycle.cleanup(
             stream_manager=self.stream_manager,
             global_track_manager=self.models.global_track_manager,
