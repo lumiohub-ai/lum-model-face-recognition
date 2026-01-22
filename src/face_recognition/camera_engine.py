@@ -8,6 +8,8 @@ This module handles per-camera processing including:
 """
 
 import threading
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -80,7 +82,8 @@ class CameraEngine:
         global_id_generator: Optional[GlobalTrackIDGenerator] = None,
         api_client: Optional['APIClient'] = None,
         name_to_id_map: Optional[Dict[str, int]] = None,
-        global_track_manager: Optional[GlobalTrackManager] = None
+        global_track_manager: Optional[GlobalTrackManager] = None,
+        action_recognizer: Optional[Any] = None
     ):
         """Initialize camera engine.
 
@@ -94,6 +97,7 @@ class CameraEngine:
             api_client: API client for sending activities
             name_to_id_map: Dictionary mapping user names to IDs
             global_track_manager: Optional GlobalTrackManager for Phase 0 instrumentation
+            action_recognizer: Optional action recognizer for activity tracking
         """
         self.camera_id = camera_config['camera_id']
         self.camera_name = camera_config['camera_name']
@@ -109,6 +113,7 @@ class CameraEngine:
         self.face_detector = face_detector
         self.face_recognizer = face_recognizer
         self.person_detector = person_detector
+        self.action_recognizer = action_recognizer
         self.client_slug = client_slug
         self.global_id_generator = global_id_generator
         self.global_track_manager = global_track_manager
@@ -171,6 +176,9 @@ class CameraEngine:
             api_client=self.api_client,
             name_to_id_map=self.name_to_id_map
         )
+
+        # Action recognition timing (track per identity name, not track_id)
+        self.last_action_check_per_identity: Dict[str, float] = {}
 
         # Frame counter
         self.frame_count = 0
@@ -400,6 +408,15 @@ class CameraEngine:
                 identity_confidence=identity_confidence,
                 proof_image=proof_image
             )
+
+            # Action recognition (only for locked identities)
+            if identity_locked and self.action_recognizer and self.action_recognizer.enabled:
+                self._check_and_queue_action_recognition(
+                    track_id=track_id,
+                    identity=identity,
+                    proof_image=proof_image,
+                    frame_num=frame_num
+                )
 
             # Store face image and person bbox for later use (unrecognized faces)
             if face_image is not None:
@@ -754,3 +771,123 @@ class CameraEngine:
         # Remove from person_tracker's active_tracks
         if source_track_id in self.person_tracker.active_tracks:
             del self.person_tracker.active_tracks[source_track_id]
+
+    def _check_and_queue_action_recognition(
+        self,
+        track_id: int,
+        identity: str,
+        proof_image: Optional[np.ndarray],
+        frame_num: int
+    ) -> None:
+        """Check if action recognition is needed and queue request.
+
+        Args:
+            track_id: Track ID
+            identity: Person identity (name)
+            proof_image: Person crop image
+            frame_num: Current frame number
+        """
+        if proof_image is None or proof_image.size == 0:
+            return
+
+        # Check if enough time has passed since last action check (per identity, not per track_id)
+        current_time = time.time()
+        last_check_time = self.last_action_check_per_identity.get(identity, 0.0)
+        time_since_last_check = current_time - last_check_time
+
+        if time_since_last_check < self.action_recognizer.check_interval_seconds:
+            return  # Too soon, skip
+
+        # Update last check time for this identity
+        self.last_action_check_per_identity[identity] = current_time
+
+        # Get user ID from name
+        user_id = self.name_to_id_map.get(identity)
+        if user_id is None:
+            logger.warning(f"Cannot find user_id for '{identity}', skipping action recognition")
+            return
+
+        # Create unique request ID
+        request_id = f"cam{self.camera_id}_track{track_id}_frame{frame_num}"
+
+        # Create callback function
+        def action_result_callback(result: Dict):
+            self._handle_action_result(
+                track_id=track_id,
+                user_id=user_id,
+                identity=identity,
+                result=result,
+                timestamp=current_time,
+                proof_image=proof_image
+            )
+
+        # Queue for async recognition
+        queued = self.action_recognizer.recognize_async(
+            image=proof_image,
+            request_id=request_id,
+            callback=action_result_callback,
+            metadata={
+                'track_id': track_id,
+                'identity': identity,
+                'user_id': user_id,
+                'camera_id': self.camera_id,
+                'frame_num': frame_num
+            }
+        )
+
+        if queued:
+            logger.debug(
+                f"Queued action recognition | {identity} (track id {track_id}) | "
+                f"camera={self.camera_name}"
+            )
+        else:
+            logger.warning(f"Failed to queue action recognition (queue full)")
+
+    def _handle_action_result(
+        self,
+        track_id: int,
+        user_id: int,
+        identity: str,
+        result: Dict,
+        timestamp: float,
+        proof_image: np.ndarray
+    ) -> None:
+        """Handle action recognition result and send to API.
+
+        Args:
+            track_id: Track ID
+            user_id: User ID in database
+            identity: Person identity (name)
+            result: Action recognition result
+            timestamp: Unix timestamp
+            proof_image: Person crop image
+        """
+        action = result.get('action')
+        if not action:
+            logger.debug(f"No action detected for {identity} (track {track_id})")
+            return
+
+        inference_time = result.get('inference_time', 0.0)
+        raw_output = result.get('raw_output', '')
+
+        logger.info(
+            f"ACTION DETECTED | {identity}: {action} | "
+            f"time={inference_time:.3f}s | camera={self.camera_name}"
+        )
+
+        # Update state
+        state = self.state_manager.get_state(track_id)
+        if state:
+            state.last_detected_action = action
+
+        # Note: Activity is already sent to backend by ActionRecognizer._post_activity_to_backend()
+        # No need to send again here to avoid duplicate API calls
+
+    def reset(self) -> None:
+        """Reset all tracking state."""
+        self.person_tracker.reset()
+        self.track_manager.reset()
+        self.identity_manager.reset()
+        self.state_manager.reset()
+        self.frame_count = 0
+

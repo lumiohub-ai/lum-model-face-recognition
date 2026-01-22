@@ -40,6 +40,10 @@ class PersonState:
     last_seen: Optional[datetime] = None
     identity_locked_at: Optional[datetime] = None
 
+    # Action Recognition
+    last_action_check_time: float = 0.0  # Unix timestamp of last action recognition check
+    last_detected_action: Optional[str] = None  # Last detected action type
+
     # Stats
     total_frames: int = 0
 

@@ -40,6 +40,35 @@ services:
       retries: 5
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: person-tracking-ollama
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    # Pull gemma3:4b model on startup
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /bin/ollama serve &
+        sleep 5
+        ollama pull gemma3:4b
+        wait
+
   person-tracking:
     build:
       context: .
@@ -84,6 +113,9 @@ services:
       # Backend API (optional)
       SO_BACKEND_API_URL: ${SO_BACKEND_API_URL:-}
 
+      # Ollama API for action recognition
+      OLLAMA_API_URL: ${OLLAMA_API_URL:-http://localhost:11435}
+
       # Development: Enable Python unbuffered output for real-time logs
       PYTHONUNBUFFERED: 1
       # Development: Disable Python bytecode caching
@@ -118,6 +150,9 @@ services:
       - ./credentials:/app/face-recognition/credentials
       # Model cache in data directory (fr-user has write access)
       - ./volumes/models/insightface:/home/fr-user/.insightface
+      # HuggingFace model cache (for Gemma-3N and other transformers models)
+      - ./volumes/models/huggingface:/home/fr-user/.cache/huggingface
+      - ./volumes/models/weights:/app/face-recognition/weights:ro
       # InsightFace models will be downloaded automatically on first run
       # - ./insightface_models/buffalo_l:/home/fr-user/.insightface/models/buffalo_l:ro
     depends_on:
@@ -125,6 +160,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_started
     deploy:
       resources:
         reservations:
@@ -142,6 +179,8 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  ollama_data:
     driver: local
   model-cache:
     driver: local
