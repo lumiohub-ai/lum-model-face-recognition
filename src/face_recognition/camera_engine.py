@@ -177,6 +177,9 @@ class CameraEngine:
             name_to_id_map=self.name_to_id_map
         )
 
+        # Action recognition timing (track per identity name, not track_id)
+        self.last_action_check_per_identity: Dict[str, float] = {}
+
         # Frame counter
         self.frame_count = 0
 
@@ -787,19 +790,16 @@ class CameraEngine:
         if proof_image is None or proof_image.size == 0:
             return
 
-        state = self.state_manager.get_state(track_id)
-        if not state:
-            return
-
-        # Check if enough time has passed since last action check
+        # Check if enough time has passed since last action check (per identity, not per track_id)
         current_time = time.time()
-        time_since_last_check = current_time - state.last_action_check_time
+        last_check_time = self.last_action_check_per_identity.get(identity, 0.0)
+        time_since_last_check = current_time - last_check_time
 
         if time_since_last_check < self.action_recognizer.check_interval_seconds:
             return  # Too soon, skip
 
-        # Update last check time
-        state.last_action_check_time = current_time
+        # Update last check time for this identity
+        self.last_action_check_per_identity[identity] = current_time
 
         # Get user ID from name
         user_id = self.name_to_id_map.get(identity)
