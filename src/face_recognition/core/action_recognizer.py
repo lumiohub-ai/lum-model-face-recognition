@@ -36,9 +36,10 @@ class ActionRecognizer:
     # VLM action to backend activity_type mapping
     ACTION_MAPPING = {
         "sleeping": "sleeping",
-        "using phone": "using_phone",
+        "using phone": "phone_usage",
         "working with computer": "working",
         "talking with someone": "talking",
+        "not_focusing": "not_focusing",
         "idle": "idle",
         None: "unknown"
     }
@@ -51,7 +52,8 @@ class ActionRecognizer:
         check_interval_seconds: int = 30,
         max_queue_size: int = 50,
         num_workers: int = 1,
-        model_name: str = "gemma3:4b"
+        model_name: str = "gemma3:4b",
+        inference_timeout: int = 30
     ):
         """Initialize action recognizer.
 
@@ -63,6 +65,7 @@ class ActionRecognizer:
             max_queue_size: Maximum queued inference requests
             num_workers: Number of background worker threads
             model_name: Ollama model to use for inference
+            inference_timeout: Timeout for Ollama API calls in seconds (default: 30s)
         """
         self.ollama_api_url = ollama_api_url or os.getenv("OLLAMA_API_URL", "http://localhost:11435")
         self.api_client = api_client
@@ -71,10 +74,11 @@ class ActionRecognizer:
         self.max_queue_size = max_queue_size
         self.num_workers = num_workers
         self.model_name = model_name
+        self.inference_timeout = inference_timeout
 
-        # Configure Ollama client
+        # Configure Ollama client with timeout
         if self.ollama_api_url:
-            ollama.Client(host=self.ollama_api_url)
+            ollama.Client(host=self.ollama_api_url, timeout=inference_timeout)
 
         # Async processing queue
         self.inference_queue = queue.Queue(maxsize=max_queue_size)
@@ -88,11 +92,13 @@ class ActionRecognizer:
         self.total_inferences = 0
         self.total_inference_time = 0.0
         self.total_api_errors = 0
+        self.total_timeouts = 0
 
         logger.info(
             f"ActionRecognizer initialized | enabled={enabled} | "
             f"ollama_api={self.ollama_api_url} | model={model_name} | "
-            f"interval={check_interval_seconds}s | workers={num_workers}"
+            f"interval={check_interval_seconds}s | workers={num_workers} | "
+            f"timeout={inference_timeout}s"
         )
 
     def start_workers(self) -> None:
@@ -259,8 +265,8 @@ Respond with ONLY one of these exact phrases:
 
 Just the phrase, no explanation."""
 
-            # Call Ollama API
-            client = ollama.Client(host=self.ollama_api_url)
+            # Call Ollama API with timeout
+            client = ollama.Client(host=self.ollama_api_url, timeout=self.inference_timeout)
             response = client.generate(
                 model=self.model_name,
                 prompt=prompt,
@@ -292,6 +298,10 @@ Just the phrase, no explanation."""
                 'raw_output': raw_output
             }
 
+        except TimeoutError as e:
+            self.total_timeouts += 1
+            logger.warning(f"Ollama API timeout after {self.inference_timeout}s: {e}")
+            return None
         except Exception as e:
             logger.error(f"Ollama API error: {e}")
             return None
@@ -392,10 +402,12 @@ Just the phrase, no explanation."""
             'total_time': self.total_inference_time,
             'average_time': avg_time,
             'total_errors': self.total_api_errors,
+            'total_timeouts': self.total_timeouts,
             'queue_size': self.get_queue_size(),
             'workers_running': self.running,
             'ollama_api_url': self.ollama_api_url,
-            'model_name': self.model_name
+            'model_name': self.model_name,
+            'inference_timeout': self.inference_timeout
         }
 
     def __del__(self):

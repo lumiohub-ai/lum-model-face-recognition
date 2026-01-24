@@ -3,7 +3,7 @@
 
 # Video settings
 show: false  # Display video output (disable for Docker/headless)
-save_video: true  # Save annotated video output to disk
+save_video: false  # Save annotated video output to disk
 output_dir: "volumes/storage/person-tracking"  # Directory for outputs
 
 # Performance settings
@@ -30,6 +30,7 @@ action_recognition:
   check_interval_seconds: 60  # Check each person every N seconds
   async_workers: 1  # Number of background worker threads for inference
   max_queue_size: 50  # Maximum queued inference requests
+  inference_timeout: 30  # Timeout for Ollama API calls in seconds (prevents blocking on slow/hung inference)
   actions:  # Supported action types (mapped to backend activity types)
     - sleeping            # -> sleeping
     - using phone         # -> phone_usage

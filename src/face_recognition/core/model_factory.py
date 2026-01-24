@@ -92,7 +92,8 @@ class ModelFactory:
                 check_interval_seconds=action_config.get('check_interval_seconds', 30),
                 max_queue_size=action_config.get('max_queue_size', 50),
                 num_workers=action_config.get('async_workers', 1),
-                model_name=model_name
+                model_name=model_name,
+                inference_timeout=action_config.get('inference_timeout', 30)
             )
 
             # Start worker threads if enabled

@@ -370,6 +370,7 @@ class CameraEngine:
                         'status': self.cam_type,  # IN or OUT
                         'face_image': face_image,
                         'proof_image': proof_image,  # Best quality person crop
+                        'application': self.application  # Camera application settings
                     })
                 else:
                     # TIER 2: Identity consistency check (for already-locked identities)
@@ -409,8 +410,9 @@ class CameraEngine:
                 proof_image=proof_image
             )
 
-            # Action recognition (only for locked identities)
-            if identity_locked and self.action_recognizer and self.action_recognizer.enabled:
+            # Action recognition (only for locked identities and if 'activity' is enabled in camera application)
+            if (identity_locked and self.action_recognizer and self.action_recognizer.enabled
+                and 'activity' in self.application):
                 self._check_and_queue_action_recognition(
                     track_id=track_id,
                     identity=identity,
@@ -460,6 +462,7 @@ class CameraEngine:
                         'camera_id': self.camera_id,
                         'status': self.cam_type,
                         'face_image': person_image,  # Actually person image, but API expects this key
+                        'application': self.application  # Camera application settings
                     })
 
             # Notify GlobalTrackManager of track removal (Phase 1)

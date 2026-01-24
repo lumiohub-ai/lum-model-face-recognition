@@ -100,6 +100,7 @@ class FrameProcessor:
         camera_id = person['camera_id']
         face_image = person.get('face_image')
         proof_image = person.get('proof_image')
+        application = person.get('application', ['attendance'])  # Camera application settings
 
         if person['recognized'] and name:
             # Log recognized person
@@ -118,13 +119,15 @@ class FrameProcessor:
                     f"Confidence: {person['confidence']:.2f}"
                 )
         else:
-            # Send unrecognized face
-            if face_image is not None and face_image.size > 0:
+            # Send unrecognized face only if 'unrecognized' is enabled in camera application
+            if 'unrecognized' in application and face_image is not None and face_image.size > 0:
                 self.entry_logger.send_unrecognized_face(
                     face=face_image,
                     status=status
                 )
                 logger.info(f"UNRECOGNIZED | Sent face from {camera_name} ({status})")
+            elif face_image is not None and face_image.size > 0:
+                logger.debug(f"UNRECOGNIZED | Skipped sending face from {camera_name} (unrecognized not enabled in camera application)")
 
     def _annotate_frame(self, frame: np.ndarray, engine: CameraEngine) -> np.ndarray:
         """Annotate frame with detections and status.
