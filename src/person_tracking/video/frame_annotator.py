@@ -174,6 +174,7 @@ class FrameAnnotator:
             self.draw_person_trajectory(frame, trajectory, color)
 
         # Draw label
+        action = state.get('last_detected_action')
         self.draw_person_label(
             frame,
             bbox,
@@ -181,7 +182,8 @@ class FrameAnnotator:
             global_id,
             identity,
             identity_locked,
-            color
+            color,
+            action=action
         )
 
     def draw_bbox(
@@ -270,7 +272,8 @@ class FrameAnnotator:
         global_id: Optional[int],
         identity: Optional[str],
         identity_locked: bool,
-        color: Tuple[int, int, int]
+        color: Tuple[int, int, int],
+        action: Optional[str] = None
     ) -> None:
         """Draw label above person bounding box.
 
@@ -282,6 +285,7 @@ class FrameAnnotator:
             identity: Person identity or None
             identity_locked: Whether identity is locked
             color: Background color
+            action: Detected action (e.g. 'sleeping', 'using phone') or None
         """
         x1, y1 = int(bbox[0]), int(bbox[1])
 
@@ -297,6 +301,9 @@ class FrameAnnotator:
             # Add lock status indicator only if not locked (for debugging)
             if not identity_locked:
                 parts.append("?")
+
+        if action:
+            parts.append(f"[{action}]")
 
         label = " | ".join(parts)
 

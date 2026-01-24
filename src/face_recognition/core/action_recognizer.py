@@ -39,6 +39,7 @@ class ActionRecognizer:
         "using phone": "using_phone",
         "working with computer": "working",
         "talking with someone": "talking",
+        "idle": "idle",
         None: "unknown"
     }
 
@@ -241,21 +242,22 @@ class ActionRecognizer:
             image_base64 = base64.b64encode(buffer).decode('utf-8')
 
             # Create prompt for action recognition
-            prompt = """You are an AI assistant that recognizes human activities from images.
+            prompt = """Classify what the person in this image is doing. Pick the best match:
 
-Analyze the person in this image and determine which ONE activity they are performing from this list:
-1. sleeping - person is lying down or resting with eyes closed
-2. using phone - person is holding or looking at a phone/mobile device
-3. working with computer - person is using a laptop or computer
-4. talking with someone - person is engaged in conversation with another person
+1. sleeping - head resting on desk, leaning back with eyes closed, or slumped over
+2. using phone - holding a phone, looking down at a device in hand
+3. working with computer - sitting at a desk facing a screen or typing
+4. talking with someone - facing another person, gesturing, or in conversation
+5. idle - standing still, sitting without doing anything specific, looking around
 
-Respond with ONLY ONE of these exact phrases:
+Respond with ONLY one of these exact phrases:
 - "sleeping"
 - "using phone"
 - "working with computer"
 - "talking with someone"
+- "idle"
 
-Do not provide any explanation, just the activity phrase."""
+Just the phrase, no explanation."""
 
             # Call Ollama API
             client = ollama.Client(host=self.ollama_api_url)
@@ -269,15 +271,18 @@ Do not provide any explanation, just the activity phrase."""
             # Parse response
             raw_output = response.get('response', '').strip().lower()
 
-            # Extract action from response
+            # Extract action from response - check for "idle"/"none" first to avoid
+            # false matches from loose substring matching (e.g. "not using phone")
             action = None
-            if 'sleeping' in raw_output:
+            if raw_output.startswith('idle') or raw_output.startswith('none') or 'none of' in raw_output:
+                action = 'idle'
+            elif raw_output.startswith('sleeping') or raw_output == 'sleeping':
                 action = 'sleeping'
-            elif 'using phone' in raw_output or 'phone' in raw_output:
+            elif raw_output.startswith('using phone') or raw_output == 'using phone':
                 action = 'using phone'
-            elif 'working with computer' in raw_output or 'computer' in raw_output:
+            elif raw_output.startswith('working with computer') or raw_output == 'working with computer':
                 action = 'working with computer'
-            elif 'talking with someone' in raw_output or 'talking' in raw_output:
+            elif raw_output.startswith('talking with someone') or raw_output == 'talking with someone':
                 action = 'talking with someone'
 
             logger.debug(f"Ollama response: {raw_output} -> action: {action}")

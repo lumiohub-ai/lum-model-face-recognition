@@ -178,7 +178,8 @@ class FrameProcessor:
                 'identity': state.identity,
                 'identity_locked': state.identity_locked,
                 'track_age': age,
-                'in_current_frame': (age == 0)
+                'in_current_frame': (age == 0),
+                'last_detected_action': state.last_detected_action,
             })
 
         # Calculate FPS
