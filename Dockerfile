@@ -135,6 +135,7 @@ RUN rm -rfv /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /root/.cache/*
 		ca-certificates \
 		openssl \
 		sudo \
+		gosu \
 		locales \
 		tzdata \
 		procps \
@@ -213,6 +214,5 @@ COPY --chown=${UID}:${GID} ./src ${FR_DIR}/src
 
 EXPOSE ${FR_PORT}
 
-USER ${UID}:${GID}
-
+# Run entrypoint as root to fix permissions, then switch to fr-user
 ENTRYPOINT ["docker-entrypoint.sh"]

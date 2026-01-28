@@ -312,10 +312,14 @@ keys/
 
 data/**
 logs/**
+!logs/**/
+!logs/**/.gitkeep
 models/**
 recorded_videos/**
 compose.override.yml
-volumes/
+volumes/**
+!volumes/**/
+!volumes/**/.gitkeep
 
 # Model weights (downloaded at runtime)
 *.pt
