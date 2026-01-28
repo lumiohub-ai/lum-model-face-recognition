@@ -147,6 +147,9 @@ class SmartOfficeEngine:
         action_config = self.config.get('action_recognition', {})
         vlm_image_padding = action_config.get('image_padding', 20.0)
 
+        # Get unrecognized face settings from config
+        unrecognized_config = self.config.get('unrecognized', {})
+
         for config in self.camera_configs:
             engine = CameraEngine(
                 camera_config=config,
@@ -159,7 +162,8 @@ class SmartOfficeEngine:
                 name_to_id_map=self.name_to_id_map,
                 global_track_manager=self.models.global_track_manager,
                 action_recognizer=self.models.action_recognizer,
-                vlm_image_padding=vlm_image_padding
+                vlm_image_padding=vlm_image_padding,
+                unrecognized_config=unrecognized_config
             )
             engines.append(engine)
 

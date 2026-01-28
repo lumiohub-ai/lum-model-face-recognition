@@ -3,7 +3,7 @@
 
 # Video settings
 show: false  # Display video output (disable for Docker/headless)
-save_video: true  # Save annotated video output to disk
+save_video: false  # Save annotated video output to disk
 output_dir: "volumes/storage/person-tracking"  # Directory for outputs
 
 # Performance settings
@@ -37,6 +37,12 @@ action_recognition:
     - working             # -> working (includes: computer, mouse, writing, reading)
     - talking with someone   # -> talking
     - idle                # -> not_focusing
+
+# Unrecognized face settings (image quality filters)
+unrecognized:
+  min_face_size: 150  # Minimum face size in pixels (smaller faces are skipped)
+  blur_threshold: 50  # Laplacian variance threshold (lower = more lenient, default was 100)
+  send_best_effort: true  # If all frames fail quality, send best available anyway
 
 # System settings
 max_track_lifetime_seconds: 30  # Maximum time to keep inactive tracks

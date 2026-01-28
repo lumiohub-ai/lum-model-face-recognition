@@ -87,7 +87,8 @@ class CameraEngine:
         name_to_id_map: Optional[Dict[str, int]] = None,
         global_track_manager: Optional[GlobalTrackManager] = None,
         action_recognizer: Optional[Any] = None,
-        vlm_image_padding: float = 20.0
+        vlm_image_padding: float = 20.0,
+        unrecognized_config: Optional[Dict[str, Any]] = None
     ):
         """Initialize camera engine.
 
@@ -103,6 +104,7 @@ class CameraEngine:
             global_track_manager: Optional GlobalTrackManager for Phase 0 instrumentation
             action_recognizer: Optional action recognizer for activity tracking
             vlm_image_padding: Padding percentage around person bbox for VLM (0-100)
+            unrecognized_config: Config for unrecognized face quality filters
         """
         self.camera_id = camera_config['camera_id']
         self.camera_name = camera_config['camera_name']
@@ -110,10 +112,15 @@ class CameraEngine:
         self.stream_url = camera_config['stream_url']
         self.application = camera_config.get('application', ['attendance'])
         self.match_threshold = camera_config.get('match_threshold', 0.3)
-        self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
         self.roi = camera_config.get('roi')
         self.line_points = camera_config.get('line_points')
         self.vlm_image_padding = vlm_image_padding  # Padding % for VLM images
+
+        # Unrecognized face quality settings
+        unrecognized_config = unrecognized_config or {}
+        self.min_face_size = unrecognized_config.get('min_face_size', 150)
+        self.blur_threshold = unrecognized_config.get('blur_threshold', 50)
+        self.send_best_effort = unrecognized_config.get('send_best_effort', True)
 
         # Shared components (models)
         self.face_detector = face_detector
@@ -770,8 +777,9 @@ class CameraEngine:
         if not crops:
             return None
 
-        min_face_size = getattr(self, 'min_face_size', 150)
-        blur_threshold = 100.0  # Laplacian variance threshold
+        # Use configurable thresholds
+        min_face_size = self.min_face_size
+        blur_threshold = self.blur_threshold
 
         best_frame_num = None
         best_score = -1
@@ -832,8 +840,12 @@ class CameraEngine:
                 return crop_data
 
         # FALLBACK: If no "best" image found (all failed quality checks),
-        # return ANY available image rather than None
-        logger.debug(f"Track {track_id}: No high-quality image found, using fallback (any available image)")
+        # optionally return ANY available image rather than None
+        if not self.send_best_effort:
+            logger.debug(f"Track {track_id}: No high-quality image found, send_best_effort=False, skipping")
+            return None
+
+        logger.debug(f"Track {track_id}: No high-quality image found, using fallback (best effort)")
 
         # Try to get the most recent frame (last in history)
         if crops:

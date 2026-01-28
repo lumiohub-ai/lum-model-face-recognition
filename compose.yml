@@ -1,9 +1,7 @@
-version: '3.8'
-
 # Docker Compose configuration for Person Tracking System
 # Usage:
-#   docker-compose -f docker-compose.person-tracking.yml up -d
-#   docker-compose -f docker-compose.person-tracking.yml logs -f person-tracking
+#   Development: docker compose -f compose.yml -f compose.override.dev.yml up -d
+#   Production:  docker compose -f compose.yml -f compose.override.prod.yml up -d
 
 services:
   postgres:
@@ -23,7 +21,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -38,7 +35,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
@@ -47,8 +43,6 @@ services:
       - "11435:11434"
     volumes:
       - ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_DEBUG=0
     deploy:
       resources:
         reservations:
@@ -61,30 +55,31 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    restart: unless-stopped
-    # Reduce log verbosity
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    # Pull llava:13b model on startup (better vision accuracy)
+    environment:
+      - OLLAMA_DEBUG=0
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llava:7b}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         /bin/ollama serve &
         sleep 5
-        ollama pull llava:7b
+        if ! ollama list | grep -q "$OLLAMA_MODEL"; then
+          echo "Pulling $OLLAMA_MODEL model..."
+          ollama pull $OLLAMA_MODEL
+        fi
         wait
 
   person-tracking:
     build:
       context: .
       dockerfile: Dockerfile
-      # Development: faster builds with caching
       args:
         - BUILDKIT_INLINE_CACHE=1
-    image: humblebeeintel/person-tracking:dev
     container_name: person-tracking-app
     network_mode: host
     environment:
@@ -104,7 +99,7 @@ services:
       HB_OUT: ${HB_OUT:-}
       HB_IN_MANAGEMENT: ${HB_IN_MANAGEMENT:-}
 
-      # Database configuration (feature flags now in configs/config.yaml)
+      # Database configuration
       POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
       POSTGRES_PORT: ${POSTGRES_PORT:-5434}
       POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
@@ -124,13 +119,6 @@ services:
       # Ollama API for action recognition
       OLLAMA_API_URL: ${OLLAMA_API_URL:-http://localhost:11435}
 
-      # Development: Enable Python unbuffered output for real-time logs
-      PYTHONUNBUFFERED: 1
-      # Development: Disable Python bytecode caching
-      PYTHONDONTWRITEBYTECODE: 1
-      # Development: Prioritize mounted source over installed package
-      PYTHONPATH: /app/face-recognition/src:/app/face-recognition:${PYTHONPATH}
-
       # Disable SSL verification for model downloads (InsightFace)
       REQUESTS_CA_BUNDLE: ""
       CURL_CA_BUNDLE: ""
@@ -144,25 +132,16 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
     volumes:
-      # Mount .env to override baked-in .env in image
+      # Mount .env for configuration
       - ./.env:/app/face-recognition/.env:ro
-      # Development: Mount source code for hot reload (if supported)
-      - ./src:/app/face-recognition/src
       # Configuration
-      - ./configs:/app/face-recognition/configs
+      - ./configs:/app/face-recognition/configs:ro
       # Output storage
       - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
       # Logs
       - ./logs/person-tracking:/var/log/face-recognition
-      # Credentials (if needed)
-      - ./credentials:/app/face-recognition/credentials
-      # Model cache in data directory (fr-user has write access)
+      # Model cache (fr-user has write access)
       - ./volumes/models/insightface:/home/fr-user/.insightface
-      # HuggingFace model cache (for Gemma-3N and other transformers models)
-      - ./volumes/models/huggingface:/home/fr-user/.cache/huggingface
-      - ./volumes/models/weights:/app/face-recognition/weights:ro
-      # InsightFace models will be downloaded automatically on first run
-      # - ./insightface_models/buffalo_l:/home/fr-user/.insightface/models/buffalo_l:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -177,11 +156,12 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # Development: don't auto-restart on crash to see errors
-    restart: "no"
-    # Development: Show logs in color
-    tty: true
-    stdin_open: true
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*src.main"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   postgres_data:
@@ -189,8 +169,6 @@ volumes:
   redis_data:
     driver: local
   ollama_data:
-    driver: local
-  model-cache:
     driver: local
 
 networks:

@@ -8,6 +8,7 @@ A unified system for real-time person tracking and face recognition, designed fo
 - **Face Recognition**: InsightFace (buffalo_l) for accurate face identification
 - **Cross-Camera Tracking**: Global track IDs across multiple cameras (MCMOT ReID)
 - **Attendance Logging**: Automatic IN/OUT status tracking with API integration
+- **Action Recognition**: Activity detection via Ollama VLM (sleeping, phone usage, working, etc.)
 - **pgvector Storage**: Scalable face embedding storage with PostgreSQL
 
 ## Quick Start
@@ -56,7 +57,17 @@ HB_IN=rtsp://camera_in_stream
 HB_OUT=rtsp://camera_out_stream
 ```
 
-### 3. Build and Run
+### 5. Choose Environment
+
+```bash
+# For development (source mounting, debug logs)
+cp templates/compose/compose.override.dev.yml compose.override.yml
+
+# For production (auto-restart, log limits)
+cp templates/compose/compose.override.prod.yml compose.override.yml
+```
+
+### 6. Build and Run
 
 ```bash
 # Build Docker containers
@@ -69,13 +80,13 @@ HB_OUT=rtsp://camera_out_stream
 ./compose.sh start
 ```
 
-### 4. View Logs
+### 7. View Logs
 
 ```bash
 ./compose.sh logs
 ```
 
-### 5. Stop
+### 8. Stop
 
 ```bash
 ./compose.sh stop
@@ -119,20 +130,14 @@ Cameras can be configured via:
 | `./compose.sh ps` | List running containers |
 | `./compose.sh clean` | Remove containers and images |
 
-## Development Setup
+## Environment Details
 
-For development, copy the dev compose override template:
+| Mode | Override File | Features |
+|------|---------------|----------|
+| Development | `compose.override.dev.yml` | Source mounting, debug logs, no auto-restart |
+| Production | `compose.override.prod.yml` | Auto-restart, log limits, optimized |
 
-```bash
-cp templates/compose/compose.override.dev.yml compose.override.yml
-```
-
-This enables:
-- Source code mounting (hot reload - just restart to apply changes)
-- Debug logging (`LOG_LEVEL: DEBUG`)
-- Interactive terminal
-
-Docker Compose automatically uses `compose.override.yml` when present.
+See Quick Start Step 5 for setup.
 
 ## Architecture
 

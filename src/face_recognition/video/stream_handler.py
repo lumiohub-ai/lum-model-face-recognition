@@ -202,5 +202,7 @@ class StreamHandler:
             self.stopped = True
 
         if self.thread is not None:
-            self.thread.join()
+            self.thread.join(timeout=5.0)  # Don't block forever on shutdown
+            if self.thread.is_alive():
+                logger.warning(f"Stream thread for camera {self.camera_id} did not stop cleanly")
         self.cap.release()
