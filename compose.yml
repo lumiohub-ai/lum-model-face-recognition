@@ -47,6 +47,8 @@ services:
       - "11435:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_DEBUG=0
     deploy:
       resources:
         reservations:
@@ -60,13 +62,19 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
-    # Pull gemma3:4b model on startup
+    # Reduce log verbosity
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Pull llava:13b model on startup (better vision accuracy)
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         /bin/ollama serve &
         sleep 5
-        ollama pull gemma3:4b
+        ollama pull llava:7b
         wait
 
   person-tracking:

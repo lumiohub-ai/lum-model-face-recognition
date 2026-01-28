@@ -34,12 +34,13 @@ class ActionRecognizer:
     """
 
     # VLM action to backend activity_type mapping
+    # Backend accepts: phone_usage, sleeping, not_focusing, talking, working, unknown
     ACTION_MAPPING = {
         "sleeping": "sleeping",
-        "using phone": "using_phone",
-        "working with computer": "working",
+        "using phone": "phone_usage",
+        "working": "working",
         "talking with someone": "talking",
-        "idle": "idle",
+        "idle": "not_focusing",
         None: "unknown"
     }
 
@@ -51,7 +52,7 @@ class ActionRecognizer:
         check_interval_seconds: int = 30,
         max_queue_size: int = 50,
         num_workers: int = 1,
-        model_name: str = "gemma3:4b"
+        model_name: str = "llava:7b"
     ):
         """Initialize action recognizer.
 
@@ -245,15 +246,19 @@ class ActionRecognizer:
             prompt = """Classify what the person in this image is doing. Pick the best match:
 
 1. sleeping - head resting on desk, leaning back with eyes closed, or slumped over
-2. using phone - holding a phone, looking down at a device in hand
-3. working with computer - sitting at a desk facing a screen or typing
+2. using phone - actively holding a phone IN THEIR HANDS and looking at it
+3. working - any work activity: using computer, typing, using mouse, writing in notebook, reading documents, or focused on work tasks
 4. talking with someone - facing another person, gesturing, or in conversation
-5. idle - standing still, sitting without doing anything specific, looking around
+5. idle - hands are empty, not holding any device, just sitting/standing doing nothing, looking around
+
+IMPORTANT distinctions:
+- "using phone": person is HOLDING a phone in their hands. A phone on desk does NOT count.
+- "idle": person's hands are EMPTY, not holding anything, not engaged in any activity.
 
 Respond with ONLY one of these exact phrases:
 - "sleeping"
 - "using phone"
-- "working with computer"
+- "working"
 - "talking with someone"
 - "idle"
 
@@ -280,8 +285,8 @@ Just the phrase, no explanation."""
                 action = 'sleeping'
             elif raw_output.startswith('using phone') or raw_output == 'using phone':
                 action = 'using phone'
-            elif raw_output.startswith('working with computer') or raw_output == 'working with computer':
-                action = 'working with computer'
+            elif raw_output.startswith('working') or raw_output == 'working':
+                action = 'working'
             elif raw_output.startswith('talking with someone') or raw_output == 'talking with someone':
                 action = 'talking with someone'
 

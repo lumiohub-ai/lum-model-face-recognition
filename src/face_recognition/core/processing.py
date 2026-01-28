@@ -118,8 +118,9 @@ class FrameProcessor:
                     f"Confidence: {person['confidence']:.2f}"
                 )
         else:
-            # Send unrecognized face
-            if face_image is not None and face_image.size > 0:
+            # Send unrecognized face (only if enabled for this camera)
+            send_unrecognized = person.get('send_unrecognized', False)
+            if send_unrecognized and face_image is not None and face_image.size > 0:
                 self.entry_logger.send_unrecognized_face(
                     face=face_image,
                     status=status

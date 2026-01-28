@@ -30,6 +30,9 @@ from person_tracking.core.face_adapter import crop_person_roi
 from person_tracking.core.id_switch_corrector import IDSwitchCorrector
 from person_tracking.core.global_track_manager import GlobalTrackManager
 
+# GPU memory monitoring
+from .utils.gpu_monitor import GPUMemoryMonitor
+
 # Type hints for optional dependencies
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -83,7 +86,8 @@ class CameraEngine:
         api_client: Optional['APIClient'] = None,
         name_to_id_map: Optional[Dict[str, int]] = None,
         global_track_manager: Optional[GlobalTrackManager] = None,
-        action_recognizer: Optional[Any] = None
+        action_recognizer: Optional[Any] = None,
+        vlm_image_padding: float = 20.0
     ):
         """Initialize camera engine.
 
@@ -98,6 +102,7 @@ class CameraEngine:
             name_to_id_map: Dictionary mapping user names to IDs
             global_track_manager: Optional GlobalTrackManager for Phase 0 instrumentation
             action_recognizer: Optional action recognizer for activity tracking
+            vlm_image_padding: Padding percentage around person bbox for VLM (0-100)
         """
         self.camera_id = camera_config['camera_id']
         self.camera_name = camera_config['camera_name']
@@ -108,6 +113,7 @@ class CameraEngine:
         self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
         self.roi = camera_config.get('roi')
         self.line_points = camera_config.get('line_points')
+        self.vlm_image_padding = vlm_image_padding  # Padding % for VLM images
 
         # Shared components (models)
         self.face_detector = face_detector
@@ -127,7 +133,8 @@ class CameraEngine:
 
         logger.info(
             f"CameraEngine initialized: {self.camera_name} (ID: {self.camera_id}) | "
-            f"Type: {self.cam_type}"
+            f"Type: {self.cam_type} | VLM: {'enabled' if self._activity_enabled else 'disabled'} | "
+            f"Unrecognized: {'enabled' if self._unrecognized_enabled else 'disabled'}"
         )
 
     def _init_components(self) -> None:
@@ -140,7 +147,7 @@ class CameraEngine:
         # BoT-SORT uses external detections from PersonDetector (single YOLO pass)
         self.person_tracker = PersonTracker(
             tracker_type='botsort',  # Use BoT-SORT (IoU + Kalman filter)
-            max_age=60,  # Keep tracks alive for ~2 seconds at 30fps
+            max_age=45,  # Phase 3: Reduced from 60 to 45 frames (~1.5s @ 30fps) for faster cleanup
             min_hits=3,  # Require 3 consecutive detections before confirming track
             iou_threshold=0.8,  # IoU threshold for matching (BoT-SORT default)
             global_id_generator=self.global_id_generator,  # Enable global track IDs
@@ -153,7 +160,8 @@ class CameraEngine:
         )
 
         # Track Manager
-        self.track_manager = PersonTrackManager(max_history_frames=100)
+        # Phase 3: Reduced from 100 to 60 frames (2s @ 30fps) - saves 40% memory per track
+        self.track_manager = PersonTrackManager(max_history_frames=60)
 
         # Identity Manager (temporal voting)
         self.identity_manager = IdentityManager(
@@ -179,9 +187,108 @@ class CameraEngine:
 
         # Action recognition timing (track per identity name, not track_id)
         self.last_action_check_per_identity: Dict[str, float] = {}
+        self._action_cache_max_age_sec = 300.0  # 5 minutes
+        self._action_cache_cleanup_interval = 500  # frames
 
-        # Frame counter
+        # Frame counter (wraps at 1M to prevent overflow, safe for modulo ops)
         self.frame_count = 0
+        self._frame_count_max = 1_000_000
+
+        # Cache application-based feature flags
+        self._activity_enabled = 'activity' in self.application
+        self._unrecognized_enabled = 'unrecognized' in self.application
+
+        # GPU memory monitor (optional, only if CUDA available)
+        self.gpu_monitor = GPUMemoryMonitor(
+            device='cuda:0',
+            warning_threshold_mb=2000.0  # Warn if GPU memory > 2GB
+        )
+
+    def _is_activity_enabled(self) -> bool:
+        """Check if action recognition (VLM) is enabled for this camera.
+
+        Returns:
+            True if 'activity' is in camera's applications list
+        """
+        return self._activity_enabled
+
+    def _is_unrecognized_enabled(self) -> bool:
+        """Check if unrecognized face submission is enabled for this camera.
+
+        Returns:
+            True if 'unrecognized' is in camera's applications list
+        """
+        return self._unrecognized_enabled
+
+    def _cleanup_action_check_cache(self) -> int:
+        """Remove stale entries from action check cache to prevent memory leak.
+
+        Entries older than _action_cache_max_age_sec are removed.
+
+        Returns:
+            Number of entries removed
+        """
+        if not self.last_action_check_per_identity:
+            return 0
+
+        current_time = time.time()
+        cutoff_time = current_time - self._action_cache_max_age_sec
+
+        stale_identities = [
+            identity for identity, last_check in self.last_action_check_per_identity.items()
+            if last_check < cutoff_time
+        ]
+
+        for identity in stale_identities:
+            del self.last_action_check_per_identity[identity]
+
+        if stale_identities:
+            logger.debug(
+                f"Action check cache cleanup: removed {len(stale_identities)} stale entries, "
+                f"{len(self.last_action_check_per_identity)} remaining"
+            )
+
+        return len(stale_identities)
+
+    def _crop_person_with_padding(
+        self,
+        frame: np.ndarray,
+        bbox: np.ndarray,
+        padding_percent: Optional[float] = None
+    ) -> Optional[np.ndarray]:
+        """Crop person from frame with padding for better context.
+
+        Args:
+            frame: Input frame
+            bbox: Person bounding box [x1, y1, x2, y2]
+            padding_percent: Padding percentage (0-100). If None, uses self.vlm_image_padding
+
+        Returns:
+            Cropped image with padding, or None if invalid
+        """
+        if bbox is None:
+            return None
+
+        padding = padding_percent if padding_percent is not None else self.vlm_image_padding
+        x1, y1, x2, y2 = map(int, bbox)
+
+        # Calculate padding in pixels
+        width = x2 - x1
+        height = y2 - y1
+        pad_x = int(width * padding / 100)
+        pad_y = int(height * padding / 100)
+
+        # Apply padding with frame bounds check
+        x1_padded = max(0, x1 - pad_x)
+        y1_padded = max(0, y1 - pad_y)
+        x2_padded = min(frame.shape[1], x2 + pad_x)
+        y2_padded = min(frame.shape[0], y2 + pad_y)
+
+        # Crop
+        if x2_padded > x1_padded and y2_padded > y1_padded:
+            return frame[y1_padded:y2_padded, x1_padded:x2_padded].copy()
+
+        return None
 
     def process_frame(
         self,
@@ -202,8 +309,38 @@ class CameraEngine:
             x1, y1, x2, y2 = self.roi
             frame = frame[y1:y2, x1:x2]
 
-        self.frame_count += 1
+        self.frame_count = (self.frame_count + 1) % self._frame_count_max
         recognized_persons = []
+
+        # Periodic cleanup of action check cache to prevent memory leak
+        if self.frame_count % self._action_cache_cleanup_interval == 0:
+            self._cleanup_action_check_cache()
+
+        # Phase 3: Periodic track cleanup to prevent unbounded growth
+        # Run every 500 frames (~16 seconds @ 30fps) to enforce global track limit
+        if self.frame_count % 500 == 0:
+            removed = self.track_manager.cleanup_oldest_tracks(max_tracks=100)
+            if removed > 0:
+                logger.info(f"Camera {self.camera_name}: Cleaned up {removed} old tracks")
+
+        # Periodic GPU memory cleanup to prevent CUDA memory accumulation
+        # Run every 100 frames (~3 seconds @ 30fps) to defragment GPU memory
+        if self.frame_count % 100 == 0:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Log GPU memory stats every 300 frames (~10 seconds @ 30fps)
+            if self.frame_count % 300 == 0:
+                self.gpu_monitor.log_memory_stats(context=f"Camera {self.camera_name}")
+            
+            # Also trigger garbage collection every 1000 frames (~33 seconds @ 30fps)
+            # This catches any remaining CPU/GPU memory leaks
+            if self.frame_count % 1000 == 0:
+                import gc
+                gc.collect()
+                # Log detailed memory stats after GC
+                self.gpu_monitor.log_memory_stats(context=f"Camera {self.camera_name} (after GC)", force=True)
 
         # Step 1: Detect persons
         detections = self.person_detector.detect_persons(frame)
@@ -229,13 +366,14 @@ class CameraEngine:
                         identity_locked = True
 
                 # Extract person crop for body ReID
+                # Optimization: Use view instead of copy - ReID model creates copies during resize/cvtColor
                 person_crop = None
                 if bbox is not None:
                     x1, y1, x2, y2 = map(int, bbox)
                     x1, y1 = max(0, x1), max(0, y1)
                     x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
                     if x2 > x1 and y2 > y1:
-                        person_crop = frame[y1:y2, x1:x2].copy()
+                        person_crop = frame[y1:y2, x1:x2]  # View only, saves ~100KB per person
 
                 # Assign global ID (identity-first, then body ReID fallback)
                 global_id = self.global_track_manager.assign_global_id(
@@ -409,22 +547,39 @@ class CameraEngine:
                 proof_image=proof_image
             )
 
-            # Action recognition (only for locked identities)
-            if identity_locked and self.action_recognizer and self.action_recognizer.enabled:
+            # Action recognition (only for locked identities on cameras with 'activity' application)
+            if identity_locked and self.action_recognizer and self._is_activity_enabled():
                 self._check_and_queue_action_recognition(
                     track_id=track_id,
                     identity=identity,
-                    proof_image=proof_image,
+                    frame=frame,
+                    bbox=bbox,
                     frame_num=frame_num
                 )
 
-            # Store face image and person bbox for later use (unrecognized faces)
-            if face_image is not None:
+            # Store face image and person crop for later use (unrecognized faces)
+            # NOTE: We store person_crop instead of full frame to prevent memory explosion
+            # Full frame at 1080p = ~6MB, person crop = ~100KB typically
+            if face_image is not None and bbox is not None:
+                # Extract person crop from bbox (much smaller than full frame)
+                bx1, by1, bx2, by2 = map(int, bbox)
+                bx1, by1 = max(0, bx1), max(0, by1)
+                bx2, by2 = min(frame.shape[1], bx2), min(frame.shape[0], by2)
+                person_crop = frame[by1:by2, bx1:bx2].copy() if bx2 > bx1 and by2 > by1 else None
+
                 self.track_manager.track_crop_history.setdefault(track_id, {})[frame_num] = {
                     'face': face_image,
                     'bbox': bbox,
-                    'frame': frame.copy()
+                    'person_crop': person_crop  # Store person crop, NOT full frame
                 }
+
+                # Enforce crop history limit (prevent memory leak)
+                max_crops = 50
+                crop_hist = self.track_manager.track_crop_history[track_id]
+                if len(crop_hist) > max_crops:
+                    oldest_frames = sorted(crop_hist.keys())[:-max_crops]
+                    for old_frame in oldest_frames:
+                        del crop_hist[old_frame]
 
         # Step 5: Process removed tracks (person left frame)
         for track in removed_tracks:
@@ -460,6 +615,7 @@ class CameraEngine:
                         'camera_id': self.camera_id,
                         'status': self.cam_type,
                         'face_image': person_image,  # Actually person image, but API expects this key
+                        'send_unrecognized': self._is_unrecognized_enabled(),  # Per-camera flag
                     })
 
             # Notify GlobalTrackManager of track removal (Phase 1)
@@ -653,21 +809,24 @@ class CameraEngine:
                 best_score = total_score
                 best_frame_num = frame_num
 
-        # If we found a best frame, extract person crop from that frame
+        # If we found a best frame, return the stored person crop
         if best_frame_num is not None:
             crop_data = crops[best_frame_num]
             if isinstance(crop_data, dict):
+                # Try person_crop first (new format), then frame+bbox (legacy)
+                person_crop = crop_data.get('person_crop')
+                if person_crop is not None:
+                    return person_crop
+
+                # Legacy fallback: crop from stored frame
                 frame = crop_data.get('frame')
                 bbox = crop_data.get('bbox')
-
                 if frame is not None and bbox is not None:
-                    # Crop person from frame using bbox
                     x1, y1, x2, y2 = map(int, bbox)
-                    person_crop = frame[y1:y2, x1:x2]
-                    return person_crop
-                else:
-                    # Fallback to face crop if frame/bbox not available
-                    return crop_data.get('face')
+                    return frame[y1:y2, x1:x2]
+
+                # Final fallback to face crop
+                return crop_data.get('face')
             else:
                 # Old format - return face crop
                 return crop_data
@@ -683,17 +842,20 @@ class CameraEngine:
             crop_data = crops[latest_frame_num]
 
             if isinstance(crop_data, dict):
+                # Try person_crop first (new format), then frame+bbox (legacy)
+                person_crop = crop_data.get('person_crop')
+                if person_crop is not None:
+                    return person_crop
+
+                # Legacy fallback: crop from stored frame
                 frame = crop_data.get('frame')
                 bbox = crop_data.get('bbox')
-
                 if frame is not None and bbox is not None:
-                    # Return person crop from latest frame
                     x1, y1, x2, y2 = map(int, bbox)
-                    person_crop = frame[y1:y2, x1:x2]
-                    return person_crop
-                else:
-                    # Return face crop if available
-                    return crop_data.get('face')
+                    return frame[y1:y2, x1:x2]
+
+                # Final fallback to face crop
+                return crop_data.get('face')
             else:
                 # Old format - return face crop
                 return crop_data
@@ -776,7 +938,8 @@ class CameraEngine:
         self,
         track_id: int,
         identity: str,
-        proof_image: Optional[np.ndarray],
+        frame: np.ndarray,
+        bbox: np.ndarray,
         frame_num: int
     ) -> None:
         """Check if action recognition is needed and queue request.
@@ -784,10 +947,16 @@ class CameraEngine:
         Args:
             track_id: Track ID
             identity: Person identity (name)
-            proof_image: Person crop image
+            frame: Current video frame
+            bbox: Person bounding box [x1, y1, x2, y2]
             frame_num: Current frame number
         """
-        if proof_image is None or proof_image.size == 0:
+        if bbox is None:
+            return
+
+        # Crop person with padding for better context (desk, computer, phone, etc.)
+        vlm_image = self._crop_person_with_padding(frame, bbox)
+        if vlm_image is None or vlm_image.size == 0:
             return
 
         # Check if enough time has passed since last action check (per identity, not per track_id)
@@ -818,12 +987,12 @@ class CameraEngine:
                 identity=identity,
                 result=result,
                 timestamp=current_time,
-                proof_image=proof_image
+                vlm_image=vlm_image
             )
 
         # Queue for async recognition
         queued = self.action_recognizer.recognize_async(
-            image=proof_image,
+            image=vlm_image,
             request_id=request_id,
             callback=action_result_callback,
             metadata={
@@ -850,7 +1019,7 @@ class CameraEngine:
         identity: str,
         result: Dict,
         timestamp: float,
-        proof_image: np.ndarray
+        vlm_image: np.ndarray
     ) -> None:
         """Handle action recognition result and send to API.
 
@@ -860,7 +1029,7 @@ class CameraEngine:
             identity: Person identity (name)
             result: Action recognition result
             timestamp: Unix timestamp
-            proof_image: Person crop image
+            vlm_image: Person crop image with padding (sent to VLM)
         """
         action = result.get('action')
         if not action:
@@ -890,4 +1059,5 @@ class CameraEngine:
         self.identity_manager.reset()
         self.state_manager.reset()
         self.frame_count = 0
+        self.last_action_check_per_identity.clear()
 

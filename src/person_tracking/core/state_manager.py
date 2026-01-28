@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
+from collections import deque
 import numpy as np
 from loguru import logger
 
@@ -96,8 +97,8 @@ class PersonStateManager:
         # Format: {track_id: PersonState}
         self.person_states: Dict[int, PersonState] = {}
 
-        # Event queue
-        self.event_queue: List[PersonEvent] = []
+        # Event queue (bounded to prevent memory leak - events are logged but not consumed)
+        self.event_queue: deque = deque(maxlen=1000)
 
         logger.info(f"PersonStateManager initialized for camera {camera_id}")
 

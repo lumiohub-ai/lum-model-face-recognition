@@ -68,6 +68,9 @@ class GlobalTrackManager:
 
         # ID generator (start at 1000 to distinguish from local IDs)
         self.global_id_counter = 1000
+        self._global_id_start = 1000
+        self._global_id_max = 2**31 - 1  # INT32_MAX for database compatibility
+        self._global_id_warn_threshold = self._global_id_max - 100000
 
         # Embedding cache for interval-based extraction
         self.embedding_cache: Dict[Tuple[int, int], CachedEmbedding] = {}
@@ -167,6 +170,37 @@ class GlobalTrackManager:
         if self._body_reid_model is None:
             self._init_body_reid_model()
         return self._body_reid_model
+
+    def _get_next_global_id(self) -> int:
+        """Get next global track ID with overflow protection.
+
+        Handles INT32 overflow for database compatibility.
+        Logs warnings when approaching limits and wraps around safely.
+
+        Returns:
+            Next unique global track ID
+        """
+        global_id = self.global_id_counter
+        self.global_id_counter += 1
+
+        # Check for approaching limit
+        if self.global_id_counter == self._global_id_warn_threshold:
+            logger.warning(
+                f"Global track ID counter approaching INT32_MAX limit "
+                f"(current={self.global_id_counter}, max={self._global_id_max}). "
+                f"System may need restart within ~100k track creations."
+            )
+
+        # Handle overflow - wrap around to start
+        if self.global_id_counter >= self._global_id_max:
+            logger.warning(
+                f"Global track ID counter reached INT32_MAX ({self._global_id_max}). "
+                f"Wrapping around to {self._global_id_start}. "
+                f"Potential ID collisions if old tracks still active."
+            )
+            self.global_id_counter = self._global_id_start
+
+        return global_id
 
     def _download_reid_weights(self, weights_path: Path) -> bool:
         """
@@ -576,8 +610,7 @@ class GlobalTrackManager:
         identity_locked: bool = False
     ) -> int:
         """Create a new global track."""
-        global_id = self.global_id_counter
-        self.global_id_counter += 1
+        global_id = self._get_next_global_id()
 
         track = GlobalTrack(global_id)
         track.add_camera_track(camera_id, local_track_id)
@@ -787,10 +820,18 @@ class GlobalTrackManager:
 
             # Extract features in batch
             with torch.no_grad():
-                embeddings = self._body_reid_model.forward(batch)
+                embeddings_gpu = self._body_reid_model.forward(batch)
 
-            # Convert to numpy
-            embeddings = embeddings.cpu().numpy()
+            # Convert to numpy and immediately free GPU memory
+            embeddings = embeddings_gpu.cpu().numpy()
+            
+            # Explicitly delete GPU tensors to prevent memory accumulation
+            del embeddings_gpu
+            del batch
+            
+            # Clear CUDA cache to free fragmented memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             # Normalize each embedding
             norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -1041,6 +1082,10 @@ class GlobalTrackManager:
         if cache_key in self.embedding_cache:
             del self.embedding_cache[cache_key]
 
+        # Clean up local_to_global mapping to prevent memory leak
+        if camera_id in self.local_to_global and local_track_id in self.local_to_global[camera_id]:
+            del self.local_to_global[camera_id][local_track_id]
+
         # Log baseline stats (Phase 0 compatibility)
         track_key = (camera_id, local_track_id)
         if track_key in self.track_stats:
@@ -1202,8 +1247,7 @@ class GlobalTrackManager:
             cam_track = track.camera_tracks[cam_id]
 
             # Create new global track
-            new_global_id = self.global_id_counter
-            self.global_id_counter += 1
+            new_global_id = self._get_next_global_id()
 
             new_track = GlobalTrack(new_global_id)
             new_track.camera_tracks[cam_id] = CameraTrackInfo(

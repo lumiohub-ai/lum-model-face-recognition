@@ -93,15 +93,17 @@ class FrameAnnotator:
         """Annotate frame with all detection results.
 
         Args:
-            frame: Input frame (BGR format)
+            frame: Input frame (BGR format, will be modified in-place)
             person_states: List of person state dictionaries
             fps: Current FPS to display
             show_stats: Whether to show statistics overlay
 
         Returns:
-            Annotated frame
+            Annotated frame (same as input, modified)
         """
-        annotated = frame.copy()
+        # Optimization: Use original frame instead of copy to save 6MB per frame
+        # Frame is only used for display after this point
+        annotated = frame
 
         # Draw each person
         for state in person_states:

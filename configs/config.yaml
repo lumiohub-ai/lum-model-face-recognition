@@ -23,18 +23,20 @@ use_api_for_cameras: true  # Fetch camera config from API instead of local file
 face_detection_padding: 20.0  # Padding % around detected faces for better recognition (0-100)
 
 # Action Recognition settings (Activity tracking via Ollama)
+# Note: VLM is enabled per-camera based on 'activity' in camera's applications list from dashboard
 action_recognition:
-  enabled: true  # Enable action recognition
   ollama_api_url: null  # Ollama API URL (null = use OLLAMA_API_URL env var, default: http://localhost:11435)
-  model_name: null  # Ollama model name (null = use OLLAMA_MODEL env var, default: gemma3:4b)
+  model_name: null  # Ollama model name (null = use OLLAMA_MODEL env var, default: llava:7b)
   check_interval_seconds: 60  # Check each person every N seconds
+  image_padding: 20.0  # Padding % around person bbox for VLM (0-100), adds context for better action recognition
   async_workers: 1  # Number of background worker threads for inference
   max_queue_size: 50  # Maximum queued inference requests
   actions:  # Supported action types (mapped to backend activity types)
     - sleeping            # -> sleeping
     - using phone         # -> phone_usage
-    - working with computer  # -> working
+    - working             # -> working (includes: computer, mouse, writing, reading)
     - talking with someone   # -> talking
+    - idle                # -> not_focusing
 
 # System settings
 max_track_lifetime_seconds: 30  # Maximum time to keep inactive tracks

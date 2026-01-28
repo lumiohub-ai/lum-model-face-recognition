@@ -77,28 +77,28 @@ class ModelFactory:
 
     @property
     def action_recognizer(self) -> ActionRecognizer:
-        """Get or create action recognizer (lazy initialization)."""
+        """Get or create action recognizer (lazy initialization).
+
+        Note: VLM is enabled per-camera based on 'activity' in camera's applications list.
+        """
         if self._action_recognizer is None:
             action_config = self.config.get('action_recognition', {})
-            enabled = action_config.get('enabled', False)
             ollama_api_url = action_config.get('ollama_api_url') or os.getenv('OLLAMA_API_URL')
-            model_name = action_config.get('model_name') or os.getenv('OLLAMA_MODEL', 'gemma3:4b')
+            model_name = action_config.get('model_name') or os.getenv('OLLAMA_MODEL', 'llava:7b')
 
-            logger.info(f"Initializing ActionRecognizer (enabled: {enabled}) | Ollama API: {ollama_api_url} | Model: {model_name}")
             self._action_recognizer = ActionRecognizer(
                 ollama_api_url=ollama_api_url,
                 api_client=self.api_client,
-                enabled=enabled,
+                enabled=True,  # Always enabled; per-camera filtering in CameraEngine
                 check_interval_seconds=action_config.get('check_interval_seconds', 30),
                 max_queue_size=action_config.get('max_queue_size', 50),
                 num_workers=action_config.get('async_workers', 1),
                 model_name=model_name
             )
 
-            # Start worker threads if enabled
-            if enabled:
-                self._action_recognizer.start_workers()
-                logger.info("Action recognition workers started")
+            # Start worker threads
+            self._action_recognizer.start_workers()
+            logger.info("Action recognition workers started (per-camera filtering based on 'activity' application)")
 
         return self._action_recognizer
 

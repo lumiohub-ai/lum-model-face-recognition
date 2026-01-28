@@ -57,6 +57,49 @@ class PersonTrackManager:
             f"PersonTrackManager initialized (max_history={max_history_frames} frames)"
         )
 
+    def get_total_tracks(self) -> int:
+        """Get total number of active tracks.
+
+        Returns:
+            Number of tracks currently stored
+        """
+        return len(self.track_bbox_history)
+
+    def cleanup_oldest_tracks(self, max_tracks: int = 100) -> int:
+        """Remove oldest inactive tracks if total exceeds limit.
+        Args:
+            max_tracks: Maximum number of tracks to keep
+
+        Returns:
+            Number of tracks removed
+        """
+        current_count = self.get_total_tracks()
+
+        if current_count <= max_tracks:
+            return 0
+
+        # Find oldest tracks by last_seen time
+        tracks_with_time = [
+            (track_id, self.track_last_seen.get(track_id, datetime.min))
+            for track_id in self.track_bbox_history.keys()
+        ]
+
+        # Sort by time (oldest first)
+        tracks_with_time.sort(key=lambda x: x[1])
+
+        # Remove oldest tracks until we're under limit
+        num_to_remove = current_count - max_tracks
+        removed = 0
+
+        for track_id, _ in tracks_with_time[:num_to_remove]:
+            self.remove_track(track_id)
+            removed += 1
+
+        if removed > 0:
+            logger.debug(f"Track cleanup: Removed {removed} oldest tracks (limit={max_tracks}, had={current_count})")
+
+        return removed
+
     def add_track_detection(
         self,
         track_id: int,
@@ -128,7 +171,7 @@ class PersonTrackManager:
                 del self.track_confidence_history[track_id][frame]
 
         # Crop history (keep fewer crops due to memory)
-        max_crops = min(50, self.max_history_frames)
+        max_crops = min(30, self.max_history_frames)
         if len(self.track_crop_history[track_id]) > max_crops:
             frames = sorted(self.track_crop_history[track_id].keys())
             frames_to_remove = frames[:-max_crops]

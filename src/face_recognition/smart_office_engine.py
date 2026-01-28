@@ -14,6 +14,7 @@ Architecture:
 
 import os
 import time
+from pathlib import Path
 from typing import List, Optional
 
 from loguru import logger
@@ -142,6 +143,10 @@ class SmartOfficeEngine:
         """Initialize camera engines with shared models."""
         engines = []
 
+        # Get VLM image padding from config
+        action_config = self.config.get('action_recognition', {})
+        vlm_image_padding = action_config.get('image_padding', 20.0)
+
         for config in self.camera_configs:
             engine = CameraEngine(
                 camera_config=config,
@@ -153,7 +158,8 @@ class SmartOfficeEngine:
                 api_client=self.api_client,
                 name_to_id_map=self.name_to_id_map,
                 global_track_manager=self.models.global_track_manager,
-                action_recognizer=self.models.action_recognizer  # Add action recognizer
+                action_recognizer=self.models.action_recognizer,
+                vlm_image_padding=vlm_image_padding
             )
             engines.append(engine)
 
@@ -176,13 +182,56 @@ class SmartOfficeEngine:
         """Stop the engine (signal handler callback)."""
         self.lifecycle.mark_stopped()
 
+    def _refresh_name_to_id_map(self) -> bool:
+        """Refresh name-to-ID mapping from API and propagate to camera engines.
+
+        This ensures new users added to the backend are recognized for activity tracking.
+
+        Returns:
+            True if refresh succeeded, False otherwise
+        """
+        try:
+            new_map = self.lifecycle.build_name_to_id_map(self.api_client)
+
+            if not new_map:
+                logger.warning("Name-to-ID refresh returned empty map, keeping existing")
+                return False
+
+            # Check if there are changes
+            if new_map != self.name_to_id_map:
+                added = set(new_map.keys()) - set(self.name_to_id_map.keys())
+                removed = set(self.name_to_id_map.keys()) - set(new_map.keys())
+
+                if added or removed:
+                    logger.info(
+                        f"Name-to-ID map updated: +{len(added)} added, -{len(removed)} removed"
+                    )
+
+                # Update main map
+                self.name_to_id_map = new_map
+
+                # Propagate to all camera engines
+                for engine in self.camera_engines:
+                    engine.name_to_id_map = new_map
+                    # Also update state manager if it has a reference
+                    if hasattr(engine, 'state_manager') and engine.state_manager:
+                        engine.state_manager.name_to_id_map = new_map
+
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to refresh name-to-ID map: {e}")
+            return False
+
     def run(self) -> None:
         """Run the main processing loop."""
         self.lifecycle.mark_started()
         last_metrics_log_time = time.time()
         last_validation_time = time.time()
+        last_user_refresh_time = time.time()
         metrics_log_interval = 60.0
         validation_interval = 30.0
+        user_refresh_interval = 300.0  # 5 minutes
 
         # Start streams
         self.stream_manager.start_streams()
@@ -216,6 +265,11 @@ class SmartOfficeEngine:
                 if current_time - last_metrics_log_time >= metrics_log_interval:
                     self.frame_processor.log_metrics()
                     last_metrics_log_time = current_time
+
+                # Periodic user refresh (for new users added to backend)
+                if current_time - last_user_refresh_time >= user_refresh_interval:
+                    self._refresh_name_to_id_map()
+                    last_user_refresh_time = current_time
 
         except Exception as e:
             logger.error(f"Error during processing: {e}")
