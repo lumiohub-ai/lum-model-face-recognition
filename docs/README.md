@@ -36,6 +36,9 @@ git submodule update --init --recursive
 ### 4. Configure Environment
 
 ```bash
+# Create required directories
+mkdir -p volumes/models/insightface volumes/storage/person-tracking logs/person-tracking
+
 # Copy example configs
 cp .env.example .env
 
