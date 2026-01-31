@@ -246,17 +246,46 @@ class EntryLogger:
         if response is None:
             logger.warning(f"Failed to send location data for {name}")
 
-    def send_unrecognized_face(self, face: np.ndarray, status: str) -> Optional[Any]:
+    def send_unrecognized_face(
+        self,
+        face: np.ndarray,
+        status: str,
+        camera_id: Optional[int] = None
+    ) -> Optional[Any]:
         """Send unrecognized face image to the API.
+
+        Uploads image to GCS first, then sends URL via MDA.
 
         Args:
             face: Detected face image (numpy array)
             status: Status of the user ('IN' or 'OUT')
+            camera_id: ID of the camera that detected the face
 
         Returns:
             Response object if successful, None otherwise
         """
-        return self.api_client.send_unrecognized_face(face, status)
+        # Upload face image to GCS
+        image_url = None
+        try:
+            from ..api.image_uploader import upload_proof_image
+            image_url = upload_proof_image(
+                image=face,
+                prefix="unrecognized_faces",
+                client_slug=self.client_slug
+            )
+            if image_url:
+                logger.info(f"Uploaded unrecognized face to GCS: {image_url}")
+            else:
+                logger.warning("Failed to upload unrecognized face to GCS")
+        except Exception as e:
+            logger.error(f"Error uploading unrecognized face: {e}")
+
+        return self.api_client.send_unrecognized_face(
+            face=face,
+            status=status,
+            camera_id=camera_id,
+            image_url=image_url
+        )
 
     def save_status_info(self, video_name: str = 'status_info') -> str:
         """Get the path to the status information log file.

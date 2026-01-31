@@ -3,7 +3,7 @@
 
 # Video settings
 show: false  # Display video output (disable for Docker/headless)
-save_video: true  # Save annotated video output to disk
+save_video: false  # Save annotated video output to disk
 output_dir: "volumes/storage/person-tracking"  # Directory for outputs
 
 # Performance settings

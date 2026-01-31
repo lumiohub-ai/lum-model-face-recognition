@@ -1,7 +1,9 @@
-"""Fetch images from Google Cloud Storage or HTTP URLs."""
+"""Fetch and upload images to/from Google Cloud Storage or HTTP URLs."""
 
 import os
+import uuid
 import requests
+from datetime import datetime
 from typing import Optional
 from io import BytesIO
 from PIL import Image
@@ -198,4 +200,64 @@ class ImageFetcher:
 
         except Exception as e:
             logger.error(f"Failed to fetch from local {file_path}: {e}")
+            return None
+
+    def upload_image(
+        self,
+        image: np.ndarray,
+        prefix: str = "unrecognized_faces",
+        client_slug: Optional[str] = None
+    ) -> Optional[str]:
+        """Upload image to Google Cloud Storage.
+
+        Args:
+            image: Image in BGR format (numpy array)
+            prefix: GCS path prefix (e.g., "unrecognized_faces", "attendance_proofs")
+            client_slug: Organization slug for path organization
+
+        Returns:
+            str: Public URL of uploaded image, or None if failed
+        """
+        if not self.gcs_client:
+            logger.warning("GCS client not initialized, cannot upload image")
+            return None
+
+        try:
+            # Generate unique filename with timestamp
+            now = datetime.now()
+            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            filename = f"{timestamp}_{unique_id}.jpg"
+
+            # Build GCS path matching backend pattern
+            year = now.strftime("%Y")
+            if client_slug:
+                blob_path = f"{year}/cv.face-recognition/{client_slug}/{prefix}/{filename}"
+            else:
+                blob_path = f"{year}/cv.face-recognition/{prefix}/{filename}"
+
+            # Convert BGR to RGB and encode as JPEG
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(image_rgb)
+
+            # Encode to JPEG bytes
+            buffer = BytesIO()
+            pil_image.save(buffer, format='JPEG', quality=85)
+            image_bytes = buffer.getvalue()
+
+            # Upload to GCS
+            bucket = self.gcs_client.bucket(self.gcs_bucket)
+            blob = bucket.blob(blob_path)
+            blob.upload_from_string(image_bytes, content_type='image/jpeg')
+
+            # For buckets with uniform bucket-level access, use the public URL directly
+            # The bucket should be configured for public access at the bucket level
+            # or use signed URLs for private access
+            public_url = f"https://storage.googleapis.com/{self.gcs_bucket}/{blob_path}"
+
+            logger.info(f"Uploaded image to GCS: {public_url}")
+            return public_url
+
+        except Exception as e:
+            logger.error(f"Failed to upload image to GCS: {e}")
             return None

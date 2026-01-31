@@ -228,8 +228,8 @@ class APIClient:
             user_id: ID of the user
             status: Either 'IN' or 'OUT'
             camera_id: ID of the camera that detected the person
-            proof_image: Unused (kept for API compatibility)
-            proof_image_url: GCS URL of proof image
+            proof_image: Image to upload to GCS (if proof_image_url not provided)
+            proof_image_url: GCS URL of proof image (if already uploaded)
 
         Returns:
             True if published successfully
@@ -238,6 +238,18 @@ class APIClient:
         if status not in ['IN', 'OUT']:
             logger.warning(f"Invalid status '{status}'. Must be 'IN' or 'OUT'")
             return False
+
+        # Upload proof image to GCS if provided and URL not already set
+        if proof_image is not None and proof_image_url is None:
+            try:
+                from .image_uploader import upload_proof_image
+                proof_image_url = upload_proof_image(
+                    image=proof_image,
+                    prefix="attendance_proofs",
+                    client_slug=self.client_slug
+                )
+            except Exception as e:
+                logger.warning(f"Failed to upload attendance proof image: {e}")
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
@@ -299,8 +311,8 @@ class APIClient:
             camera_id: Camera ID
             user_id: User ID
             confidence_score: AI confidence score
-            proof_image: Unused (kept for API compatibility)
-            proof_image_url: GCS URL of proof image
+            proof_image: Image to upload to GCS (if proof_image_url not provided)
+            proof_image_url: GCS URL of proof image (if already uploaded)
 
         Returns:
             True if published successfully
@@ -310,6 +322,18 @@ class APIClient:
         if activity_type not in valid_types:
             logger.warning(f"Invalid activity_type '{activity_type}'. Must be one of {valid_types}")
             return False
+
+        # Upload proof image to GCS if provided and URL not already set
+        if proof_image is not None and proof_image_url is None:
+            try:
+                from .image_uploader import upload_proof_image
+                proof_image_url = upload_proof_image(
+                    image=proof_image,
+                    prefix="activity_proofs",
+                    client_slug=self.client_slug
+                )
+            except Exception as e:
+                logger.warning(f"Failed to upload activity proof image: {e}")
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 

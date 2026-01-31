@@ -60,12 +60,10 @@ services:
     image: humblebeeintel/person-tracking:dev
     container_name: person-tracking-app
     network_mode: host
-    env_file:
-      - .env
     environment:
       # Application slug
       FR_SLUG: ${FR_SLUG:-face-recognition}
-      PYTHONWARNINGS: "ignore::FutureWarning"  
+      PYTHONWARNINGS: "ignore::FutureWarning"
 
       # Client configuration
       HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
@@ -104,10 +102,14 @@ services:
       # Ollama API for action recognition
       OLLAMA_API_URL: ${OLLAMA_API_URL:-http://localhost:11435}
 
+      # GCS configuration
+      GCS_CREDENTIALS_PATH: /app/credentials/gcs-service-account.json
+      GCS_BUCKET: ${GCS_BUCKET:-hbai-general-data}
+
       # Python settings
       PYTHONUNBUFFERED: 1
       PYTHONDONTWRITEBYTECODE: 1
-      PYTHONPATH: /app/src:/app:${PYTHONPATH}
+      PYTHONPATH: /app/src:/app
 
       # SSL settings
       REQUESTS_CA_BUNDLE: ""
@@ -180,7 +182,7 @@ services:
       # Python settings
       PYTHONUNBUFFERED: 1
       PYTHONDONTWRITEBYTECODE: 1
-      PYTHONPATH: /app/src:/app:${PYTHONPATH}
+      PYTHONPATH: /app/src:/app
 
       # SSL settings
       REQUESTS_CA_BUNDLE: ""
@@ -229,7 +231,7 @@ services:
 
       # Python settings
       PYTHONUNBUFFERED: 1
-      PYTHONPATH: /app/src:/app:${PYTHONPATH}
+      PYTHONPATH: /app/src:/app
     volumes:
       - ./src:/app/src
     depends_on:
