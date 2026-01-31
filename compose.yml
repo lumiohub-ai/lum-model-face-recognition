@@ -1,11 +1,5 @@
-version: '3.8'
-
-# Docker Compose configuration for Person Tracking System
-# Usage:
-#   docker-compose -f docker-compose.person-tracking.yml up -d
-#   docker-compose -f docker-compose.person-tracking.yml logs -f person-tracking
-
 services:
+  # pgvector Database (AI Service specific - separate from Backend's PostgreSQL)
   postgres:
     image: pgvector/pgvector:pg16
     container_name: person-tracking-postgres
@@ -25,20 +19,8 @@ services:
       retries: 5
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: person-tracking-redis
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
+  # NOTE: Redis is NOT included here - uses shared Redis from main docker-compose.yml
+  # AI Service connects via localhost:6379 (network_mode: host)
 
   ollama:
     image: ollama/ollama:latest
@@ -60,7 +42,6 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
-    # Pull gemma3:4b model on startup
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -69,19 +50,22 @@ services:
         ollama pull gemma3:4b
         wait
 
+  # Main Person Tracking Application (MDA Subscriber)
   person-tracking:
     build:
       context: .
       dockerfile: Dockerfile
-      # Development: faster builds with caching
       args:
         - BUILDKIT_INLINE_CACHE=1
     image: humblebeeintel/person-tracking:dev
     container_name: person-tracking-app
     network_mode: host
+    env_file:
+      - .env
     environment:
       # Application slug
       FR_SLUG: ${FR_SLUG:-face-recognition}
+      PYTHONWARNINGS: "ignore::FutureWarning"  
 
       # Client configuration
       HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
@@ -96,16 +80,20 @@ services:
       HB_OUT: ${HB_OUT:-}
       HB_IN_MANAGEMENT: ${HB_IN_MANAGEMENT:-}
 
-      # Database configuration (feature flags now in configs/config.yaml)
+      # Database configuration
       POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
       POSTGRES_PORT: ${POSTGRES_PORT:-5434}
       POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-face_recognition_pass}
       POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
 
-      # Redis configuration
+      # Redis configuration (MDA)
       REDIS_HOST: ${REDIS_HOST:-localhost}
       REDIS_PORT: ${REDIS_PORT:-6379}
+
+      # Celery configuration (True MDA)
+      CELERY_BROKER_URL: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/0
+      CELERY_RESULT_BACKEND: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/1
 
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -116,52 +104,39 @@ services:
       # Ollama API for action recognition
       OLLAMA_API_URL: ${OLLAMA_API_URL:-http://localhost:11435}
 
-      # Development: Enable Python unbuffered output for real-time logs
+      # Python settings
       PYTHONUNBUFFERED: 1
-      # Development: Disable Python bytecode caching
       PYTHONDONTWRITEBYTECODE: 1
-      # Development: Prioritize mounted source over installed package
-      PYTHONPATH: /app/face-recognition/src:/app/face-recognition:${PYTHONPATH}
+      PYTHONPATH: /app/src:/app:${PYTHONPATH}
 
-      # Disable SSL verification for model downloads (InsightFace)
+      # SSL settings
       REQUESTS_CA_BUNDLE: ""
       CURL_CA_BUNDLE: ""
 
-      # Suppress FFmpeg verbose logging
+      # Logging settings
       OPENCV_FFMPEG_LOGLEVEL: "-8"
       AV_LOG_FORCE_NOCOLOR: "1"
       MPLCONFIGDIR: /tmp/matplotlib
 
-      # Performance
+      # GPU settings
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
     volumes:
-      # Mount .env to override baked-in .env in image
-      - ./.env:/app/face-recognition/.env:ro
-      # Development: Mount source code for hot reload (if supported)
-      - ./src:/app/face-recognition/src
-      # Configuration
-      - ./configs:/app/face-recognition/configs
-      # Output storage
-      - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
-      # Logs
+      - ./.env:/app/.env:ro
+      - ./src:/app/src
+      - ./configs:/app/configs
+      - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
       - ./logs/person-tracking:/var/log/face-recognition
-      # Credentials (if needed)
-      - ./credentials:/app/face-recognition/credentials
-      # Model cache in data directory (fr-user has write access)
-      - ./volumes/models/insightface:/home/fr-user/.insightface
-      # HuggingFace model cache (for Gemma-3N and other transformers models)
-      - ./volumes/models/huggingface:/home/fr-user/.cache/huggingface
-      - ./volumes/models/weights:/app/face-recognition/weights:ro
-      # InsightFace models will be downloaded automatically on first run
-      # - ./insightface_models/buffalo_l:/home/fr-user/.insightface/models/buffalo_l:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models/insightface:/root/.insightface
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/weights:/app/weights:ro
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
       ollama:
         condition: service_started
+    # NOTE: Requires external Redis from main docker-compose.yml (localhost:6379)
     deploy:
       resources:
         reservations:
@@ -169,16 +144,103 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # Development: don't auto-restart on crash to see errors
     restart: "no"
-    # Development: Show logs in color
     tty: true
     stdin_open: true
 
+  # Celery Worker - Processes embedding tasks (True MDA)
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: humblebeeintel/person-tracking:dev
+    container_name: celery-worker-embeddings
+    network_mode: host
+    environment:
+      # Client configuration
+      HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
+
+      # Database configuration
+      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5434}
+      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-face_recognition_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
+
+      # Redis configuration (MDA)
+      REDIS_HOST: ${REDIS_HOST:-localhost}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+
+      # Celery configuration
+      CELERY_BROKER_URL: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/0
+      CELERY_RESULT_BACKEND: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/1
+
+      # Python settings
+      PYTHONUNBUFFERED: 1
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONPATH: /app/src:/app:${PYTHONPATH}
+
+      # SSL settings
+      REQUESTS_CA_BUNDLE: ""
+      CURL_CA_BUNDLE: ""
+
+      # GPU settings
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./src:/app/src
+      - ./configs:/app/configs
+      - ./credentials:/app/credentials
+      - ./volumes/models/insightface:/root/.insightface
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # NOTE: Requires external Redis from main docker-compose.yml (localhost:6379)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: celery -A face_recognition.celery_app.celery worker --loglevel=info --queues=embeddings --concurrency=2 --hostname=embeddings@%h
+    working_dir: /app/src
+    restart: unless-stopped
+    tty: true
+
+  # Flower - Celery Monitoring Dashboard
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: humblebeeintel/person-tracking:dev
+    container_name: celery-flower
+    network_mode: host
+    environment:
+      # Celery configuration
+      CELERY_BROKER_URL: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/0
+      CELERY_RESULT_BACKEND: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/1
+
+      # Python settings
+      PYTHONUNBUFFERED: 1
+      PYTHONPATH: /app/src:/app:${PYTHONPATH}
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      - celery-worker
+    # NOTE: Requires external Redis from main docker-compose.yml (localhost:6379)
+    command: celery -A face_recognition.celery_app.celery flower --port=5555
+    working_dir: /app/src
+    restart: unless-stopped
+
 volumes:
   postgres_data:
-    driver: local
-  redis_data:
     driver: local
   ollama_data:
     driver: local

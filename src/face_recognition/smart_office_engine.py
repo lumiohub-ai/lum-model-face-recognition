@@ -224,6 +224,62 @@ class SmartOfficeEngine:
         finally:
             self._cleanup()
 
+    def reload_camera_configs(self) -> bool:
+        """
+        Reload camera configurations from API.
+
+        This is called when camera config changes are received via MDA.
+        Returns True if reload was successful, False otherwise.
+        """
+        try:
+            logger.info("Reloading camera configurations...")
+
+            # Reload camera configs from API
+            use_api = self.config.get(
+                'use_api_for_cameras',
+                os.getenv('USE_API_FOR_CAMERAS', 'true').lower() == 'true'
+            )
+
+            new_configs = load_cameras(
+                api_client=self.api_client,
+                use_api=use_api,
+                applications=self.applications
+            )
+
+            if not new_configs:
+                logger.warning("No cameras found after reload - keeping existing config")
+                return False
+
+            # Check if configs actually changed
+            old_ids = set(c.get('camera_id') for c in self.camera_configs)
+            new_ids = set(c.get('camera_id') for c in new_configs)
+
+            if old_ids == new_ids:
+                # Same cameras, update applications for existing configs
+                for new_config in new_configs:
+                    for i, old_config in enumerate(self.camera_configs):
+                        if old_config.get('camera_id') == new_config.get('camera_id'):
+                            self.camera_configs[i] = new_config
+                            # Update camera engine application
+                            for engine in self.camera_engines:
+                                if engine.camera_id == new_config.get('camera_id'):
+                                    engine.application = new_config.get('application', ['attendance'])
+                                    logger.info(f"Updated camera {engine.camera_id} applications: {engine.application}")
+                            break
+                logger.info(f"Camera configurations updated (same {len(new_configs)} cameras)")
+            else:
+                # Different cameras - need full reinit (more complex, skip for now)
+                logger.warning("Camera set changed - requires engine restart for full reinit")
+                # Just update configs for now
+                self.camera_configs = new_configs
+                logger.info(f"Camera configurations reloaded: {len(new_configs)} cameras")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to reload camera configs: {e}")
+            return False
+
     def _cleanup(self) -> None:
         """Clean up resources."""
         # Stop action recognizer workers

@@ -31,16 +31,22 @@ class ActionRecognizer:
     - Async queue-based processing
     - Automatic backend activity posting
     - Rate limiting per person
+    - "using phone"
+    - "sleeping"
+    - "not focusing"
+    - "talking with someone"
+    - "working with computer"
+    - "unknown"
     """
 
     # VLM action to backend activity_type mapping
     ACTION_MAPPING = {
-        "sleeping": "sleeping",
         "using phone": "phone_usage",
-        "working with computer": "working",
+        "sleeping": "sleeping",
+        "not focusing": "not_focusing",
         "talking with someone": "talking",
-        "not_focusing": "not_focusing",
-        "idle": "idle",
+        "working with computer": "working",
+        "unknown": "idle",
         None: "unknown"
     }
 
@@ -257,11 +263,12 @@ class ActionRecognizer:
 5. idle - standing still, sitting without doing anything specific, looking around
 
 Respond with ONLY one of these exact phrases:
-- "sleeping"
 - "using phone"
-- "working with computer"
+- "sleeping"
+- "not focusing"
 - "talking with someone"
-- "idle"
+- "working with computer"
+- "unknown"
 
 Just the phrase, no explanation."""
 

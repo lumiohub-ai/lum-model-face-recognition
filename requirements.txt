@@ -39,8 +39,12 @@ slowapi~=0.1.9  # Rate limiting for API endpoints
 psycopg2-binary~=2.9.9
 sqlalchemy~=2.0.23
 pgvector~=0.2.4
-# Redis for Pub/Sub
+# Redis for Pub/Sub (MDA)
 redis~=5.0.1
+
+# Celery for async task processing (MDA)
+celery~=5.4.0
+flower~=2.0.1
 # GCS image fetching
 google-cloud-storage~=2.14.0
 # WebRTC streaming
