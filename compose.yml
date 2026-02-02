@@ -209,7 +209,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: celery -A face_recognition.celery_app.celery worker --loglevel=info --queues=embeddings --concurrency=2 --hostname=embeddings@%h
+    command: celery -A workers.celery_app.celery worker --loglevel=info --queues=embeddings --concurrency=2 --hostname=embeddings@%h
     working_dir: /app/src
     restart: unless-stopped
     tty: true
@@ -237,7 +237,7 @@ services:
     depends_on:
       - celery-worker
     # NOTE: Requires external Redis from main docker-compose.yml (localhost:6379)
-    command: celery -A face_recognition.celery_app.celery flower --port=5555
+    command: celery -A workers.celery_app.celery flower --port=5555
     working_dir: /app/src
     restart: unless-stopped
 

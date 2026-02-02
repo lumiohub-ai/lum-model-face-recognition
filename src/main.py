@@ -11,18 +11,17 @@ import atexit
 from pathlib import Path
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from face_recognition import (
-    SmartOfficeEngine,
-    init_smart_office_app,
-    log_startup_info,
-)
+from config import init_smart_office_app, log_startup_info
+from engine import SmartOfficeEngine
+from messaging import MDASubscriber, MDAPublisher, get_redis_client
+from messaging.handlers import EmbeddingRequestHandler
 
 # MDA components
 _mda_subscriber = None
-_engine = None  # Reference to SmartOfficeEngine for camera config reload
+_engine = None
 
 
 def handle_camera_config_change(message: dict):
@@ -71,13 +70,6 @@ def init_mda(client_slug: str, embedding_sync_service=None, engine=None):
     _engine = engine
 
     try:
-        from face_recognition.mda import (
-            MDASubscriber,
-            MDAPublisher,
-            EmbeddingRequestHandler,
-            get_redis_client,
-        )
-
         # Test Redis connection
         redis_client = get_redis_client()
         if not redis_client.is_connected():
@@ -134,9 +126,9 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     atexit.register(shutdown_mda)
 
-    # Initialize application (loads .env, validates env vars, sets up logging, loads config)
+    # Initialize application
     config = init_smart_office_app(
-        env_file=project_root / '.env',
+        env_file=project_root.parent / '.env',
     )
 
     client_slug = os.getenv('HB_CLIENTSLUG')
@@ -147,20 +139,19 @@ def main():
         api_host=os.getenv('API_HOST'),
     )
 
-    # Initialize SmartOfficeEngine with all supported applications
-    # The engine will load cameras that have ANY of these applications enabled
+    # Initialize SmartOfficeEngine
     engine = SmartOfficeEngine(
         email=os.getenv("SA_EMAIL"),
         password=os.getenv("SA_PASSWORD"),
         client_slug=client_slug,
         api_host=os.getenv("API_HOST"),
         applications=['attendance'],
-        **config  # Pass all config settings
+        **config
     )
 
-    # Initialize MDA (required for Pure MDA architecture)
+    # Initialize MDA
     embedding_sync = getattr(engine, 'embedding_sync', None)
-    init_mda(client_slug, embedding_sync, engine)  # Pass engine for camera config reload
+    init_mda(client_slug, embedding_sync, engine)
 
     # Run the engine
     engine.run()
