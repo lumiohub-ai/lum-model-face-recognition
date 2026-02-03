@@ -280,6 +280,29 @@ class SmartOfficeEngine:
             logger.error(f"Failed to reload camera configs: {e}")
             return False
 
+    def reload_embeddings(self) -> bool:
+        """
+        Reload face embeddings from pgvector database.
+
+        This is called when new user embeddings are created/updated/deleted via MDA.
+        Returns True if reload was successful, False otherwise.
+        """
+        try:
+            logger.info("Reloading face embeddings...")
+
+            # Reload embeddings in face recognizer
+            self.models.face_recognizer.reload_embeddings()
+
+            # Update entry logger's db_names
+            self.entry_logger.current_users = self.models.face_recognizer.db_names
+
+            logger.info(f"Face embeddings reloaded: {len(self.models.face_recognizer.db_names)} users")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to reload embeddings: {e}")
+            return False
+
     def _cleanup(self) -> None:
         """Clean up resources."""
         # Stop action recognizer workers

@@ -1,4 +1,16 @@
-"""API client for SmartOffice backend integration (Pure MDA)."""
+"""API client for SmartOffice backend integration (Pure MDA with Celery).
+
+Architecture:
+- Celery Tasks: For reliable, durable operations (attendance, activities, etc.)
+- Pub/Sub Events: Ephemeral notifications for real-time UI (published by Celery tasks)
+
+Data Flow:
+1. Camera engine calls APIClient methods
+2. APIClient queues Celery tasks (.delay())
+3. Celery worker writes to PostgreSQL (AI owns this data)
+4. Celery worker publishes event to Pub/Sub (for UI notification)
+5. Backend receives event and broadcasts via Socket.IO
+"""
 
 import io
 from datetime import datetime, timezone
@@ -11,32 +23,15 @@ from loguru import logger
 
 from .auth import AuthenticationService
 
-# Lazy import MDA publisher to avoid circular imports
-_mda_publisher = None
-
-
-def get_mda_publisher(client_slug: str):
-    """Get or create the MDA publisher instance."""
-    global _mda_publisher
-    if _mda_publisher is None:
-        try:
-            from messaging.publisher import MDAPublisher
-            _mda_publisher = MDAPublisher(client_slug)
-            logger.info(f"[MDA] Publisher initialized for {client_slug}")
-        except ImportError as e:
-            logger.error(f"[MDA] Failed to import MDAPublisher: {e}")
-            raise
-    return _mda_publisher
-
 
 class APIClient:
     """Client for communicating with the SmartOffice backend.
 
-    Uses Pure MDA (Redis Pub/Sub) for:
-    - Attendance records
-    - Unrecognized faces
-    - Activity records
-    - User locations
+    Uses Celery Tasks (via .delay()) for:
+    - Attendance records (reliable, durable)
+    - Unrecognized faces (reliable, durable)
+    - Activity records (reliable, durable)
+    - User locations (reliable, durable)
 
     Uses HTTP only for:
     - Authentication (JWT)
@@ -68,9 +63,6 @@ class APIClient:
 
         if not self.token:
             logger.error("Failed to authenticate with API")
-
-        # Initialize MDA publisher
-        self._publisher = get_mda_publisher(client_slug)
 
     @property
     def session(self) -> requests.Session:
@@ -219,20 +211,28 @@ class APIClient:
         user_id: int,
         status: str,
         camera_id: Optional[int] = None,
+        camera_name: Optional[str] = None,
+        user_name: Optional[str] = None,
         proof_image: Optional[np.ndarray] = None,
         proof_image_url: Optional[str] = None
     ) -> bool:
-        """Create an attendance record via MDA.
+        """Create an attendance record via Celery task.
+
+        This queues a Celery task that will:
+        1. Write the record to AI's PostgreSQL database
+        2. Publish an event to Pub/Sub for real-time UI update
 
         Args:
             user_id: ID of the user
             status: Either 'IN' or 'OUT'
             camera_id: ID of the camera that detected the person
+            camera_name: Name of the camera
+            user_name: Name of the user
             proof_image: Image to upload to GCS (if proof_image_url not provided)
             proof_image_url: GCS URL of proof image (if already uploaded)
 
         Returns:
-            True if published successfully
+            True if task was queued successfully
         """
         status = status.upper()
         if status not in ['IN', 'OUT']:
@@ -253,69 +253,103 @@ class APIClient:
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        logger.info(f"[MDA] Publishing attendance: user {user_id} {status}")
-        return self._publisher.publish_attendance_record(
-            user_id=user_id,
-            status=status,
-            camera_id=camera_id,
-            proof_image_url=proof_image_url,
-            timestamp=timestamp
-        )
+        # Queue Celery task
+        try:
+            from workers.detection_tasks import task_record_attendance
+            task_record_attendance.delay(
+                client_slug=self.client_slug,
+                user_id=user_id,
+                user_name=user_name or 'Unknown',
+                status=status,
+                camera_id=camera_id,
+                camera_name=camera_name,
+                proof_image_url=proof_image_url,
+                recorded_at=timestamp
+            )
+            logger.info(f"[Celery] Queued attendance task: user {user_id} {status}")
+            return True
+        except Exception as e:
+            logger.error(f"[Celery] Failed to queue attendance task: {e}")
+            return False
 
     def send_unrecognized_face(
         self,
         face: np.ndarray,
         status: str,
         camera_id: Optional[int] = None,
+        camera_name: Optional[str] = None,
         notes: Optional[str] = None,
         image_url: Optional[str] = None
     ) -> bool:
-        """Send unrecognized face via MDA.
+        """Send unrecognized face via Celery task.
+
+        This queues a Celery task that will:
+        1. Write the record to AI's PostgreSQL database
+        2. Publish an event to Pub/Sub for real-time UI update
 
         Args:
             face: Unused (kept for API compatibility)
             status: Status of the user ('IN' or 'OUT')
             camera_id: Camera ID that detected the face
+            camera_name: Camera name/location
             notes: Optional notes
             image_url: GCS URL of face image
 
         Returns:
-            True if published successfully
+            True if task was queued successfully
         """
         status = status.upper()
         if status not in ['IN', 'OUT']:
             logger.warning(f"Invalid status '{status}'. Must be 'IN' or 'OUT'")
             return False
 
-        logger.info(f"[MDA] Publishing unrecognized face from camera {camera_id}")
-        return self._publisher.publish_unrecognized_face(
-            camera_id=camera_id,
-            status=status,
-            image_url=image_url,
-            notes=notes
-        )
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        # Queue Celery task
+        try:
+            from workers.detection_tasks import task_save_unrecognized_face
+            task_save_unrecognized_face.delay(
+                client_slug=self.client_slug,
+                camera_id=camera_id,
+                camera_name=camera_name,
+                status=status,
+                image_url=image_url,
+                notes=notes,
+                detected_at=timestamp
+            )
+            logger.info(f"[Celery] Queued unrecognized face task: camera {camera_id}")
+            return True
+        except Exception as e:
+            logger.error(f"[Celery] Failed to queue unrecognized face task: {e}")
+            return False
 
     def send_activities(
         self,
         activity_type: str,
         camera_id: Optional[int] = None,
         user_id: Optional[str] = None,
+        user_name: Optional[str] = None,
         confidence_score: Optional[float] = None,
         proof_image: Optional[np.ndarray] = None,
         proof_image_url: Optional[str] = None
     ) -> bool:
-        """Send activity record via MDA.
+        """Send activity record via Celery task.
+
+        This queues a Celery task that will:
+        1. Write the record to AI's PostgreSQL database
+        2. Publish an event to Pub/Sub for real-time UI update
 
         Args:
             activity_type: Type of activity detected
             camera_id: Camera ID
             user_id: User ID
+            user_name: User name
             confidence_score: AI confidence score
             proof_image: Image to upload to GCS (if proof_image_url not provided)
             proof_image_url: GCS URL of proof image (if already uploaded)
 
         Returns:
-            True if published successfully
+            True if task was queued successfully
         """
         activity_type = activity_type.lower()
         valid_types = ['phone_usage', 'sleeping', 'not_focusing', 'talking', 'working', 'unknown']
@@ -337,15 +371,24 @@ class APIClient:
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        logger.info(f"[MDA] Publishing activity: user {user_id} - {activity_type}")
-        return self._publisher.publish_activity_record(
-            user_id=int(user_id) if user_id else None,
-            activity_type=activity_type,
-            camera_id=camera_id,
-            confidence_score=confidence_score,
-            proof_image_url=proof_image_url,
-            timestamp=timestamp
-        )
+        # Queue Celery task
+        try:
+            from workers.detection_tasks import task_record_activity
+            task_record_activity.delay(
+                client_slug=self.client_slug,
+                user_id=int(user_id) if user_id else 0,
+                user_name=user_name or 'Unknown',
+                activity_type=activity_type,
+                camera_id=camera_id,
+                confidence=confidence_score,
+                proof_image_url=proof_image_url,
+                detected_at=timestamp
+            )
+            logger.info(f"[Celery] Queued activity task: user {user_id} - {activity_type}")
+            return True
+        except Exception as e:
+            logger.error(f"[Celery] Failed to queue activity task: {e}")
+            return False
 
     def get_cameras(self, application: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get cameras from the API, optionally filtered by application."""
@@ -388,30 +431,48 @@ class APIClient:
         user_name: str,
         camera_name: str,
         timestamp: str,
-        status: str
+        status: str,
+        user_id: Optional[int] = None,
+        camera_id: Optional[int] = None
     ) -> bool:
-        """Send user location via MDA.
+        """Send user location via Celery task.
+
+        This queues a Celery task that will:
+        1. Write the record to AI's PostgreSQL database
+        2. Publish an event to Pub/Sub for real-time UI update
 
         Args:
             user_name: Full name of the user
             camera_name: Name of the camera
             timestamp: ISO 8601 formatted timestamp
             status: 'IN' or 'OUT'
+            user_id: User ID (optional)
+            camera_id: Camera ID (optional)
 
         Returns:
-            True if published successfully
+            True if task was queued successfully
         """
         if status.upper() not in ['IN', 'OUT']:
             logger.warning(f"Invalid status '{status}'. Must be 'IN' or 'OUT'")
             return False
 
-        logger.info(f"[MDA] Publishing user location: {user_name} at {camera_name}")
-        return self._publisher.publish_user_location(
-            user_name=user_name,
-            camera_name=camera_name,
-            status=status,
-            timestamp=timestamp
-        )
+        # Queue Celery task
+        try:
+            from workers.detection_tasks import task_update_user_location
+            task_update_user_location.delay(
+                client_slug=self.client_slug,
+                user_id=user_id,
+                user_name=user_name,
+                camera_id=camera_id or 0,
+                camera_name=camera_name,
+                status=status,
+                updated_at=timestamp
+            )
+            logger.info(f"[Celery] Queued location task: {user_name} at {camera_name}")
+            return True
+        except Exception as e:
+            logger.error(f"[Celery] Failed to queue location task: {e}")
+            return False
 
     def upload_annotated_frame(
         self,

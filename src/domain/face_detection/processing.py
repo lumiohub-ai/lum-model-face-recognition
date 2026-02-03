@@ -125,7 +125,8 @@ class FrameProcessor:
                 self.entry_logger.send_unrecognized_face(
                     face=face_image,
                     status=status,
-                    camera_id=camera_id
+                    camera_id=camera_id,
+                    camera_name=camera_name
                 )
                 logger.info(f"UNRECOGNIZED | Sent face from camera {camera_id} ({status})")
             elif face_image is not None and face_image.size > 0:

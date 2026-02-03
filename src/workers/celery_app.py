@@ -20,7 +20,10 @@ celery = Celery(
     'smart_office',
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=['workers.embedding_tasks']
+    include=[
+        'workers.embedding_tasks',
+        'workers.detection_tasks',
+    ]
 )
 
 # Celery configuration
@@ -35,6 +38,8 @@ celery.conf.update(
     # Task routing
     task_routes={
         'workers.embedding_tasks.*': {'queue': 'embeddings'},
+        'workers.detection_tasks.*': {'queue': 'detections'},
+        'detection.*': {'queue': 'detections'},
     },
 
     # Task execution settings

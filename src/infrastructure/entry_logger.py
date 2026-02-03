@@ -133,7 +133,7 @@ class EntryLogger:
 
         # Send location data to API if location (camera) changed (if in production mode)
         if self.args.production and location_changed:
-            self._send_location_data(name, status, appear_time, camera_name)
+            self._send_location_data(name, status, appear_time, camera_name, camera_id)
             self.person_last_camera[name] = camera_name
 
         # If status is the same as before, do nothing else
@@ -156,7 +156,7 @@ class EntryLogger:
 
         # Send attendance data to API if in production mode
         if self.args.production:
-            self._send_data_to_api(name, status, camera_id, proof_image)
+            self._send_data_to_api(name, status, camera_id, camera_name, proof_image)
 
         # Log status change with color coding for console
         self._log_status_to_console(name, status, today_time)
@@ -193,14 +193,16 @@ class EntryLogger:
         name: str,
         status: str,
         camera_id: Optional[int] = None,
+        camera_name: Optional[str] = None,
         proof_image: Optional[np.ndarray] = None
     ) -> None:
-        """Send person entry/exit data to the API.
+        """Send person entry/exit data to the API via Celery task.
 
         Args:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
             camera_id: ID of the camera that detected the person
+            camera_name: Name of the camera that detected the person
             proof_image: Optional annotated frame with person bbox as proof
         """
         user_id = next(
@@ -213,26 +215,39 @@ class EntryLogger:
             return
 
         response = self.api_client.create_attendance_record(
-            user_id, status, camera_id, proof_image
+            user_id=user_id,
+            status=status,
+            camera_id=camera_id,
+            camera_name=camera_name,
+            user_name=name,
+            proof_image=proof_image
         )
         if response is None:
-            logger.warning(f"Failed to create attendance record for {name}")
+            logger.warning(f"Failed to queue attendance record for {name}")
 
     def _send_location_data(
         self,
         name: str,
         status: str,
         appear_time: datetime,
-        camera_name: str
+        camera_name: str,
+        camera_id: Optional[int] = None
     ) -> None:
-        """Send user location data to the API.
+        """Send user location data to the API via Celery task.
 
         Args:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
             appear_time: Time when the person appeared
             camera_name: Name of the camera that detected the person
+            camera_id: ID of the camera that detected the person
         """
+        # Get user ID
+        user_id = next(
+            (int(i['id']) for i in self.name_to_id if i['name'] == name),
+            None
+        )
+
         # Generate timestamp in ISO 8601 format with milliseconds
         timestamp = appear_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
@@ -240,29 +255,33 @@ class EntryLogger:
             user_name=name,
             camera_name=camera_name,
             timestamp=timestamp,
-            status=status
+            status=status,
+            user_id=user_id,
+            camera_id=camera_id
         )
 
         if response is None:
-            logger.warning(f"Failed to send location data for {name}")
+            logger.warning(f"Failed to queue location data for {name}")
 
     def send_unrecognized_face(
         self,
         face: np.ndarray,
         status: str,
-        camera_id: Optional[int] = None
+        camera_id: Optional[int] = None,
+        camera_name: Optional[str] = None
     ) -> Optional[Any]:
-        """Send unrecognized face image to the API.
+        """Send unrecognized face image to the API via Celery task.
 
-        Uploads image to GCS first, then sends URL via MDA.
+        Uploads image to GCS first, then queues Celery task.
 
         Args:
             face: Detected face image (numpy array)
             status: Status of the user ('IN' or 'OUT')
             camera_id: ID of the camera that detected the face
+            camera_name: Name of the camera that detected the face
 
         Returns:
-            Response object if successful, None otherwise
+            True if task was queued successfully, False otherwise
         """
         # Upload face image to GCS
         image_url = None
@@ -284,6 +303,7 @@ class EntryLogger:
             face=face,
             status=status,
             camera_id=camera_id,
+            camera_name=camera_name,
             image_url=image_url
         )
 

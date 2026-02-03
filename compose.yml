@@ -1,23 +1,23 @@
 services:
   # pgvector Database (AI Service specific - separate from Backend's PostgreSQL)
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: person-tracking-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
-      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-db:/docker-entrypoint-initdb.d
-    ports:
-      - "${POSTGRES_PORT:-5434}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition} -d ${POSTGRES_DB:-face_embeddings}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
+  # postgres:
+  #   image: pgvector/pgvector:pg16
+  #   container_name: person-tracking-postgres
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
+  #     POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #     - ./scripts/init-db:/docker-entrypoint-initdb.d
+  #   ports:
+  #     - "${POSTGRES_PORT:-5434}:5432"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition} -d ${POSTGRES_DB:-face_embeddings}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
 
   # NOTE: Redis is NOT included here - uses shared Redis from main docker-compose.yml
   # AI Service connects via localhost:6379 (network_mode: host)
@@ -134,8 +134,8 @@ services:
       - ./volumes/models/huggingface:/root/.cache/huggingface
       - ./volumes/models/weights:/app/weights:ro
     depends_on:
-      postgres:
-        condition: service_healthy
+      # postgres:
+      #   condition: service_healthy
       ollama:
         condition: service_started
     # NOTE: Requires external Redis from main docker-compose.yml (localhost:6379)
@@ -162,6 +162,12 @@ services:
     network_mode: host
     environment:
       # Client configuration
+
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcs-service-account.json
+
+      GCS_CREDENTIALS_PATH: /app/credentials/gcs-service-account.json
+      GCS_BUCKET: ${GCS_BUCKET:-hbai-general-data}
+
       HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
 
       # Database configuration
@@ -198,9 +204,9 @@ services:
       - ./credentials:/app/credentials
       - ./volumes/models/insightface:/root/.insightface
       - ./volumes/models/huggingface:/root/.cache/huggingface
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
     # NOTE: Requires external Redis from main docker-compose.yml (localhost:6379)
     deploy:
       resources:
@@ -209,7 +215,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: celery -A workers.celery_app.celery worker --loglevel=info --queues=embeddings --concurrency=2 --hostname=embeddings@%h
+    command: celery -A workers.celery_app worker -Q embeddings,detections -l info
     working_dir: /app/src
     restart: unless-stopped
     tty: true
@@ -242,8 +248,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
-    driver: local
+  # postgres_data:
+  #   driver: local
   ollama_data:
     driver: local
   model-cache:

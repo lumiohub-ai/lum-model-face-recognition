@@ -16,55 +16,115 @@ sys.path.insert(0, str(project_root))
 
 from config import init_smart_office_app, log_startup_info
 from engine import SmartOfficeEngine
-from messaging import MDASubscriber, MDAPublisher, get_redis_client
-from messaging.handlers import EmbeddingRequestHandler
+from messaging import MDAPublisher, get_redis_client, start_stream_consumer, stop_stream_consumer, get_stream_consumer
 
 # MDA components
-_mda_subscriber = None
+_stream_consumer = None
 _engine = None
+_embedding_reload_thread = None
 
 
-def handle_camera_config_change(message: dict):
-    """Handle camera config change messages from backend."""
+def start_embedding_reload_listener(client_slug: str):
+    """Start a background thread to listen for embedding reload notifications."""
+    import threading
+    import json
+    import redis
+
+    global _embedding_reload_thread
+
+    redis_host = os.getenv('REDIS_HOST', 'localhost')
+    redis_port = int(os.getenv('REDIS_PORT', 6379))
+
+    def listener():
+        from messaging.channels import INTERNAL_CHANNELS
+        r = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+        pubsub = r.pubsub()
+        pubsub.subscribe(INTERNAL_CHANNELS['EMBEDDING_RELOAD'])
+
+        print(f"[MDA] Embedding reload listener started - subscribed to {INTERNAL_CHANNELS['EMBEDDING_RELOAD']}")
+
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                try:
+                    data = json.loads(message['data'])
+                    msg_client_slug = data.get('client_slug')
+
+                    # Only reload if this message is for our client
+                    if msg_client_slug == client_slug:
+                        print(f"[MDA] Embedding reload notification received: {data}")
+                        if _engine:
+                            _engine.reload_embeddings()
+                            print(f"[MDA] Embeddings reloaded successfully")
+                        else:
+                            print("[MDA] Engine not available for embedding reload")
+                except Exception as e:
+                    print(f"[MDA] Error handling embedding reload: {e}")
+
+    _embedding_reload_thread = threading.Thread(target=listener, daemon=True)
+    _embedding_reload_thread.start()
+
+
+def handle_camera_config_command(command_type: str, client_slug: str, payload: dict):
+    """
+    Handle camera config commands from Backend.
+
+    Commands: ConfigureCamera, StartCamera, StopCamera
+    """
     global _engine
 
     try:
-        action = message.get('action')
-        client_slug = message.get('client_slug')
-        camera_data = message.get('camera_data', {})
-
-        print(f"[MDA] Camera config change: {action} for camera {camera_data.get('id')} (org: {client_slug})")
-
-        # Only reload if this is for our client
+        camera_id = payload.get('camera_id')
         current_client = os.getenv('HB_CLIENTSLUG')
+
+        print(f"[MDA] Camera command received: {command_type}")
+        print(f"[MDA]   - camera_id: {camera_id}")
+        print(f"[MDA]   - client_slug from command: {client_slug}")
+        print(f"[MDA]   - HB_CLIENTSLUG env: {current_client}")
+
+        # Only process if this is for our client
         if client_slug != current_client:
-            print(f"[MDA] Ignoring camera config change for different client: {client_slug}")
+            print(f"[MDA] Ignoring camera command for different client: {client_slug} (expected: {current_client})")
             return
 
-        # Reload camera configs
-        if _engine:
-            success = _engine.reload_camera_configs()
-            if success:
-                print(f"[MDA] Camera configurations reloaded successfully")
+        # Handle different command types
+        if command_type in ('ConfigureCamera', 'StartCamera'):
+            # Reload camera configs
+            if _engine:
+                success = _engine.reload_camera_configs()
+                if success:
+                    print(f"[MDA] Camera configurations reloaded successfully")
+                else:
+                    print(f"[MDA] Camera configuration reload returned False")
             else:
-                print(f"[MDA] Camera configuration reload returned False")
-        else:
-            print("[MDA] Engine not available for camera config reload")
+                print("[MDA] Engine not available for camera config reload")
+
+        elif command_type == 'StopCamera':
+            # Stop specific camera
+            if _engine:
+                # TODO: Implement stop_camera method in engine
+                print(f"[MDA] StopCamera command received for camera {camera_id}")
+            else:
+                print("[MDA] Engine not available for camera stop")
 
     except Exception as e:
-        print(f"[MDA] Error handling camera config change: {e}")
+        print(f"[MDA] Error handling camera command: {e}")
 
 
 def init_mda(client_slug: str, embedding_sync_service=None, engine=None):
     """
     Initialize MDA (Message-Driven Architecture) components.
 
+    Uses:
+    - StreamConsumer: Reads commands from Redis Streams (Backend → AI)
+    - MDAPublisher: Publishes events to Redis Pub/Sub (AI → Backend)
+    - Celery: Processes heavy tasks (embeddings, etc.)
+
     Args:
         client_slug: Organization identifier
-        embedding_sync_service: Optional embedding sync service for handling requests
+        embedding_sync_service: Optional embedding sync service (not used - Celery handles it)
         engine: SmartOfficeEngine instance for camera config reload
     """
-    global _mda_subscriber, _engine
+    global _stream_consumer, _engine
 
     # Store engine reference for camera config reload
     _engine = engine
@@ -76,23 +136,22 @@ def init_mda(client_slug: str, embedding_sync_service=None, engine=None):
             print("[MDA] Redis not available - MDA requires Redis to function")
             sys.exit(1)
 
-        # Initialize subscriber
-        _mda_subscriber = MDASubscriber()
-
-        # Set up embedding request handler if embedding sync is available
-        if embedding_sync_service:
-            publisher = MDAPublisher(client_slug)
-            handler = EmbeddingRequestHandler(embedding_sync_service, publisher)
-            _mda_subscriber.set_embedding_handler(handler.handle)
-            print(f"[MDA] Embedding request handler configured for {client_slug}")
+        # Initialize stream consumer for commands from Backend
+        _stream_consumer = get_stream_consumer()
 
         # Set up camera config change handler
-        _mda_subscriber.set_camera_config_handler(handle_camera_config_change)
+        _stream_consumer.set_camera_handler(handle_camera_config_command)
         print(f"[MDA] Camera config handler configured for {client_slug}")
 
-        # Start subscriber
-        _mda_subscriber.start()
-        print(f"[MDA] Subscriber started - listening for messages")
+        # Start stream consumer
+        # Note: Embedding commands are dispatched to Celery automatically by StreamConsumer
+        _stream_consumer.start()
+        print(f"[MDA] StreamConsumer started - listening for commands on Redis Streams")
+        print(f"[MDA] Celery workers will process embedding tasks")
+
+        # Start embedding reload listener
+        start_embedding_reload_listener(client_slug)
+        print(f"[MDA] Embedding reload listener started")
 
     except ImportError as e:
         print(f"[MDA] Import error: {e}")
@@ -104,12 +163,12 @@ def init_mda(client_slug: str, embedding_sync_service=None, engine=None):
 
 def shutdown_mda():
     """Gracefully shutdown MDA components."""
-    global _mda_subscriber
+    global _stream_consumer
 
-    if _mda_subscriber:
-        print("[MDA] Shutting down subscriber...")
-        _mda_subscriber.stop()
-        print("[MDA] Subscriber stopped")
+    if _stream_consumer:
+        print("[MDA] Shutting down stream consumer...")
+        _stream_consumer.stop()
+        print("[MDA] Stream consumer stopped")
 
 
 def signal_handler(signum, frame):

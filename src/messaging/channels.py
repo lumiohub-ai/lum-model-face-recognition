@@ -1,31 +1,72 @@
 """
 MDA Channel Definitions
 
-All Redis Pub/Sub channel names used for communication between services.
+Commands: Backend → AI Service (Redis Streams)
+Events: AI Service → Backend (Redis Pub/Sub)
 """
 
-# Channels for Backend -> AI Service
-EMBEDDING_REQUESTS = "embedding.requests"  # User CRUD triggers embedding sync
-CAMERA_CONFIG = "camera.config"  # Camera configuration changes
+# ============================================================
+# COMMANDS (Backend → AI Service) - Redis Streams
+# These are now handled by stream_consumer.py, not Pub/Sub
+# ============================================================
+COMMAND_STREAMS = {
+    'EMBEDDING': 'commands:embedding',
+    'CAMERA': 'commands:camera',
+}
 
-# Channels for AI Service -> Backend
-ATTENDANCE_RECORDS = "attendance.records"  # Attendance IN/OUT events
-UNRECOGNIZED_FACES = "unrecognized.faces"  # Unknown face detections
-ACTIVITY_RECORDS = "activity.records"  # Activity tracking (phone, sleeping)
-USER_LOCATIONS = "user.locations"  # User location at camera
-EMBEDDING_RESULTS = "embedding.results"  # Embedding processing results
+# Legacy Pub/Sub channels (deprecated - use streams instead)
+EMBEDDING_REQUESTS = "embedding.requests"  # DEPRECATED
+CAMERA_CONFIG = "camera.config"  # DEPRECATED
 
 
-# Channel groups for easy subscription
-SUBSCRIBE_CHANNELS = [
-    EMBEDDING_REQUESTS,
-    CAMERA_CONFIG,
-]
+# ============================================================
+# EVENTS (AI Service → Backend) - Redis Pub/Sub
+# Ephemeral notifications - data already persisted in DB
+# ============================================================
+EVENT_CHANNELS = {
+    'ATTENDANCE': 'events:attendance',
+    'UNRECOGNIZED': 'events:unrecognized',
+    'ACTIVITY': 'events:activity',
+    'LOCATION': 'events:location',
+    'EMBEDDING': 'events:embedding',
+}
 
-PUBLISH_CHANNELS = [
-    ATTENDANCE_RECORDS,
-    UNRECOGNIZED_FACES,
-    ACTIVITY_RECORDS,
-    USER_LOCATIONS,
-    EMBEDDING_RESULTS,
-]
+# Event types
+EVENT_TYPES = {
+    # Attendance
+    'ATTENDANCE_RECORDED': 'AttendanceRecorded',
+
+    # Unrecognized faces
+    'UNRECOGNIZED_FACE_SAVED': 'UnrecognizedFaceSaved',
+
+    # Activity
+    'ACTIVITY_DETECTED': 'ActivityDetected',
+
+    # Location
+    'USER_LOCATION_UPDATED': 'UserLocationUpdated',
+
+    # Embedding
+    'EMBEDDING_CREATED': 'EmbeddingCreated',
+    'EMBEDDING_FAILED': 'EmbeddingFailed',
+}
+
+# ============================================================
+# INTERNAL CHANNELS (AI Service internal communication)
+# Used for notifying camera engine to reload embeddings
+# ============================================================
+INTERNAL_CHANNELS = {
+    'EMBEDDING_RELOAD': 'internal:embedding:reload',
+}
+
+# Legacy channel names (for backward compatibility during migration)
+ATTENDANCE_RECORDS = EVENT_CHANNELS['ATTENDANCE']
+UNRECOGNIZED_FACES = EVENT_CHANNELS['UNRECOGNIZED']
+ACTIVITY_RECORDS = EVENT_CHANNELS['ACTIVITY']
+USER_LOCATIONS = EVENT_CHANNELS['LOCATION']
+EMBEDDING_RESULTS = EVENT_CHANNELS['EMBEDDING']
+
+
+# Channel groups
+SUBSCRIBE_CHANNELS = []  # No longer subscribing via Pub/Sub - using Streams
+
+PUBLISH_CHANNELS = list(EVENT_CHANNELS.values())
