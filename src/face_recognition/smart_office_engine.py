@@ -25,7 +25,15 @@ from .camera_engine import CameraEngine
 from .config.camera_loader import load_cameras
 from .core.model_factory import ModelFactory
 from .core.processing import FrameProcessor
+from .config.constants import (
+    DEFAULT_MONITOR_FLUSH_INTERVAL,
+    DEFAULT_MONITOR_SAMPLE_INTERVAL,
+    DEFAULT_STORAGE_BASE_PATH,
+    SYSTEM_METRICS_FILE_PREFIX,
+    SYSTEM_MONITOR_LOG_DIR,
+)
 from .logging.entry_logger import EntryLogger
+from .logging.system_monitor import SystemMonitor
 from .services.lifecycle import EngineLifecycle
 from .video.stream_manager import StreamManager
 
@@ -131,6 +139,9 @@ class SmartOfficeEngine:
             global_track_manager=self.models.global_track_manager
         )
 
+        # Initialize system monitor
+        self.system_monitor = self._init_system_monitor()
+
         # Display settings
         self.show_display = kwargs.get('show', False)
 
@@ -181,6 +192,28 @@ class SmartOfficeEngine:
         args.production = True
 
         return EntryLogger(args=args)
+
+    def _init_system_monitor(self) -> Optional[SystemMonitor]:
+        """Initialize system monitor if enabled."""
+        monitoring_config = self.config.get('system_monitoring', {})
+        if not monitoring_config.get('enabled', True):
+            return None
+
+        fr_slug = os.getenv("FR_SLUG", "default")
+        monitor_log_dir = os.path.join(
+            DEFAULT_STORAGE_BASE_PATH,
+            fr_slug,
+            "logs",
+            self.client_slug,
+            SYSTEM_MONITOR_LOG_DIR,
+        )
+        return SystemMonitor(
+            log_dir=monitor_log_dir,
+            flush_interval_seconds=monitoring_config.get(
+                'flush_interval_seconds', DEFAULT_MONITOR_FLUSH_INTERVAL
+            ),
+            file_prefix=SYSTEM_METRICS_FILE_PREFIX,
+        )
 
     def _stop(self) -> None:
         """Stop the engine (signal handler callback)."""
@@ -233,9 +266,13 @@ class SmartOfficeEngine:
         last_metrics_log_time = time.time()
         last_validation_time = time.time()
         last_user_refresh_time = time.time()
+        last_system_monitor_time = time.time()
         metrics_log_interval = 60.0
         validation_interval = 30.0
         user_refresh_interval = 300.0  # 5 minutes
+        system_monitor_interval = self.config.get(
+            'system_monitoring', {}
+        ).get('sample_interval_seconds', DEFAULT_MONITOR_SAMPLE_INTERVAL)
 
         # Start streams
         self.stream_manager.start_streams()
@@ -275,6 +312,16 @@ class SmartOfficeEngine:
                     self._refresh_name_to_id_map()
                     last_user_refresh_time = current_time
 
+                # Periodic system monitoring (FPS + memory sampling)
+                if self.system_monitor and current_time - last_system_monitor_time >= system_monitor_interval:
+                    fps_stats = self.frame_processor.sample_fps()
+                    self.system_monitor.record_sample(
+                        avg_fps=fps_stats["avg_fps"],
+                        min_fps=fps_stats["min_fps"],
+                        max_fps=fps_stats["max_fps"],
+                    )
+                    last_system_monitor_time = current_time
+
         except Exception as e:
             logger.error(f"Error during processing: {e}")
             raise
@@ -284,6 +331,10 @@ class SmartOfficeEngine:
 
     def _cleanup(self) -> None:
         """Clean up resources."""
+        # Flush remaining system monitor samples
+        if self.system_monitor:
+            self.system_monitor.flush()
+
         # Stop action recognizer workers
         self.models.cleanup()
 

@@ -55,6 +55,10 @@ class FrameProcessor:
         self.start_time = time.time()
         self.total_frames = 0
 
+        # FPS sampling for system monitoring (min/max/avg per interval)
+        self._interval_start_time = time.time()
+        self._interval_frame_count = 0
+
     def process_all_frames(
         self,
         frames: List[Tuple[int, np.ndarray, int]]
@@ -84,6 +88,7 @@ class FrameProcessor:
             annotated_frames.append((camera_idx, annotated))
 
             self.total_frames += 1
+            self._interval_frame_count += 1
 
         return annotated_frames
 
@@ -200,6 +205,26 @@ class FrameProcessor:
         """Log baseline metrics summary."""
         if self.global_track_manager and self.global_track_manager.enabled:
             self.global_track_manager.log_baseline_summary()
+
+    def sample_fps(self) -> Dict:
+        """Sample FPS for the current interval and reset counters.
+
+        Returns:
+            Dict with avg_fps, min_fps, max_fps for the interval.
+        """
+        current_time = time.time()
+        elapsed = current_time - self._interval_start_time
+
+        if elapsed > 0 and self._interval_frame_count > 0:
+            fps = self._interval_frame_count / elapsed
+        else:
+            fps = 0.0
+
+        # Reset for next interval
+        self._interval_start_time = current_time
+        self._interval_frame_count = 0
+
+        return {"avg_fps": fps, "min_fps": fps, "max_fps": fps}
 
     def get_fps(self) -> float:
         """Get current FPS."""

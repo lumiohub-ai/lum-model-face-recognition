@@ -126,6 +126,15 @@ class EntryLogger:
         Returns:
             bool: True if the status was recorded, False if unchanged
         """
+        # Only process valid attendance statuses (IN/OUT)
+        status_upper = status.upper()
+        if status_upper not in ('IN', 'OUT'):
+            logger.debug(
+                f"Skipping non-attendance status '{status}' for {name} "
+                f"from camera {camera_name}"
+            )
+            return False
+
         previous_status = self.person_status.get(name)
         previous_camera = self.person_last_camera.get(name)
         recorded = False
@@ -137,7 +146,7 @@ class EntryLogger:
             self.person_last_camera[name] = camera_name
 
         # If status is the same as before, do nothing else
-        if previous_status == status.upper():
+        if previous_status and previous_status == status_upper:
             timestamp = appear_time.strftime("%Y-%m-%d %H:%M:%S")
             logger.debug(
                 f"[{timestamp}] {name} | Status: {status} | "
@@ -148,7 +157,7 @@ class EntryLogger:
         recorded = True
 
         # Update the cached status
-        self.person_status[name] = status.upper()
+        self.person_status[name] = status_upper
 
         # Format the appearance time
         today_date = appear_time.strftime("%Y-%m-%d")

@@ -138,6 +138,8 @@ services:
       - ./configs:/app/face-recognition/configs:ro
       # Output storage
       - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
+      # Application logs (CSV metrics, attendance logs)
+      - ./volumes/storage:/app/volumes/storage
       # Logs
       - ./logs/person-tracking:/var/log/face-recognition
       # Model cache (fr-user has write access)

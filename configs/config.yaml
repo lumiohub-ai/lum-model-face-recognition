@@ -44,6 +44,12 @@ unrecognized:
   blur_threshold: 50  # Laplacian variance threshold (lower = more lenient, default was 100)
   send_best_effort: true  # If all frames fail quality, send best available anyway
 
+# System monitoring (performance CSV logs)
+system_monitoring:
+  enabled: true                    # Enable/disable system monitoring
+  flush_interval_seconds: 3600     # Flush buffer to CSV every N seconds (default: 1 hour)
+  sample_interval_seconds: 60      # Sample FPS/memory every N seconds (default: 60s)
+
 # System settings
 max_track_lifetime_seconds: 30  # Maximum time to keep inactive tracks
 debug: false  # Enable debug logging

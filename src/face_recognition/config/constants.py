@@ -108,6 +108,15 @@ IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp"]
 VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv"]
 
 # ============================================================================
+# System Monitoring Constants
+# ============================================================================
+
+DEFAULT_MONITOR_FLUSH_INTERVAL = 3600.0  # 1 hour
+DEFAULT_MONITOR_SAMPLE_INTERVAL = 60.0  # 60 seconds
+SYSTEM_MONITOR_LOG_DIR = "system"
+SYSTEM_METRICS_FILE_PREFIX = "system_metrics"
+
+# ============================================================================
 # Validation Constants
 # ============================================================================
 

@@ -18,7 +18,7 @@ from .core import FaceDetector, FaceRecognizer, ModelFactory, FrameProcessor
 from .config import constants
 
 # Logging
-from .logging import setup_structured_logging, EntryLogger, CSVLogger
+from .logging import setup_structured_logging, EntryLogger, CSVLogger, SystemMonitor
 
 # Services
 from .services import EmbeddingSyncService, EngineLifecycle
@@ -59,6 +59,7 @@ __all__ = [
     "setup_structured_logging",
     "EntryLogger",
     "CSVLogger",
+    "SystemMonitor",
 
     # Services
     "EmbeddingSyncService",
