@@ -79,17 +79,15 @@ class PersonStateManager:
     - Identity changed
     """
 
-    def __init__(self, camera_id: int = 1, api_client: Optional['APIClient'] = None, name_to_id_map: Optional[Dict[str, int]] = None):
+    def __init__(self, camera_id: int = 1, name_to_id_map: Optional[Dict[str, int]] = None):
         """
         Initialize Person State Manager.
 
         Args:
             camera_id: Camera identifier
-            api_client: API client instance
             name_to_id_map: Dictionary mapping user names to IDs
         """
         self.camera_id = camera_id
-        self.api_client = api_client
         self.name_to_id_map = name_to_id_map or {}
 
         # Person states

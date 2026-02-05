@@ -23,17 +23,15 @@ class ModelFactory:
     enabling GPU sharing and resource management.
     """
 
-    def __init__(self, config: Dict[str, Any], client_slug: str, api_client=None):
+    def __init__(self, config: Dict[str, Any], client_slug: str):
         """Initialize model factory.
 
         Args:
             config: Configuration dictionary with model settings
             client_slug: Organization slug for embedding storage
-            api_client: APIClient instance for backend communication
         """
         self.config = config
         self.client_slug = client_slug
-        self.api_client = api_client
         self._face_detector: Optional[FaceDetector] = None
         self._face_recognizer: Optional[FaceRecognition] = None
         self._person_detector: Optional[PersonDetector] = None
@@ -87,7 +85,7 @@ class ModelFactory:
             logger.info(f"Initializing ActionRecognizer (enabled: {enabled}) | Ollama API: {ollama_api_url} | Model: {model_name}")
             self._action_recognizer = ActionRecognizer(
                 ollama_api_url=ollama_api_url,
-                api_client=self.api_client,
+                client_slug=self.client_slug,
                 enabled=enabled,
                 check_interval_seconds=action_config.get('check_interval_seconds', 30),
                 max_queue_size=action_config.get('max_queue_size', 50),

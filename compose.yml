@@ -150,7 +150,7 @@ services:
     tty: true
     stdin_open: true
 
-  # Celery Worker - Processes embedding tasks (True MDA)
+  # Celery Worker
   celery-worker:
     build:
       context: .

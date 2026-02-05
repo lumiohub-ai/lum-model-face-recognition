@@ -82,7 +82,6 @@ class CameraEngine:
         person_detector: PersonDetector,
         client_slug: str,
         global_id_generator: Optional[GlobalTrackIDGenerator] = None,
-        api_client: Optional['APIClient'] = None,
         name_to_id_map: Optional[Dict[str, int]] = None,
         global_track_manager: Optional[GlobalTrackManager] = None,
         action_recognizer: Optional[Any] = None
@@ -96,7 +95,6 @@ class CameraEngine:
             person_detector: Shared person detector instance
             client_slug: Client organization slug
             global_id_generator: Optional global track ID generator for cross-camera unique IDs
-            api_client: API client for sending activities
             name_to_id_map: Dictionary mapping user names to IDs
             global_track_manager: Optional GlobalTrackManager for Phase 0 instrumentation
             action_recognizer: Optional action recognizer for activity tracking
@@ -120,8 +118,7 @@ class CameraEngine:
         self.global_id_generator = global_id_generator
         self.global_track_manager = global_track_manager
 
-        # API client and name mapping for activity tracking
-        self.api_client = api_client
+        # Name mapping for activity tracking
         self.name_to_id_map = name_to_id_map or {}
 
         # Initialize per-camera components (tracking, state)
@@ -175,7 +172,6 @@ class CameraEngine:
         # State Manager
         self.state_manager = PersonStateManager(
             camera_id=self.camera_id,
-            api_client=self.api_client,
             name_to_id_map=self.name_to_id_map
         )
 

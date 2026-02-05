@@ -221,22 +221,18 @@ class StreamConsumer:
 
     def _dispatch_camera_command(self, command_id: str, command_type: str, payload: Dict):
         """Dispatch camera commands to handler."""
-        print(f"[StreamConsumer] Dispatching camera command: {command_type}")
-        print(f"[StreamConsumer] Payload: {payload}")
+        logger.info(f"[StreamConsumer] Dispatching camera command: {command_type}")
 
         if not self._camera_handler:
-            print("[StreamConsumer] ERROR: No camera handler set!")
             logger.warning("[StreamConsumer] No camera handler set")
             return
 
         client_slug = payload.get('client_slug')
-        print(f"[StreamConsumer] Calling camera handler for client: {client_slug}")
 
         try:
             self._camera_handler(command_type, client_slug, payload)
-            print(f"[StreamConsumer] Camera handler completed successfully")
+            logger.debug("[StreamConsumer] Camera handler completed successfully")
         except Exception as e:
-            print(f"[StreamConsumer] Camera handler error: {e}")
             logger.error(f"[StreamConsumer] Camera handler error: {e}")
 
     def _is_duplicate(self, idempotency_key: str) -> bool:

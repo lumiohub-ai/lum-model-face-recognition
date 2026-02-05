@@ -60,7 +60,6 @@ class RedisClient:
             logger.info(f"[MDA] Published to {channel}: event_id={message.get('event_id', 'N/A')}, subscribers={num_subscribers}")
             return True
         except Exception as e:
-            print(f"[Redis DEBUG] FAILED to publish: {e}")
             logger.error(f"[MDA] Failed to publish to {channel}: {e}")
             return False
 

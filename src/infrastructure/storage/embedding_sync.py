@@ -174,117 +174,26 @@ class EmbeddingSyncService:
 
         return results
 
-    def sync_missing_embeddings(self, api_client=None) -> Dict:
-        """Sync embeddings for users/images that exist in backend but not in pgvector.
+    def sync_missing_embeddings(self) -> Dict:
+        """Sync embeddings for users/images that exist in database but not in pgvector.
 
         This method:
-        1. Fetches all users from backend API
+        1. Fetches all users from database (direct query)
         2. Compares with existing embeddings in pgvector
         3. Calculates embeddings only for missing users/images
-
-        Args:
-            api_client: Optional authenticated APIClient instance for fetching users
 
         Returns:
             Dict with sync results including users processed and embeddings added
         """
-        logger.info(f"🔄 Syncing missing embeddings for {self.client_slug}")
+        logger.info(f"Syncing missing embeddings for {self.client_slug}")
 
         try:
-            # Fetch all users from backend
-            all_users = []
-            seen_user_ids = set()  # Track seen user IDs to avoid duplicates
+            # Fetch all users from database directly
+            from .repository import Repository
+            repository = Repository(self.client_slug)
+            all_users = repository.get_all_users()
 
-            if api_client:
-                # Use authenticated API client
-                logger.info("Using authenticated API client to fetch users")
-                page = 1
-                while True:
-                    try:
-                        response = api_client.session.get(
-                            f"{api_client.base_url}/org/{self.client_slug}/users",
-                            params={"page": page, "limit": 100},
-                            timeout=30
-                        )
-
-                        if response.status_code != 200:
-                            logger.error(f"Backend API returned {response.status_code}: {response.text}")
-                            break
-
-                        users = response.json()
-
-                        if not users or len(users) == 0:
-                            break
-
-                        # Deduplicate users by ID
-                        new_users = []
-                        for user in users:
-                            user_id = str(user.get('id'))
-                            if user_id not in seen_user_ids:
-                                seen_user_ids.add(user_id)
-                                new_users.append(user)
-
-                        if not new_users:
-                            # All users on this page were duplicates, stop pagination
-                            logger.info(f"Page {page} contained only duplicates, stopping pagination")
-                            break
-
-                        all_users.extend(new_users)
-                        logger.info(f"Fetched page {page}: {len(new_users)} new users ({len(users)} total returned)")
-
-                        page += 1
-
-                        if page > 100:  # Safety limit
-                            logger.warning("Reached page limit (100), stopping")
-                            break
-
-                    except Exception as e:
-                        logger.error(f"Error fetching users from API: {e}")
-                        break
-            else:
-                # Fallback to direct unauthenticated request (for backward compatibility)
-                backend_url = os.getenv('SO_BACKEND_API_URL', 'http://localhost:7091')
-                logger.warning("No API client provided, attempting unauthenticated request")
-                page = 1
-
-                while True:
-                    response = requests.get(
-                        f"{backend_url}/api/org/{self.client_slug}/users",
-                        params={"page": page, "limit": 100},
-                        timeout=30
-                    )
-
-                    if response.status_code != 200:
-                        logger.error(f"Backend API returned {response.status_code}: {response.text}")
-                        break
-
-                    users = response.json()
-
-                    if not users or len(users) == 0:
-                        break
-
-                    # Deduplicate users by ID
-                    new_users = []
-                    for user in users:
-                        user_id = str(user.get('id'))
-                        if user_id not in seen_user_ids:
-                            seen_user_ids.add(user_id)
-                            new_users.append(user)
-
-                    if not new_users:
-                        logger.info(f"Page {page} contained only duplicates, stopping pagination")
-                        break
-
-                    all_users.extend(new_users)
-                    logger.info(f"Fetched page {page}: {len(new_users)} new users ({len(users)} total returned)")
-
-                    page += 1
-
-                    if page > 100:  # Safety limit
-                        logger.warning("Reached page limit (100), stopping")
-                        break
-
-            logger.info(f"Total users from backend: {len(all_users)}")
+            logger.info(f"Total users from database: {len(all_users)}")
 
             # Get existing embeddings from pgvector
             existing_names, existing_embs = self.store.get_all_embeddings()

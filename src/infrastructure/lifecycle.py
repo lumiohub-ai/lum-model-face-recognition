@@ -51,7 +51,6 @@ class EngineLifecycle:
     def sync_embeddings_on_startup(
         self,
         client_slug: str,
-        api_client: Any,
         face_recognizer: Any,
         config: Dict[str, Any]
     ) -> bool:
@@ -59,7 +58,6 @@ class EngineLifecycle:
 
         Args:
             client_slug: Organization slug
-            api_client: Authenticated API client
             face_recognizer: Face recognizer to reload
             config: Application config
 
@@ -79,7 +77,7 @@ class EngineLifecycle:
             )
 
             # Run sync
-            result = sync_service.sync_missing_embeddings(api_client=api_client)
+            result = sync_service.sync_missing_embeddings()
 
             if result.get('success'):
                 users_processed = result.get('users_processed', 0)
@@ -107,17 +105,19 @@ class EngineLifecycle:
             logger.warning("Continuing with existing embeddings...")
             return False
 
-    def build_name_to_id_map(self, api_client: Any) -> Dict[str, int]:
-        """Build mapping of user names to IDs from API.
+    def build_name_to_id_map(self, client_slug: str) -> Dict[str, int]:
+        """Build mapping of user names to IDs from database.
 
         Args:
-            api_client: Authenticated API client
+            client_slug: Organization slug
 
         Returns:
             Dictionary mapping name -> user_id
         """
         try:
-            users = api_client.get_users()
+            from infrastructure.storage import Repository
+            repository = Repository(client_slug)
+            users = repository.get_user_name_to_id()
             name_map = {}
 
             for user in users:

@@ -47,7 +47,7 @@ class ActionRecognizer:
     def __init__(
         self,
         ollama_api_url: Optional[str] = None,
-        api_client = None,  # APIClient instance for backend posting
+        client_slug: Optional[str] = None,
         enabled: bool = True,
         check_interval_seconds: int = 30,
         max_queue_size: int = 50,
@@ -59,7 +59,7 @@ class ActionRecognizer:
 
         Args:
             ollama_api_url: URL of Ollama API service (e.g., http://localhost:11435)
-            api_client: APIClient instance for posting to backend
+            client_slug: Organization slug for Celery tasks
             enabled: Enable/disable action recognition
             check_interval_seconds: Interval between action checks per person
             max_queue_size: Maximum queued inference requests
@@ -68,7 +68,7 @@ class ActionRecognizer:
             inference_timeout: Timeout for Ollama API calls in seconds (default: 30s)
         """
         self.ollama_api_url = ollama_api_url or os.getenv("OLLAMA_API_URL", "http://localhost:11435")
-        self.api_client = api_client
+        self.client_slug = client_slug or os.getenv("HB_CLIENTSLUG")
         self.enabled = enabled
         self.check_interval_seconds = check_interval_seconds
         self.max_queue_size = max_queue_size
@@ -202,7 +202,7 @@ class ActionRecognizer:
             }
 
             # Post to backend if we have user_id and camera_id
-            if self.api_client and metadata.get('user_id') and metadata.get('camera_id'):
+            if metadata.get('user_id') and metadata.get('camera_id'):
                 try:
                     self._post_activity_to_backend(
                         user_id=metadata['user_id'],
@@ -323,24 +323,45 @@ Just the phrase, no explanation."""
             proof_image: Person crop image to send as proof
             metadata: Additional metadata
         """
-        if not self.api_client:
-            logger.warning("No API client configured, skipping backend post")
+        if not self.client_slug:
+            logger.warning("No client_slug configured, skipping backend post")
             return
 
         try:
-            # Post to backend using existing send_activities method
-            self.api_client.send_activities(
+            from datetime import datetime, timezone
+            from workers.detection_tasks import task_record_activity
+            from infrastructure.storage import upload_proof_image
+
+            # Upload proof image to GCS if provided
+            proof_image_url = None
+            if proof_image is not None:
+                try:
+                    proof_image_url = upload_proof_image(
+                        image=proof_image,
+                        prefix="activity_proofs",
+                        client_slug=self.client_slug
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to upload activity proof image: {e}")
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+            # Queue Celery task directly
+            task_record_activity.delay(
+                client_slug=self.client_slug,
+                user_id=int(user_id) if user_id else 0,
+                user_name=metadata.get('user_name', 'Unknown'),
                 activity_type=activity_type,
                 camera_id=camera_id,
-                user_id=user_id,
-                confidence_score=None,  # confidence_score (not available yet)
-                proof_image=proof_image   # Send person crop as proof image
+                confidence=None,
+                proof_image_url=proof_image_url,
+                detected_at=timestamp
             )
 
-            logger.info(f"Activity posted to backend: user_id={user_id}, type={activity_type}")
+            logger.info(f"Activity queued to Celery: user_id={user_id}, type={activity_type}")
 
         except Exception as e:
-            logger.error(f"Failed to post activity to backend: {e}")
+            logger.error(f"Failed to queue activity: {e}")
             raise
 
     def recognize_async(

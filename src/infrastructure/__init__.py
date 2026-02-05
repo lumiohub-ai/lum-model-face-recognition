@@ -2,26 +2,22 @@
 Infrastructure Layer
 
 External services and I/O operations.
-- API: Backend communication
-- Storage: Database and cloud storage
+- Storage: Database (Repository, PgVector) and cloud storage (GCS)
 - Video: Camera streams and annotation
 """
 
-from .api import APIClient, AuthenticationService
-from .storage import PgVectorStore, GCSClient, EmbeddingSyncService
+from .storage import PgVectorStore, GCSClient, EmbeddingSyncService, Repository
 from .video import StreamHandler, StreamManager, FrameAnnotator
 from .lifecycle import EngineLifecycle
 from .entry_logger import EntryLogger
 from .csv_logger import CSVLogger
 
 __all__ = [
-    # API
-    "APIClient",
-    "AuthenticationService",
     # Storage
     "PgVectorStore",
     "GCSClient",
     "EmbeddingSyncService",
+    "Repository",
     # Video
     "StreamHandler",
     "StreamManager",

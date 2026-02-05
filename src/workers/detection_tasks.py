@@ -221,20 +221,16 @@ def task_save_unrecognized_face(
             record_id = row[0] if row else 0
 
         logger.info(f"[Celery] Unrecognized face saved: id={record_id} camera={camera_id}")
-        print(f"[Celery DEBUG] Unrecognized face saved to DB: id={record_id}")
 
         # Publish event to Backend for real-time UI update
-        print(f"[Celery DEBUG] Getting event publisher for client_slug={client_slug}")
         publisher = get_event_publisher(client_slug)
-        print(f"[Celery DEBUG] Publishing UnrecognizedFaceSaved event...")
-        result = publisher.publish_unrecognized_face_saved(
+        publisher.publish_unrecognized_face_saved(
             record_id=record_id,
             camera_id=camera_id,
             camera_name=camera_name,
             image_url=image_url,
             detected_at=timestamp.isoformat() + 'Z'
         )
-        print(f"[Celery DEBUG] Publish result: {result}")
 
         return {
             'status': 'success',
@@ -390,13 +386,18 @@ def task_update_user_location(
         else:
             timestamp = datetime.utcnow()
 
-        # Write to Backend's user_locations table
+        # Write to Backend's user_locations table (upsert - one row per user)
         # Schema: id, user_id, camera_id, detected_at, status, updated_at
         with db_config.get_connection() as conn:
             result = conn.execute(text(f"""
                 INSERT INTO {schema_name}.user_locations
                 (user_id, camera_id, detected_at, status, updated_at)
                 VALUES (:user_id, :camera_id, :detected_at, :status, :updated_at)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    camera_id = EXCLUDED.camera_id,
+                    detected_at = EXCLUDED.detected_at,
+                    status = EXCLUDED.status,
+                    updated_at = EXCLUDED.updated_at
                 RETURNING id
             """), {
                 'user_id': user_id,

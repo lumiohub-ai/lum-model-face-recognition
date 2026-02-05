@@ -237,64 +237,53 @@ def convert_to_smart_office_format(cameras: List[Dict[str, Any]]) -> List[Dict[s
 
 
 # =============================================================================
-# API Camera Loading
+# Database Camera Loading (replaces API calls)
 # =============================================================================
 
 
 def parse_roi(roi_points: Optional[List]) -> Optional[Tuple[int, int, int, int]]:
-    """Parse ROI points from API format.
-
-    Args:
-        roi_points: List of [[x1, y1], [x2, y2]] coordinates from API
-
-    Returns:
-        Tuple of (x1, y1, x2, y2) or None if invalid
-    """
+    """Parse ROI points from database format."""
     if roi_points and len(roi_points) >= 2:
         return tuple(roi_points[0] + roi_points[1])
     return None
 
 
 def parse_line_points(line_points: Optional[List]) -> Optional[List[Tuple[int, int]]]:
-    """Parse virtual line points from API format.
-
-    Args:
-        line_points: List of [[x1, y1], [x2, y2]] coordinates from API
-
-    Returns:
-        List of (x, y) tuples or None if invalid
-    """
+    """Parse virtual line points from database format."""
     if line_points and len(line_points) >= 2:
         return [tuple(line_points[0]), tuple(line_points[1])]
     return None
 
 
-def load_cameras_from_api(
-    api_client: Any,
+def load_cameras_from_db(
+    client_slug: str,
     applications: List[str]
 ) -> List[Dict[str, Any]]:
-    """Load camera configurations from API.
+    """Load camera configurations from database.
 
     Args:
-        api_client: Authenticated APIClient instance
+        client_slug: Organization slug
         applications: List of application types to fetch (e.g., ['attendance'])
 
     Returns:
         List of camera configuration dictionaries in SmartOfficeEngine format
     """
+    from infrastructure.storage import Repository
+
+    repository = Repository(client_slug)
     all_configs = []
 
     for application in applications:
-        cameras = api_client.get_cameras(application=application)
+        cameras = repository.get_cameras(application=application)
 
         for cam in cameras:
             config = {
                 'camera_id': cam.get('id'),
                 'camera_name': cam.get('name', 'Unknown'),
-                'cam_type': cam.get('camera_type', 'IN').upper(),
+                'cam_type': cam.get('camera_type', 'in').upper(),
                 'stream_url': cam.get('stream_url', ''),
                 'application': cam.get('application', application),
-                'match_threshold': float(cam.get('matching_threshold', 0.3)),
+                'match_threshold': float(cam.get('matching_threshold') or 0.3),
                 'roi': parse_roi(cam.get('roi_points')),
                 'line_points': parse_line_points(cam.get('virtual_line_points'))
             }
@@ -310,30 +299,25 @@ def load_cameras_from_api(
 
 
 def load_cameras(
-    api_client: Any,
-    use_api: bool,
+    client_slug: str,
+    use_db: bool,
     applications: List[str],
     config_path: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """Load camera configurations from API or file.
-
-    This is the main entry point for loading cameras.
+    """Load camera configurations from database or file.
 
     Args:
-        api_client: Authenticated APIClient instance
-        use_api: Whether to load from API (True) or file/env (False)
+        client_slug: Organization slug
+        use_db: Whether to load from database (True) or file/env (False)
         applications: List of application types to filter
         config_path: Optional path to YAML config file
 
     Returns:
         List of camera configuration dictionaries
-
-    Raises:
-        ValueError: If no cameras configured
     """
-    if use_api:
-        logger.info("Loading camera configs from API (use_api_for_cameras=true)")
-        configs = load_cameras_from_api(api_client, applications)
+    if use_db:
+        logger.info("Loading camera configs from database")
+        configs = load_cameras_from_db(client_slug, applications)
     else:
         logger.info("Loading camera configs from config file")
         cameras = get_camera_configs(config_path)
@@ -344,7 +328,6 @@ def load_cameras(
             filtered_configs = []
             for config in configs:
                 app = config.get('application')
-                # Handle both string and list application values
                 if isinstance(app, list):
                     if any(a in applications for a in app):
                         filtered_configs.append(config)
@@ -353,7 +336,7 @@ def load_cameras(
             configs = filtered_configs
 
     if not configs:
-        raise ValueError("No cameras configured. Check config file or API.")
+        raise ValueError("No cameras configured. Check config file or database.")
 
     logger.info(f"Loaded {len(configs)} camera configuration(s)")
     return configs

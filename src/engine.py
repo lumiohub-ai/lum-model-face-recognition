@@ -19,9 +19,9 @@ from typing import List, Optional
 from loguru import logger
 
 # Infrastructure
-from infrastructure.api import APIClient
 from infrastructure.video import StreamManager, FrameAnnotator
 from infrastructure import EngineLifecycle, EntryLogger
+from infrastructure.storage import Repository
 
 # Domain
 from domain.face_detection import ModelFactory, FrameProcessor
@@ -65,46 +65,42 @@ class SmartOfficeEngine:
         self.api_host = api_host
         self.applications = applications or ['attendance']
         self.config = kwargs
+        self._email = email
+        self._password = password
 
         # Lifecycle manager
         self.lifecycle = EngineLifecycle()
 
-        # Initialize API client
-        self.api_client = APIClient(
-            api_host=api_host,
-            email=email,
-            password=password,
-            client_slug=client_slug
-        )
+        # Initialize repository for database access
+        self.repository = Repository(client_slug)
 
         # Load camera configurations
-        use_api = self.config.get(
+        use_db = self.config.get(
             'use_api_for_cameras',
             os.getenv('USE_API_FOR_CAMERAS', 'true').lower() == 'true'
         )
         self.camera_configs = load_cameras(
-            api_client=self.api_client,
-            use_api=use_api,
+            client_slug=client_slug,
+            use_db=use_db,
             applications=self.applications
         )
 
         if not self.camera_configs:
-            raise ValueError("No cameras configured. Check config file or API.")
+            raise ValueError("No cameras configured. Check config file or database.")
 
         # Initialize models via factory
-        self.models = ModelFactory(self.config, client_slug, self.api_client)
+        self.models = ModelFactory(self.config, client_slug)
         self.models.initialize_all()
 
         # Sync embeddings on startup
         self.lifecycle.sync_embeddings_on_startup(
             client_slug=client_slug,
-            api_client=self.api_client,
             face_recognizer=self.models.face_recognizer,
             config=self.config
         )
 
         # Build name-to-ID mapping for activity tracking
-        self.name_to_id_map = self.lifecycle.build_name_to_id_map(self.api_client)
+        self.name_to_id_map = self.lifecycle.build_name_to_id_map(client_slug)
 
         # Initialize stream manager
         self.stream_manager = StreamManager(self.camera_configs)
@@ -120,7 +116,7 @@ class SmartOfficeEngine:
         self.camera_engines = self._init_camera_engines()
 
         # Initialize entry logger
-        self.entry_logger = self._init_entry_logger(email, password)
+        self.entry_logger = self._init_entry_logger()
 
         # Initialize frame processor
         self.frame_processor = FrameProcessor(
@@ -151,7 +147,6 @@ class SmartOfficeEngine:
                 person_detector=self.models.person_detector,
                 client_slug=self.client_slug,
                 global_id_generator=self.models.global_id_generator,
-                api_client=self.api_client,
                 name_to_id_map=self.name_to_id_map,
                 global_track_manager=self.models.global_track_manager,
                 action_recognizer=self.models.action_recognizer
@@ -160,13 +155,10 @@ class SmartOfficeEngine:
 
         return engines
 
-    def _init_entry_logger(self, email: str, password: str) -> EntryLogger:
+    def _init_entry_logger(self) -> EntryLogger:
         """Initialize entry logger."""
         args = type('Args', (), {})()
         args.client_slug = self.client_slug
-        args.api_host = self.api_host
-        args.email = email
-        args.password = password
         args.logger = logger
         args.db_names = self.models.face_recognizer.db_names
         args.production = True
@@ -227,7 +219,7 @@ class SmartOfficeEngine:
 
     def reload_camera_configs(self) -> bool:
         """
-        Reload camera configurations from API.
+        Reload camera configurations from database.
 
         This is called when camera config changes are received via MDA.
         Returns True if reload was successful, False otherwise.
@@ -235,15 +227,14 @@ class SmartOfficeEngine:
         try:
             logger.info("Reloading camera configurations...")
 
-            # Reload camera configs from API
-            use_api = self.config.get(
+            use_db = self.config.get(
                 'use_api_for_cameras',
                 os.getenv('USE_API_FOR_CAMERAS', 'true').lower() == 'true'
             )
 
             new_configs = load_cameras(
-                api_client=self.api_client,
-                use_api=use_api,
+                client_slug=self.client_slug,
+                use_db=use_db,
                 applications=self.applications
             )
 
@@ -295,6 +286,9 @@ class SmartOfficeEngine:
 
             # Update entry logger's db_names
             self.entry_logger.current_users = self.models.face_recognizer.db_names
+
+            # Reload person status from API (fixes cache/database mismatch)
+            self.entry_logger.reload_status()
 
             logger.info(f"Face embeddings reloaded: {len(self.models.face_recognizer.db_names)} users")
             return True
