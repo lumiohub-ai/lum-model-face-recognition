@@ -8,11 +8,8 @@ import sys
 from typing import Optional
 from loguru import logger
 
-from .constants import LOG_LEVEL_INFO
-
-
 def setup_structured_logging(
-    log_level: str = LOG_LEVEL_INFO,
+    log_level: str = "INFO",
     log_file: Optional[str] = None,
     enable_json: bool = False,
     enable_console: bool = True,

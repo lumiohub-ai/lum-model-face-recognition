@@ -21,19 +21,10 @@ from workers.embedding_tasks import (
     process_update_user,
     process_delete_user,
 )
+from .redis_config import REDIS_URL
+from .channels import COMMAND_STREAMS
 
 logger = logging.getLogger(__name__)
-
-# Redis connection settings
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_URL = os.getenv('REDIS_URL', f'redis://{REDIS_HOST}:{REDIS_PORT}')
-
-# Stream names
-STREAMS = {
-    'EMBEDDING': 'commands:embedding',
-    'CAMERA': 'commands:camera',
-}
 
 # Consumer group name
 CONSUMER_GROUP = 'ai-service-group'
@@ -79,7 +70,7 @@ class StreamConsumer:
 
     def _ensure_consumer_groups(self):
         """Create consumer groups if they don't exist."""
-        for name, stream in STREAMS.items():
+        for name, stream in COMMAND_STREAMS.items():
             try:
                 self.redis.xgroup_create(stream, CONSUMER_GROUP, id='0', mkstream=True)
                 logger.info(f"[StreamConsumer] Created consumer group for {stream}")
@@ -103,7 +94,7 @@ class StreamConsumer:
 
     def _consume_loop(self):
         """Main consumption loop."""
-        streams = {stream: '>' for stream in STREAMS.values()}
+        streams = {stream: '>' for stream in COMMAND_STREAMS.values()}
 
         while self._running:
             try:
@@ -164,9 +155,9 @@ class StreamConsumer:
 
         try:
             # Dispatch based on stream
-            if stream == STREAMS['EMBEDDING']:
+            if stream == COMMAND_STREAMS['EMBEDDING']:
                 self._dispatch_embedding_command(command_id, command_type, payload)
-            elif stream == STREAMS['CAMERA']:
+            elif stream == COMMAND_STREAMS['CAMERA']:
                 self._dispatch_camera_command(command_id, command_type, payload)
             else:
                 logger.warning(f"[StreamConsumer] Unknown stream: {stream}")
@@ -275,30 +266,3 @@ class StreamConsumer:
     def is_running(self) -> bool:
         """Check if consumer is running."""
         return self._running and self._thread is not None and self._thread.is_alive()
-
-
-# Singleton instance
-_stream_consumer: Optional[StreamConsumer] = None
-
-
-def get_stream_consumer() -> StreamConsumer:
-    """Get or create the singleton stream consumer."""
-    global _stream_consumer
-    if _stream_consumer is None:
-        _stream_consumer = StreamConsumer()
-    return _stream_consumer
-
-
-def start_stream_consumer():
-    """Start the stream consumer."""
-    consumer = get_stream_consumer()
-    consumer.start()
-    return consumer
-
-
-def stop_stream_consumer():
-    """Stop the stream consumer."""
-    global _stream_consumer
-    if _stream_consumer:
-        _stream_consumer.stop()
-        _stream_consumer = None

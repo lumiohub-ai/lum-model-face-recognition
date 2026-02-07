@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from domain.face_detection import FaceDetector
 from .pgvector import PgVectorStore
 from .url_utils import normalize_image_url
-from .gcs import GCSClient
+from .gcs import ImageFetcher
 
 
 class EmbeddingSyncService:
@@ -41,7 +41,7 @@ class EmbeddingSyncService:
         self.detector = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
 
         self.store = PgVectorStore(client_slug)
-        self.image_fetcher = GCSClient()
+        self.image_fetcher = ImageFetcher()
 
         logger.info(f"EmbeddingSyncService initialized for: {client_slug}")
 

@@ -45,15 +45,19 @@ nano .env
 **Required settings in `.env`:**
 
 ```bash
-# API credentials
-SA_EMAIL=your_admin_email
-SA_PASSWORD=your_admin_password
+# Client (tenant identifier)
 HB_CLIENTSLUG=your_organization_slug
-API_HOST=http://your-backend-api:7091
 
-# Camera streams (if not using API)
-HB_IN=rtsp://camera_in_stream
-HB_OUT=rtsp://camera_out_stream
+# PostgreSQL (pgvector for embeddings)
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_secure_password
+POSTGRES_DB=smart_office
+
+# Redis (MDA)
+REDIS_HOST=localhost
+REDIS_PORT=6379
 ```
 
 ### 3. Build and Run

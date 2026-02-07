@@ -44,29 +44,20 @@ class SmartOfficeEngine:
 
     def __init__(
         self,
-        email: str,
-        password: str,
         client_slug: str,
-        api_host: str,
         applications: Optional[List[str]] = None,
         **kwargs
     ):
         """Initialize SmartOfficeEngine.
 
         Args:
-            email: API authentication email
-            password: API authentication password
-            client_slug: Organization slug
-            api_host: API base URL
+            client_slug: Organization slug (tenant identifier)
             applications: List of application types (default: ['attendance'])
-            **kwargs: Additional configuration
+            **kwargs: Additional configuration from config.yaml
         """
         self.client_slug = client_slug
-        self.api_host = api_host
         self.applications = applications or ['attendance']
         self.config = kwargs
-        self._email = email
-        self._password = password
 
         # Lifecycle manager
         self.lifecycle = EngineLifecycle()

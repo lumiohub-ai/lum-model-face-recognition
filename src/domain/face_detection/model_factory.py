@@ -82,6 +82,7 @@ class ModelFactory:
             ollama_api_url = action_config.get('ollama_api_url') or os.getenv('OLLAMA_API_URL')
             model_name = action_config.get('model_name') or os.getenv('OLLAMA_MODEL', 'gemma3:4b')
 
+            actions = action_config.get('actions')
             logger.info(f"Initializing ActionRecognizer (enabled: {enabled}) | Ollama API: {ollama_api_url} | Model: {model_name}")
             self._action_recognizer = ActionRecognizer(
                 ollama_api_url=ollama_api_url,
@@ -91,7 +92,8 @@ class ModelFactory:
                 max_queue_size=action_config.get('max_queue_size', 50),
                 num_workers=action_config.get('async_workers', 1),
                 model_name=model_name,
-                inference_timeout=action_config.get('inference_timeout', 30)
+                inference_timeout=action_config.get('inference_timeout', 30),
+                actions=actions
             )
 
             # Start worker threads if enabled

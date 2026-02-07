@@ -6,26 +6,12 @@ Message-Driven Architecture implementation:
 - Events: AI -> Backend (Redis Pub/Sub) - handled by MDAPublisher
 """
 
-from .redis_client import RedisClient, get_redis_client
+from .redis_client import RedisClient
 from .publisher import MDAPublisher
-from .stream_consumer import (
-    StreamConsumer,
-    get_stream_consumer,
-    start_stream_consumer,
-    stop_stream_consumer,
-)
+from .stream_consumer import StreamConsumer
 
 __all__ = [
-    # Redis client
     "RedisClient",
-    "get_redis_client",
-
-    # Event publisher (AI -> Backend)
     "MDAPublisher",
-
-    # Stream consumer (Backend -> AI commands)
     "StreamConsumer",
-    "get_stream_consumer",
-    "start_stream_consumer",
-    "stop_stream_consumer",
 ]

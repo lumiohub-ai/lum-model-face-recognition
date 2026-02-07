@@ -1,6 +1,5 @@
 """Entry logging for tracking and visualizing person entries and exits."""
 
-import os
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -21,7 +20,6 @@ class EntryLogger:
     """
 
     def __init__(self, args, max_entries: int = 3):
-        self.FR_SLUG = os.getenv("FR_SLUG")
         self.args = args
         self.client_slug = args.client_slug
         self.recent_entries = deque(maxlen=max_entries)
@@ -35,7 +33,7 @@ class EntryLogger:
         self.repository = Repository(self.client_slug)
 
         # Initialize CSV logger
-        log_file_path = f'/app/volumes/storage/{self.FR_SLUG}/logs/{self.client_slug}/status_info.csv'
+        log_file_path = f'/app/volumes/storage/person-tracking/logs/{self.client_slug}/status_info.csv'
         rotation_period = getattr(self.args, 'csv_log_rotation', '2 weeks')
         self.csv_logger = CSVLogger(
             log_file_path=log_file_path,
@@ -158,12 +156,8 @@ class EntryLogger:
         proof_image_url = None
         if proof_image is not None:
             try:
-                from infrastructure.storage.gcs import upload_proof_image
-                proof_image_url = upload_proof_image(
-                    image=proof_image,
-                    prefix="attendance_proofs",
-                    client_slug=self.client_slug
-                )
+                from infrastructure.storage import ImageFetcher
+                proof_image_url = ImageFetcher().upload_image(proof_image, "attendance_proofs", self.client_slug)
             except Exception as e:
                 logger.warning(f"Failed to upload proof image: {e}")
 
@@ -223,12 +217,8 @@ class EntryLogger:
         # Upload face image to GCS
         image_url = None
         try:
-            from infrastructure.storage.gcs import upload_proof_image
-            image_url = upload_proof_image(
-                image=face,
-                prefix="unrecognized_faces",
-                client_slug=self.client_slug
-            )
+            from infrastructure.storage import ImageFetcher
+            image_url = ImageFetcher().upload_image(face, "unrecognized_faces", self.client_slug)
             if image_url:
                 logger.info(f"Uploaded unrecognized face to GCS: {image_url}")
         except Exception as e:

@@ -170,7 +170,7 @@ def init_smart_office_app(
 
     Args:
         required_env_vars: List of required environment variable names.
-                          Defaults to SA_EMAIL, SA_PASSWORD, HB_CLIENTSLUG, API_HOST.
+                          Defaults to HB_CLIENTSLUG.
         config_path: Path to YAML config file.
         env_file: Path to .env file for local development.
         log_level: Override log level.
@@ -182,7 +182,7 @@ def init_smart_office_app(
         SystemExit: If required environment variables are missing.
     """
     if required_env_vars is None:
-        required_env_vars = ["SA_EMAIL", "SA_PASSWORD", "HB_CLIENTSLUG", "API_HOST"]
+        required_env_vars = ["HB_CLIENTSLUG"]
 
     # Step 1: Load .env file if present
     load_dotenv_if_exists(env_file)
@@ -203,7 +203,7 @@ def init_smart_office_app(
     return config
 
 
-def log_startup_info(client_slug: str, api_host: str, **extra_info) -> None:
+def log_startup_info(client_slug: str, **extra_info) -> None:
     """Log standard startup information.
 
     Args:
@@ -215,7 +215,6 @@ def log_startup_info(client_slug: str, api_host: str, **extra_info) -> None:
     logger.info("SmartOfficeEngine Starting")
     logger.info("=" * 60)
     logger.info(f"Client: {client_slug}")
-    logger.info(f"API Host: {api_host}")
 
     for key, value in extra_info.items():
         logger.info(f"{key}: {value}")

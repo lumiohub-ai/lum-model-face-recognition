@@ -33,17 +33,16 @@ def get_event_publisher(client_slug: str):
 def notify_embedding_reload(client_slug: str, user_id: int, action: str):
     """Notify camera engine to reload embeddings via Redis Pub/Sub."""
     try:
-        from messaging.redis_client import get_redis_client
+        from messaging.redis_client import RedisClient
         from messaging.channels import INTERNAL_CHANNELS
         import json
 
-        redis_client = get_redis_client()
         message = {
             'client_slug': client_slug,
             'user_id': user_id,
             'action': action,
         }
-        redis_client.client.publish(
+        RedisClient().client.publish(
             INTERNAL_CHANNELS['EMBEDDING_RELOAD'],
             json.dumps(message)
         )
@@ -66,9 +65,8 @@ def process_add_user(self, command_id: str, client_slug: str, user_data: Dict[st
         Result dict with status and embeddings_created count
     """
     user_id = user_data.get('id')
-    full_name = user_data.get('full_name', 'unknown')
 
-    logger.info(f"[Celery] Processing CreateEmbedding: {full_name} (id={user_id})")
+    logger.info(f"[Celery] Processing CreateEmbedding: id={user_id}")
 
     try:
         # Get embedding sync service
@@ -78,7 +76,7 @@ def process_add_user(self, command_id: str, client_slug: str, user_data: Dict[st
         result = service.handle_user_created(user_data)
         embeddings_created = result.get('embeddings_added', 0)
 
-        logger.info(f"[Celery] CreateEmbedding completed: {full_name} - {embeddings_created} embeddings")
+        logger.info(f"[Celery] CreateEmbedding completed: {embeddings_created} embeddings")
 
         # Publish EmbeddingCreated event to Backend
         publisher = get_event_publisher(client_slug)
@@ -99,7 +97,7 @@ def process_add_user(self, command_id: str, client_slug: str, user_data: Dict[st
         }
 
     except Exception as e:
-        logger.error(f"[Celery] CreateEmbedding failed for {full_name}: {e}")
+        logger.error(f"[Celery] CreateEmbedding failed for {user_id}: {e}")
 
         # Publish EmbeddingFailed event to Backend
         try:
@@ -130,9 +128,8 @@ def process_update_user(self, command_id: str, client_slug: str, user_data: Dict
         Result dict with status and embeddings_created count
     """
     user_id = user_data.get('id')
-    full_name = user_data.get('full_name', 'unknown')
 
-    logger.info(f"[Celery] Processing UpdateEmbedding: {full_name} (id={user_id})")
+    logger.info(f"[Celery] Processing UpdateEmbedding: id={user_id}")
 
     try:
         # Get embedding sync service
@@ -146,7 +143,7 @@ def process_update_user(self, command_id: str, client_slug: str, user_data: Dict
         result = service.handle_user_created(user_data)
         embeddings_created = result.get('embeddings_added', 0)
 
-        logger.info(f"[Celery] UpdateEmbedding completed: {full_name} - {embeddings_created} embeddings")
+        logger.info(f"[Celery] UpdateEmbedding completed: {embeddings_created} embeddings")
 
         # Publish EmbeddingCreated event to Backend
         publisher = get_event_publisher(client_slug)
@@ -167,7 +164,7 @@ def process_update_user(self, command_id: str, client_slug: str, user_data: Dict
         }
 
     except Exception as e:
-        logger.error(f"[Celery] UpdateEmbedding failed for {full_name}: {e}")
+        logger.error(f"[Celery] UpdateEmbedding failed for {user_id}: {e}")
 
         # Publish EmbeddingFailed event to Backend
         try:
@@ -197,9 +194,8 @@ def process_delete_user(self, command_id: str, client_slug: str, user_data: Dict
         Result dict with status
     """
     user_id = user_data.get('id')
-    full_name = user_data.get('full_name', 'unknown')
 
-    logger.info(f"[Celery] Processing DeleteEmbedding: {full_name} (id={user_id})")
+    logger.info(f"[Celery] Processing DeleteEmbedding: id={user_id}")
 
     try:
         # Get embedding sync service
@@ -210,7 +206,7 @@ def process_delete_user(self, command_id: str, client_slug: str, user_data: Dict
         if user_id:
             deleted_count = service.store.delete_all_for_user(str(user_id))
 
-        logger.info(f"[Celery] DeleteEmbedding completed: {full_name} - {deleted_count} embeddings deleted")
+        logger.info(f"[Celery] DeleteEmbedding completed: {deleted_count} embeddings deleted")
 
         # Publish EmbeddingCreated event (with 0 embeddings) to Backend
         publisher = get_event_publisher(client_slug)
@@ -231,7 +227,7 @@ def process_delete_user(self, command_id: str, client_slug: str, user_data: Dict
         }
 
     except Exception as e:
-        logger.error(f"[Celery] DeleteEmbedding failed for {full_name}: {e}")
+        logger.error(f"[Celery] DeleteEmbedding failed for {user_id}: {e}")
 
         # Publish EmbeddingFailed event to Backend
         try:

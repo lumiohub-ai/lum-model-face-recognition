@@ -9,7 +9,7 @@ Database and cloud storage operations.
 
 from .pgvector import PgVectorStore
 from .db_config import DatabaseConfig
-from .gcs import GCSClient, upload_proof_image, get_gcs_client
+from .gcs import ImageFetcher
 from .embedding_sync import EmbeddingSyncService
 from .url_utils import normalize_image_url
 from .validators import validate_client_slug, validate_schema_name
@@ -19,9 +19,7 @@ __all__ = [
     "PgVectorStore",
     "DatabaseConfig",
     "Repository",
-    "GCSClient",
-    "upload_proof_image",
-    "get_gcs_client",
+    "ImageFetcher",
     "EmbeddingSyncService",
     "normalize_image_url",
     "validate_client_slug",

@@ -263,39 +263,3 @@ class ImageFetcher:
             return None
 
 
-# Alias for backward compatibility
-GCSClient = ImageFetcher
-
-# Singleton instance for convenience functions
-_gcs_client: Optional[ImageFetcher] = None
-
-
-def get_gcs_client() -> ImageFetcher:
-    """Get or create a singleton GCS client instance.
-
-    Returns:
-        ImageFetcher: Singleton GCS client instance
-    """
-    global _gcs_client
-    if _gcs_client is None:
-        _gcs_client = ImageFetcher()
-    return _gcs_client
-
-
-def upload_proof_image(
-    image: np.ndarray,
-    prefix: str = "attendance_proofs",
-    client_slug: Optional[str] = None
-) -> Optional[str]:
-    """Convenience function to upload a proof image to GCS.
-
-    Args:
-        image: Image in BGR format (numpy array)
-        prefix: GCS path prefix (e.g., "attendance_proofs", "unrecognized_faces")
-        client_slug: Organization slug for path organization
-
-    Returns:
-        str: Public URL of uploaded image, or None if failed
-    """
-    client = get_gcs_client()
-    return client.upload_image(image, prefix, client_slug)

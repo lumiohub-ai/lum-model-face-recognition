@@ -4,29 +4,19 @@ Redis Client for MDA
 Provides Redis Pub/Sub functionality for message-driven communication.
 """
 
-import os
 import json
 import threading
 import logging
 from typing import Callable, Dict, Any, Optional
 import redis
 
+from .redis_config import REDIS_HOST, REDIS_PORT, REDIS_DB
+
 logger = logging.getLogger(__name__)
-
-# Redis connection settings
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_DB = int(os.getenv('REDIS_DB', 0))
-
-# Singleton instance
-_redis_client: Optional['RedisClient'] = None
 
 
 class RedisClient:
-    """
-    Redis Pub/Sub client for MDA communication.
-    Thread-safe singleton implementation.
-    """
+    """Redis Pub/Sub client for MDA communication."""
 
     def __init__(self):
         self.client = redis.Redis(
@@ -134,14 +124,3 @@ class RedisClient:
             return False
 
 
-def get_redis_client() -> RedisClient:
-    """
-    Get or create the singleton Redis client.
-
-    Returns:
-        RedisClient instance
-    """
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = RedisClient()
-    return _redis_client

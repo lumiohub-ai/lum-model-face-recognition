@@ -31,17 +31,17 @@ class ActionRecognizer:
     - Async queue-based processing
     - Automatic backend activity posting
     - Rate limiting per person
+    - Configurable actions via config.yaml
     """
 
-    # VLM action to backend activity_type mapping
-    ACTION_MAPPING = {
-        "sleeping": "sleeping",
-        "using phone": "phone_usage",
-        "working with computer": "working",
-        "talking with someone": "talking",
-        "not_focusing": "not_focusing",
-        "idle": "unknown",
-        None: "unknown"
+    # Default action mapping (used if no config provided)
+    DEFAULT_ACTIONS = {
+        "sleeping": {"backend_type": "sleeping", "description": "head resting on desk, leaning back with eyes closed, or slumped over"},
+        "using phone": {"backend_type": "phone_usage", "description": "holding a phone, looking down at a device in hand"},
+        "working with computer": {"backend_type": "working", "description": "sitting at a desk facing a screen or typing"},
+        "talking with someone": {"backend_type": "talking", "description": "facing another person, gesturing, or in conversation"},
+        "not_focusing": {"backend_type": "not_focusing", "description": "distracted, looking away from work, wandering attention"},
+        "idle": {"backend_type": "unknown", "description": "standing still, sitting without doing anything specific, looking around"},
     }
 
     def __init__(
@@ -53,12 +53,13 @@ class ActionRecognizer:
         max_queue_size: int = 50,
         num_workers: int = 1,
         model_name: str = "gemma3:4b",
-        inference_timeout: int = 30
+        inference_timeout: int = 30,
+        actions: Optional[Dict] = None
     ):
         """Initialize action recognizer.
 
         Args:
-            ollama_api_url: URL of Ollama API service (e.g., http://localhost:11435)
+            ollama_api_url: URL of Ollama API service (e.g., http://localhost:11434)
             client_slug: Organization slug for Celery tasks
             enabled: Enable/disable action recognition
             check_interval_seconds: Interval between action checks per person
@@ -66,8 +67,9 @@ class ActionRecognizer:
             num_workers: Number of background worker threads
             model_name: Ollama model to use for inference
             inference_timeout: Timeout for Ollama API calls in seconds (default: 30s)
+            actions: Dictionary of actions from config (action_name -> {backend_type, description})
         """
-        self.ollama_api_url = ollama_api_url or os.getenv("OLLAMA_API_URL", "http://localhost:11435")
+        self.ollama_api_url = ollama_api_url or os.getenv("OLLAMA_API_URL", "http://localhost:11434")
         self.client_slug = client_slug or os.getenv("HB_CLIENTSLUG")
         self.enabled = enabled
         self.check_interval_seconds = check_interval_seconds
@@ -75,6 +77,11 @@ class ActionRecognizer:
         self.num_workers = num_workers
         self.model_name = model_name
         self.inference_timeout = inference_timeout
+
+        # Build action mapping from config or use defaults
+        self.actions_config = actions or self.DEFAULT_ACTIONS
+        self.action_mapping = self._build_action_mapping()
+        self.prompt_template = self._build_prompt_template()
 
         # Configure Ollama client with timeout
         if self.ollama_api_url:
@@ -98,8 +105,41 @@ class ActionRecognizer:
             f"ActionRecognizer initialized | enabled={enabled} | "
             f"ollama_api={self.ollama_api_url} | model={model_name} | "
             f"interval={check_interval_seconds}s | workers={num_workers} | "
-            f"timeout={inference_timeout}s"
+            f"timeout={inference_timeout}s | actions={len(self.actions_config)}"
         )
+
+    def _build_action_mapping(self) -> Dict[str, str]:
+        """Build VLM action to backend activity_type mapping from config.
+
+        Returns:
+            Dictionary mapping action names to backend activity types
+        """
+        mapping = {None: "unknown"}
+        for action_name, config in self.actions_config.items():
+            backend_type = config.get("backend_type", action_name)
+            mapping[action_name] = backend_type
+        return mapping
+
+    def _build_prompt_template(self) -> str:
+        """Build VLM prompt from configured actions.
+
+        Returns:
+            Prompt string with numbered action list and descriptions
+        """
+        lines = ["Classify what the person in this image is doing. Pick the best match:\n"]
+
+        # Build numbered action list with descriptions
+        for i, (action_name, config) in enumerate(self.actions_config.items(), 1):
+            description = config.get("description", "")
+            lines.append(f"{i}. {action_name} - {description}")
+
+        # Add response instructions
+        lines.append("\nRespond with ONLY one of these exact phrases:")
+        for action_name in self.actions_config.keys():
+            lines.append(f'- "{action_name}"')
+        lines.append("\nJust the phrase, no explanation.")
+
+        return "\n".join(lines)
 
     def start_workers(self) -> None:
         """Start background worker threads for async inference."""
@@ -190,7 +230,7 @@ class ActionRecognizer:
 
             # Map VLM action to backend activity_type
             vlm_action = result.get('action') if result else None
-            activity_type = self.ACTION_MAPPING.get(vlm_action, "unknown")
+            activity_type = self.action_mapping.get(vlm_action, "unknown")
 
             # Prepare result
             result_data = {
@@ -247,29 +287,11 @@ class ActionRecognizer:
             _, buffer = cv2.imencode('.jpg', image)
             image_base64 = base64.b64encode(buffer).decode('utf-8')
 
-            # Create prompt for action recognition
-            prompt = """Classify what the person in this image is doing. Pick the best match:
-
-1. sleeping - head resting on desk, leaning back with eyes closed, or slumped over
-2. using phone - holding a phone, looking down at a device in hand
-3. working with computer - sitting at a desk facing a screen or typing
-4. talking with someone - facing another person, gesturing, or in conversation
-5. idle - standing still, sitting without doing anything specific, looking around
-
-Respond with ONLY one of these exact phrases:
-- "sleeping"
-- "using phone"
-- "working with computer"
-- "talking with someone"
-- "idle"
-
-Just the phrase, no explanation."""
-
-            # Call Ollama API with timeout
+            # Call Ollama API with timeout using dynamic prompt
             client = ollama.Client(host=self.ollama_api_url, timeout=self.inference_timeout)
             response = client.generate(
                 model=self.model_name,
-                prompt=prompt,
+                prompt=self.prompt_template,
                 images=[image_base64],
                 stream=False
             )
@@ -277,19 +299,8 @@ Just the phrase, no explanation."""
             # Parse response
             raw_output = response.get('response', '').strip().lower()
 
-            # Extract action from response - check for "idle"/"none" first to avoid
-            # false matches from loose substring matching (e.g. "not using phone")
-            action = None
-            if raw_output.startswith('idle') or raw_output.startswith('none') or 'none of' in raw_output:
-                action = 'idle'
-            elif raw_output.startswith('sleeping') or raw_output == 'sleeping':
-                action = 'sleeping'
-            elif raw_output.startswith('using phone') or raw_output == 'using phone':
-                action = 'using phone'
-            elif raw_output.startswith('working with computer') or raw_output == 'working with computer':
-                action = 'working with computer'
-            elif raw_output.startswith('talking with someone') or raw_output == 'talking with someone':
-                action = 'talking with someone'
+            # Extract action from response using configured actions
+            action = self._parse_action_response(raw_output)
 
             logger.debug(f"Ollama response: {raw_output} -> action: {action}")
 
@@ -305,6 +316,29 @@ Just the phrase, no explanation."""
         except Exception as e:
             logger.error(f"Ollama API error: {e}")
             return None
+
+    def _parse_action_response(self, raw_output: str) -> Optional[str]:
+        """Parse VLM response to extract action using configured actions.
+
+        Args:
+            raw_output: Raw response from VLM (lowercase, stripped)
+
+        Returns:
+            Matched action name or None if no match
+        """
+        # Check for "none" or "none of" patterns first (fallback to idle if configured)
+        if raw_output.startswith('none') or 'none of' in raw_output:
+            if 'idle' in self.actions_config:
+                return 'idle'
+            return None
+
+        # Check each configured action
+        for action_name in self.actions_config.keys():
+            action_lower = action_name.lower()
+            if raw_output.startswith(action_lower) or raw_output == action_lower:
+                return action_name
+
+        return None
 
     def _post_activity_to_backend(
         self,
@@ -330,17 +364,13 @@ Just the phrase, no explanation."""
         try:
             from datetime import datetime, timezone
             from workers.detection_tasks import task_record_activity
-            from infrastructure.storage import upload_proof_image
+            from infrastructure.storage import ImageFetcher
 
             # Upload proof image to GCS if provided
             proof_image_url = None
             if proof_image is not None:
                 try:
-                    proof_image_url = upload_proof_image(
-                        image=proof_image,
-                        prefix="activity_proofs",
-                        client_slug=self.client_slug
-                    )
+                    proof_image_url = ImageFetcher().upload_image(proof_image, "activity_proofs", self.client_slug)
                 except Exception as e:
                     logger.warning(f"Failed to upload activity proof image: {e}")
 

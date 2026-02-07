@@ -32,12 +32,6 @@ from domain.person_tracking import (
 )
 from domain.person_tracking.face_adapter import crop_person_roi
 
-# Type hints for optional dependencies
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from infrastructure.api import APIClient
-
-
 class GlobalTrackIDGenerator:
     """Thread-safe global track ID generator for cross-camera unique IDs.
 

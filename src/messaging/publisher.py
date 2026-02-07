@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import numpy as np
 
-from messaging.redis_client import get_redis_client
+from messaging.redis_client import RedisClient
 from messaging.channels import (
     EVENT_CHANNELS,
     EVENT_TYPES,
@@ -24,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class MDAPublisher:
-    """
-    Publisher for sending messages to Backend via Redis Pub/Sub.
-    """
+    """Publisher for sending messages to Backend via Redis Pub/Sub."""
 
     def __init__(self, client_slug: str, gcs_uploader=None):
         """
@@ -38,7 +36,7 @@ class MDAPublisher:
         """
         self.client_slug = client_slug
         self.gcs_uploader = gcs_uploader
-        self.redis = get_redis_client()
+        self.redis = RedisClient()
 
     def _generate_message_id(self) -> str:
         """Generate a unique message ID."""

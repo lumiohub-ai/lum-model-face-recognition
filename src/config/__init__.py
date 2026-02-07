@@ -1,10 +1,9 @@
 """
 Configuration
 
-Application settings, constants, and startup utilities.
+Application settings and startup utilities.
 """
 
-from .constants import *
 from .camera_loader import load_cameras
 from .startup import (
     init_smart_office_app,

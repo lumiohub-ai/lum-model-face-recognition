@@ -22,8 +22,9 @@ sys.path.insert(0, str(project_root))
 
 from config import init_smart_office_app, log_startup_info
 from engine import SmartOfficeEngine
-from messaging import get_redis_client, get_stream_consumer
+from messaging import RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
+from messaging.redis_config import REDIS_HOST, REDIS_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +49,12 @@ class MDAManager:
             return
 
         # Verify Redis connection
-        redis_client = get_redis_client()
-        if not redis_client.is_connected():
+        if not RedisClient().is_connected():
             logger.error("[MDA] Redis not available")
             sys.exit(1)
 
         # Start stream consumer for Backend commands
-        self.stream_consumer = get_stream_consumer()
+        self.stream_consumer = StreamConsumer()
         self.stream_consumer.set_camera_handler(self._handle_camera_command)
         self.stream_consumer.start()
         logger.info("[MDA] StreamConsumer started")
@@ -74,12 +74,9 @@ class MDAManager:
 
     def _start_reload_listeners(self):
         """Start background listeners for internal reload notifications."""
-        redis_host = os.getenv('REDIS_HOST', 'localhost')
-        redis_port = int(os.getenv('REDIS_PORT', 6379))
-
         def create_listener(channel: str, handler):
             def listener():
-                r = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+                r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
                 pubsub = r.pubsub()
                 pubsub.subscribe(channel)
                 logger.info(f"[MDA] Subscribed to {channel}")
@@ -88,8 +85,8 @@ class MDAManager:
                     if message['type'] == 'message':
                         try:
                             data = json.loads(message['data'])
-                            if data.get('client_slug') == self.client_slug:
-                                handler(data)
+                            # Handle commands for ALL tenants (multi-tenant support)
+                            handler(data)
                         except Exception as e:
                             logger.error(f"[MDA] Error in {channel}: {e}")
 
@@ -128,14 +125,11 @@ class MDAManager:
             logger.warning("[MDA] Engine not available")
 
     def _handle_camera_command(self, command_type: str, client_slug: str, payload: dict):
-        """Handle camera config commands from Backend."""
+        """Handle camera config commands from Backend (multi-tenant)."""
         camera_id = payload.get('camera_id')
-        logger.info(f"[MDA] Camera command: {command_type} camera_id={camera_id}")
+        logger.info(f"[MDA] Camera command: {command_type} for {client_slug} camera_id={camera_id}")
 
-        if client_slug != self.client_slug:
-            logger.debug(f"[MDA] Ignoring command for client: {client_slug}")
-            return
-
+        # Process commands for ALL tenants (multi-tenant support)
         if command_type in ('ConfigureCamera', 'StartCamera'):
             if self.engine:
                 success = self.engine.reload_camera_configs()
@@ -178,17 +172,11 @@ def main():
     client_slug = os.getenv('HB_CLIENTSLUG')
 
     # Log startup information
-    log_startup_info(
-        client_slug=client_slug,
-        api_host=os.getenv('API_HOST'),
-    )
+    log_startup_info(client_slug=client_slug)
 
     # Initialize SmartOfficeEngine
     engine = SmartOfficeEngine(
-        email=os.getenv("SA_EMAIL"),
-        password=os.getenv("SA_PASSWORD"),
         client_slug=client_slug,
-        api_host=os.getenv("API_HOST"),
         applications=['attendance'],
         **config
     )
