@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
-import gcsfs
 import numpy as np
 import pytz
 import requests
@@ -44,9 +43,6 @@ class FaceEngine:
         self.FR_SLUG = os.getenv("FR_SLUG")
         self.timezone = args.timezone
         self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120)
-
-        # Initialize cloud storage
-        self.fs = gcsfs.GCSFileSystem(token=os.getenv('GCS_CREDENTIALS_PATH'))
 
         # Get face detection padding from args or environment (default: 20%)
         padding_percent = getattr(args, 'face_padding', None) or \

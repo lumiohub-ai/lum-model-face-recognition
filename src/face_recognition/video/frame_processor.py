@@ -113,10 +113,6 @@ class FrameProcessor:
                     save_recognized_callback,
                     save_recognized_enabled
                 )
-            elif recognized_status == 'unrecognized':
-                # Only send if image is valid (not None)
-                if image is not None:
-                    self._handle_unrecognized_person(image, camera_type, camera_id)
 
     def _handle_recognized_person(
         self,
@@ -161,24 +157,6 @@ class FrameProcessor:
                 save_callback(name, image, camera_type)
             except Exception as e:
                 logger.error(f"Failed to save recognized frame for {name}: {e}")
-
-    def _handle_unrecognized_person(
-        self,
-        image: np.ndarray,
-        camera_type: str,
-        camera_id: int
-    ) -> None:
-        """Handle an unrecognized or partially matched person.
-
-        Args:
-            image: Person's image
-            camera_type: Camera type
-            camera_id: Camera identifier
-        """
-        try:
-            self.entry_logger.send_unrecognized_face(face=image, status=camera_type, camera_id=camera_id)
-        except Exception as e:
-            logger.error(f"Failed to send unrecognized face to API: {e}")
 
     def annotate_frame(
         self,

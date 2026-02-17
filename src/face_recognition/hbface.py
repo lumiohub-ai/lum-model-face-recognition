@@ -90,16 +90,10 @@ class HBFace:
     def run(self) -> None:
         """Run the face recognition system and process video streams."""
         try:
-            new_users = self.entry_logger.new_users
-            deleted_users = self.entry_logger.deleted_users
-
             # Start streams for non-video sources
             for i, stream in enumerate(self.streams):
                 if not stream.is_video:
                     stream.start()
-
-                if self.engines[i].args.production:
-                    self.engines[i].update_database(new_users, deleted_users)
 
             frame_nums = [0] * len(self.streams)
             total_frames = 0
@@ -273,10 +267,6 @@ class HBFace:
                     recorded = self.entry_logger.log_person_entry(name, status, appear_time, camera_name, camera_id)
                     if self.engines[0].args.save_recognized_frame and recorded:
                         self.save_recognized_frame(name, image, status)
-                elif recognized == 'unrecognized':
-                    # Send to API only if image is valid (None check)
-                    if image is not None:
-                        self.entry_logger.send_unrecognized_face(face=image, status=status, camera_id=camera_id)
 
     def save_recognized_frame(self, name: str, image: NDArray, status: str) -> None:
         """Save recognized frame to the specified directory.

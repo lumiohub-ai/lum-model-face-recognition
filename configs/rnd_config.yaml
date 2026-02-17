@@ -1,0 +1,26 @@
+# R&D pipeline configuration
+# List videos and their annotation files here.
+# Annotation format and evaluation will be added later.
+
+gpu_id: 0
+match_threshold: 0.3
+partial_match_threshold: 0.15
+db_path: "volumes/src/embeddings/main.pkl"
+output_dir: "volumes/rnd_results"
+client_slug: "rnd"
+timezone: "UTC"
+debug: true
+minimum_face_size: 50
+max_track_lifetime_seconds: 30
+
+videos:
+  - path: "data/videos/sample1.mp4"
+    annotation: "data/annotations/sample1.json"
+    camera_name: "cam1"
+    cam_type: "IN"
+
+  # Add more videos below:
+  # - path: "data/videos/sample2.mp4"
+  #   annotation: "data/annotations/sample2.json"
+  #   camera_name: "cam2"
+  #   cam_type: "IN"

@@ -7,7 +7,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Evaluate face recognition system')
 parser.add_argument('--alg_name', type=str, default='alg-11', help='Algorithm name')
 parser.add_argument('--benchmark', type=str, default='ilhan', help='Benchmark dataset')
-parser.add_argument('--videos', nargs='+', help='List of video names to process', 
+parser.add_argument('--videos', nargs='+', help='List of video names to process',
                        default=["videoa1-1", "videoa1-2", "videoa1-3", "videoa1-4", "videoa1-5"])
 parser.add_argument('--video_dir', default='data/tests/ilhan_videos', help='Directory containing videos')
 parser.add_argument('--db_path', type=str, default='data/embeddings/ilhan.pkl', help='Path to face database')
