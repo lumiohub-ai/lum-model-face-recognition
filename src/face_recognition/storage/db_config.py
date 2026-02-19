@@ -99,6 +99,7 @@ class DatabaseConfig:
                         user_name VARCHAR(255) NOT NULL,
                         external_id VARCHAR(100),
                         image_url TEXT NOT NULL,
+                        image_url_norm TEXT,
                         embedding VECTOR(512) NOT NULL,
                         embedding_metadata JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -107,11 +108,35 @@ class DatabaseConfig:
                 """))
                 logger.info(f"Table created: {schema_name}.face_embeddings")
 
+                # Add image_url_norm column if it doesn't exist (migration)
+                conn.execute(text(f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = '{schema_name}'
+                            AND table_name = 'face_embeddings'
+                            AND column_name = 'image_url_norm'
+                        ) THEN
+                            ALTER TABLE {schema_name}.face_embeddings
+                            ADD COLUMN image_url_norm TEXT;
+                        END IF;
+                    END $$;
+                """))
+
                 # Create index on user_id for fast lookups
                 conn.execute(text(f"""
                     CREATE INDEX IF NOT EXISTS idx_{schema_name}_user_id
                     ON {schema_name}.face_embeddings(user_id)
                 """))
+
+                # Create unique index on (user_id, image_url_norm) to prevent duplicates
+                # Note: No WHERE clause - ON CONFLICT requires a full unique constraint
+                conn.execute(text(f"""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_{schema_name}_user_url_unique
+                    ON {schema_name}.face_embeddings(user_id, image_url_norm)
+                """))
+                logger.info(f"Unique constraint created on (user_id, image_url_norm)")
 
                 # Create vector similarity index (ivfflat)
                 # Note: This requires some data to be inserted first for optimal performance

@@ -1,126 +1,178 @@
-services:
-  redis:
-    image: redis:7-alpine
-    container_name: fr-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
+# Docker Compose configuration for Person Tracking System
+# Usage:
+#   Development: docker compose -f compose.yml -f compose.override.dev.yml up -d
+#   Production:  docker compose -f compose.yml -f compose.override.prod.yml up -d
 
+services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: fr-postgres
+    container_name: person-tracking-postgres
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-face_recognition}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-face_recognition_pass}
-      - POSTGRES_DB=${POSTGRES_DB:-face_embeddings}
-    ports:
-      - ${POSTGRES_PORT:-5434}:5432
+      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition} -d ${POSTGRES_DB:-face_embeddings}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
-  face-recognition:
-    image: humblebeeintel/face-recognition
+  redis:
+    image: redis:7-alpine
+    container_name: person-tracking-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: person-tracking-ollama
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - OLLAMA_DEBUG=0
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llava:7b}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /bin/ollama serve &
+        sleep 5
+        if ! ollama list | grep -q "$OLLAMA_MODEL"; then
+          echo "Pulling $OLLAMA_MODEL model..."
+          ollama pull $OLLAMA_MODEL
+        fi
+        wait
+
+  person-tracking:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    container_name: person-tracking-app
     network_mode: host
-    volumes:
-      # Source code directories (hot-reload without rebuild)
-      - ./modules:/app/face-recognition/modules
-      # Configuration and data directories
-      - ./data:/app/face-recognition/data
-      - ./configs:/app/face-recognition/configs
-      - ./examples:/app/face-recognition/examples
-      - ./volumes/storage/face-recognition/logs:/app/volumes/storage/face-recognition/logs
-      - ./volumes/storage/face-recognition/data:/app/volumes/storage/face-recognition/data
-      - ./frontend.html:/app/face-recognition/frontend.html
-    working_dir: /app/face-recognition
     environment:
-      - FR_SLUG=${FR_SLUG:-"face-recognition"}
-      - NVIDIA_VISIBLE_DEVICES=all
-      - PYTHONPATH=/app/face-recognition/src:/app/${FR_SLUG}
-      - HB_IN=${HB_IN:-"rtsp://username:password@camera_ip:554/stream"}
-      - HB_IN_MANAGEMENT=${HB_IN_MANAGEMENT:-"rtsp://username:password@camera_ip:554/stream"}
-      - HB_OUT=${HB_OUT:-"rtsp://username:password@camera_ip:554/stream"}
-      # pgvector Database Configuration
-      - POSTGRES_HOST=${POSTGRES_HOST:-localhost}
-      - POSTGRES_PORT=${POSTGRES_PORT:-5434}
-      - POSTGRES_USER=${POSTGRES_USER:-face_recognition}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-face_recognition_pass}
-      - POSTGRES_DB=${POSTGRES_DB:-face_embeddings}
-      # Redis Configuration
-      - REDIS_HOST=${REDIS_HOST:-localhost}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      # GCS Configuration
-      - GCS_CREDENTIALS_PATH=${GCS_CREDENTIALS_PATH:-/app/keys/gcs-service-account.json}
-      - GCS_BUCKET=${GCS_BUCKET:-hbai-general-data}
-      # Backend API Configuration
-      - SO_BACKEND_API_URL=${SO_BACKEND_API_URL:-http://localhost:7091}
-      # Feature Flags
-      - USE_PGVECTOR=${USE_PGVECTOR:-true}
-      # Recognition Config
-      - MATCH_THRESHOLD=${MATCH_THRESHOLD:-0.3}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-512}
-      - FACE_DETECTION_PADDING=${FACE_DETECTION_PADDING:-20.0}
-      - MIN_UNRECOGNIZED_TRACK_LIFETIME=${MIN_UNRECOGNIZED_TRACK_LIFETIME:-1.0}
-      # Enhanced Filter Config
-      - SHADOW_MODE=${SHADOW_MODE:-false}
-    ports:
-      - ${FR_PORT:-5000}:${FR_PORT:-5000}
-    env_file:
-      - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
+      # Application slug
+      FR_SLUG: ${FR_SLUG:-face-recognition}
 
-  face-recognition-api:
-    image: humblebeeintel/face-recognition
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: fr-api
-    command: ["bash", "-c", "uvicorn src.web.api:app --host 0.0.0.0 --port 5000"]
-    ports:
-      - "5000:5000"
+      # Client configuration
+      HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
+
+      # API credentials
+      SA_EMAIL: ${SA_EMAIL}
+      SA_PASSWORD: ${SA_PASSWORD}
+      API_HOST: ${API_HOST:-http://localhost:7091}
+
+      # Camera configuration
+      HB_IN: ${HB_IN:-}
+      HB_OUT: ${HB_OUT:-}
+      HB_IN_MANAGEMENT: ${HB_IN_MANAGEMENT:-}
+
+      # Database configuration
+      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5434}
+      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-face_recognition_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
+
+      # Redis configuration
+      REDIS_HOST: ${REDIS_HOST:-localhost}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # Backend API (optional)
+      SO_BACKEND_API_URL: ${SO_BACKEND_API_URL:-}
+
+      # Ollama API for action recognition
+      OLLAMA_API_URL: ${OLLAMA_API_URL:-http://localhost:11435}
+
+      # Disable SSL verification for model downloads (InsightFace)
+      REQUESTS_CA_BUNDLE: ""
+      CURL_CA_BUNDLE: ""
+
+      # Suppress FFmpeg verbose logging
+      OPENCV_FFMPEG_LOGLEVEL: "-8"
+      AV_LOG_FORCE_NOCOLOR: "1"
+      MPLCONFIGDIR: /tmp/matplotlib
+
+      # Performance
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
     volumes:
-      - ./src:/app/face-recognition/src
-      - ./keys:/app/keys
-      - face_recognition_models:/var/lib/face-recognition/models
-    env_file:
-      - .env
-    environment:
-      - FR_SLUG=${FR_SLUG:-face-recognition}
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-face_recognition}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-face_recognition_pass}
-      - POSTGRES_DB=${POSTGRES_DB:-face_embeddings}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - USE_PGVECTOR=${USE_PGVECTOR:-true}
-      - MATCH_THRESHOLD=${MATCH_THRESHOLD:-0.3}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-512}
-      - FACE_DETECTION_PADDING=${FACE_DETECTION_PADDING:-20.0}
-      - MIN_UNRECOGNIZED_TRACK_LIFETIME=${MIN_UNRECOGNIZED_TRACK_LIFETIME:-1.0}
-      - SHADOW_MODE=${SHADOW_MODE:-false}
+      # Mount .env for configuration
+      - ./.env:/app/face-recognition/.env:ro
+      # Configuration
+      - ./configs:/app/face-recognition/configs:ro
+      # Output storage
+      - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
+      # Application logs (CSV metrics, attendance logs)
+      - ./volumes/storage:/app/volumes/storage
+      # Logs
+      - ./logs/person-tracking:/var/log/face-recognition
+      # Model cache (fr-user has write access)
+      - ./volumes/models/insightface:/home/fr-user/.insightface
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
+      ollama:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*src.main"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   postgres_data:
-  face_recognition_models:
+    driver: local
+  redis_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+networks:
+  default:
+    name: person-tracking-network

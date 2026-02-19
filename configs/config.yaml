@@ -1,28 +1,55 @@
-# Device settings
-gpu_id: 0  # Use GPU (CUDA) or switch to "cpu" if GPU is not available
+# SmartOffice Engine Configuration
+# This file contains application settings for the unified person tracking and face recognition system
 
-# Face recognition settings
-match_threshold: 0.3  # Threshold for face similarity matching (can be a list for per-camera thresholds)
-partial_match_threshold: 0.15  # Threshold for partial face matches
+# Video settings
+show: false  # Display video output (disable for Docker/headless)
+save_video: false  # Save annotated video output to disk
+output_dir: "volumes/storage/person-tracking"  # Directory for outputs
 
-show: False  # Show the output video with annotations (disabled for headless/Docker environments)
-save_video: False  # Save the output video with annotations
-record_always: False  # Always record the video
-save_recognized_frame: false  # Save individual frames when faces are recognized
+# Performance settings
+target_fps: 20  # Target frames per second for processing
+resize_width: 1280  # Resize frame width for processing (null = no resize)
 
-# Evaluation settings
-eval: False  # Enable evaluation mode
+# Recognition settings
+match_threshold: 0.3  # Face similarity threshold for matching
+person_detection_threshold: 0.45  # Person detection confidence threshold (0.0-1.0)
+person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
 
-# ROI settings
-# Other settings
-timezone: "UTC"  # Timezone for tracking times
-debug: True  # Enable debug mode for detailed logging
+# Feature flags
+enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)
+enable_attendance_logging: true  # Log attendance events to backend API
+use_pgvector: true  # Use pgvector for face embedding storage
+use_api_for_cameras: true  # Fetch camera config from API instead of local file
+face_detection_padding: 20.0  # Padding % around detected faces for better recognition (0-100)
 
-# Production settings
-multi_camera: True  # Enable multi-camera mode
-production: True # Enable production mode for optimized performance
+# Action Recognition settings (Activity tracking via Ollama)
+# Note: VLM is enabled per-camera based on 'activity' in camera's applications list from dashboard
+action_recognition:
+  ollama_api_url: null  # Ollama API URL (null = use OLLAMA_API_URL env var, default: http://localhost:11435)
+  model_name: null  # Ollama model name (null = use OLLAMA_MODEL env var, default: llava:7b)
+  check_interval_seconds: 60  # Check each person every N seconds
+  image_padding: 20.0  # Padding % around person bbox for VLM (0-100), adds context for better action recognition
+  async_workers: 1  # Number of background worker threads for inference
+  max_queue_size: 50  # Maximum queued inference requests
+  actions:  # Supported action types (mapped to backend activity types)
+    - sleeping            # -> sleeping
+    - using phone         # -> phone_usage
+    - working             # -> working (includes: computer, mouse, writing, reading)
+    - talking with someone   # -> talking
+    - idle                # -> not_focusing
+
+# Unrecognized face settings (image quality filters)
+unrecognized:
+  min_face_size: 150  # Minimum face size in pixels (smaller faces are skipped)
+  blur_threshold: 50  # Laplacian variance threshold (lower = more lenient, default was 100)
+  send_best_effort: true  # If all frames fail quality, send best available anyway
+
+# System monitoring (performance CSV logs)
+system_monitoring:
+  enabled: true                    # Enable/disable system monitoring
+  flush_interval_seconds: 3600     # Flush buffer to CSV every N seconds (default: 1 hour)
+  sample_interval_seconds: 60      # Sample FPS/memory every N seconds (default: 60s)
 
 # System settings
-max_track_lifetime_seconds: 30
-csv_log_rotation: "2 weeks"
-minimum_face_size: 150  # Minimum face size to consider for recognition
+max_track_lifetime_seconds: 30  # Maximum time to keep inactive tracks
+debug: false  # Enable debug logging

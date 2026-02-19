@@ -1,9 +1,11 @@
-"""Data storage components for face embeddings and cloud storage."""
+"""Data storage components for face embeddings."""
 
-from .database import Database
-from .cloud_storage import CloudStorageManager
+from .pgvector_store import PgVectorStore
+from .db_config import DatabaseConfig
+from .url_utils import normalize_image_url
 
 __all__ = [
-    "Database",
-    "CloudStorageManager",
+    "PgVectorStore",
+    "DatabaseConfig",
+    "normalize_image_url",
 ]
