@@ -7,6 +7,7 @@ from sqlalchemy import text
 from loguru import logger
 from .db_config import DatabaseConfig
 from .validators import validate_client_slug, validate_schema_name
+from .url_utils import normalize_image_url
 
 
 class PgVectorStore:
@@ -47,8 +48,11 @@ class PgVectorStore:
         embedding: np.ndarray,
         external_id: Optional[str] = None,
         metadata: Optional[Dict] = None
-    ) -> int:
-        """Add a single face embedding to database.
+    ) -> Optional[int]:
+        """Add a single face embedding to database (idempotent).
+
+        Uses INSERT ... ON CONFLICT DO NOTHING to prevent duplicates
+        based on (user_id, normalized_image_url).
 
         Args:
             user_id: Backend user ID
@@ -59,12 +63,15 @@ class PgVectorStore:
             metadata: Additional metadata (landmarks, bbox, etc.)
 
         Returns:
-            int: ID of inserted embedding
+            int: ID of inserted embedding, or None if already exists
 
         Raises:
             Exception: If database operation fails
         """
         try:
+            # Normalize URL for stable identity
+            image_url_norm = normalize_image_url(image_url)
+
             # Convert numpy array to list for PostgreSQL
             embedding_list = embedding.tolist()
 
@@ -74,72 +81,33 @@ class PgVectorStore:
             with self.db_config.get_connection() as conn:
                 result = conn.execute(text(f"""
                     INSERT INTO {self.schema_name}.face_embeddings
-                    (user_id, user_name, external_id, image_url, embedding, embedding_metadata)
-                    VALUES (:user_id, :user_name, :external_id, :image_url, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
+                    (user_id, user_name, external_id, image_url, image_url_norm, embedding, embedding_metadata)
+                    VALUES (:user_id, :user_name, :external_id, :image_url, :image_url_norm, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
+                    ON CONFLICT (user_id, image_url_norm) DO NOTHING
                     RETURNING id
                 """), {
                     'user_id': user_id,
                     'user_name': user_name,
                     'external_id': external_id,
                     'image_url': image_url,
+                    'image_url_norm': image_url_norm,
                     'embedding': str(embedding_list),
                     'metadata': metadata_json
                 })
                 conn.commit()
 
-                embedding_id = result.fetchone()[0]
-                logger.info(f"Added embedding {embedding_id} for user {user_id} ({user_name}) - vector dim: {len(embedding_list)}")
-                return embedding_id
+                row = result.fetchone()
+                if row:
+                    embedding_id = row[0]
+                    logger.info(f"Added embedding {embedding_id} for user {user_id} ({user_name}) - vector dim: {len(embedding_list)}")
+                    return embedding_id
+                else:
+                    logger.debug(f"Embedding already exists for user {user_id}, image: {image_url_norm}")
+                    return None
 
         except Exception as e:
             logger.error(f"Failed to add embedding for user {user_id}: {e}")
             raise
-
-    def add_embeddings_batch(
-        self,
-        embeddings_data: List[Dict]
-    ) -> List[int]:
-        """Add multiple embeddings in a batch.
-
-        Args:
-            embeddings_data: List of dicts with keys:
-                - user_id, user_name, image_url, embedding, external_id, metadata
-
-        Returns:
-            List[int]: IDs of inserted embeddings
-        """
-        inserted_ids = []
-
-        try:
-            with self.db_config.get_connection() as conn:
-                for data in embeddings_data:
-                    embedding_list = data['embedding'].tolist()
-                    metadata_json = json.dumps(data.get('metadata')) if data.get('metadata') else '{}'
-
-                    result = conn.execute(text(f"""
-                        INSERT INTO {self.schema_name}.face_embeddings
-                        (user_id, user_name, external_id, image_url, embedding, embedding_metadata)
-                        VALUES (:user_id, :user_name, :external_id, :image_url, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
-                        RETURNING id
-                    """), {
-                        'user_id': data['user_id'],
-                        'user_name': data['user_name'],
-                        'external_id': data.get('external_id'),
-                        'image_url': data['image_url'],
-                        'embedding': str(embedding_list),
-                        'metadata': metadata_json
-                    })
-
-                    inserted_ids.append(result.fetchone()[0])
-
-                conn.commit()
-                logger.info(f"Batch inserted {len(inserted_ids)} embeddings")
-
-        except Exception as e:
-            logger.error(f"Failed to batch insert embeddings: {e}")
-            raise
-
-        return inserted_ids
 
     def delete_all_for_user(self, user_id: str) -> int:
         """Delete all embeddings for a user.
@@ -192,29 +160,31 @@ class PgVectorStore:
             logger.error(f"Failed to delete embedding for {image_url}: {e}")
             raise
 
-    def delete_user_embeddings(self, user_name: str) -> int:
-        """Delete all embeddings for a user by user_name.
+    def delete_by_image_url_norm(self, user_id: str, image_url_norm: str) -> int:
+        """Delete embedding by user_id and normalized image URL.
 
         Args:
-            user_name: User name to delete embeddings for
+            user_id: Backend user ID
+            image_url_norm: Normalized image URL to delete
 
         Returns:
-            int: Number of embeddings deleted
+            int: Number of embeddings deleted (should be 0 or 1)
         """
         try:
             with self.db_config.get_connection() as conn:
                 result = conn.execute(text(f"""
                     DELETE FROM {self.schema_name}.face_embeddings
-                    WHERE user_name = :user_name
-                """), {'user_name': user_name})
+                    WHERE user_id = :user_id AND image_url_norm = :image_url_norm
+                """), {'user_id': user_id, 'image_url_norm': image_url_norm})
                 conn.commit()
 
                 count = result.rowcount
-                logger.info(f"Deleted {count} embeddings for user_name: {user_name}")
+                if count > 0:
+                    logger.debug(f"Deleted {count} embedding for normalized URL: {image_url_norm}")
                 return count
 
         except Exception as e:
-            logger.error(f"Failed to delete embeddings for user_name {user_name}: {e}")
+            logger.error(f"Failed to delete embedding for normalized URL {image_url_norm}: {e}")
             raise
 
     def get_all_embeddings(self) -> Tuple[List[str], np.ndarray]:
@@ -264,125 +234,6 @@ class PgVectorStore:
 
         except Exception as e:
             logger.error(f"Failed to load embeddings: {e}")
-            raise
-
-    def search_similar(
-        self,
-        query_embedding: np.ndarray,
-        limit: int = 10,
-        threshold: float = 0.3
-    ) -> List[Dict]:
-        """Search for similar faces using cosine similarity.
-
-        Args:
-            query_embedding: Face embedding to search for (512-dim)
-            limit: Maximum number of results to return
-            threshold: Minimum similarity score (0.0 to 1.0)
-
-        Returns:
-            List of dicts with keys: user_id, user_name, image_url, similarity
-        """
-        try:
-            embedding_list = query_embedding.tolist()
-
-            with self.db_config.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    SELECT
-                        user_id,
-                        user_name,
-                        image_url,
-                        1 - (embedding <=> :query_embedding::vector) as similarity
-                    FROM {self.schema_name}.face_embeddings
-                    WHERE 1 - (embedding <=> :query_embedding::vector) >= :threshold
-                    ORDER BY embedding <=> :query_embedding::vector
-                    LIMIT :limit
-                """), {
-                    'query_embedding': str(embedding_list),
-                    'threshold': threshold,
-                    'limit': limit
-                })
-
-                matches = []
-                for row in result:
-                    matches.append({
-                        'user_id': row[0],
-                        'user_name': row[1],
-                        'image_url': row[2],
-                        'similarity': float(row[3])
-                    })
-
-                logger.info(f"Found {len(matches)} similar faces above threshold {threshold}")
-                return matches
-
-        except Exception as e:
-            logger.error(f"Failed to search similar faces: {e}")
-            raise
-
-    def update_user_name(self, user_id: str, new_name: str) -> int:
-        """Update user name for all their embeddings.
-
-        Args:
-            user_id: Backend user ID
-            new_name: New user name
-
-        Returns:
-            int: Number of embeddings updated
-        """
-        try:
-            with self.db_config.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    UPDATE {self.schema_name}.face_embeddings
-                    SET user_name = :new_name, updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = :user_id
-                """), {'user_id': user_id, 'new_name': new_name})
-                conn.commit()
-
-                count = result.rowcount
-                logger.info(f"Updated {count} embeddings with new name: {new_name}")
-                return count
-
-        except Exception as e:
-            logger.error(f"Failed to update user name for {user_id}: {e}")
-            raise
-
-    def get_embedding_count(self) -> int:
-        """Get total number of embeddings in this organization.
-
-        Returns:
-            int: Total embedding count
-        """
-        try:
-            with self.db_config.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    SELECT COUNT(*) FROM {self.schema_name}.face_embeddings
-                """))
-                count = result.fetchone()[0]
-                return count
-
-        except Exception as e:
-            logger.error(f"Failed to get embedding count: {e}")
-            raise
-
-    def get_user_embedding_count(self, user_id: str) -> int:
-        """Get number of embeddings for a specific user.
-
-        Args:
-            user_id: Backend user ID
-
-        Returns:
-            int: Number of embeddings for this user
-        """
-        try:
-            with self.db_config.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    SELECT COUNT(*) FROM {self.schema_name}.face_embeddings
-                    WHERE user_id = :user_id
-                """), {'user_id': user_id})
-                count = result.fetchone()[0]
-                return count
-
-        except Exception as e:
-            logger.error(f"Failed to get embedding count for user {user_id}: {e}")
             raise
 
     def clear_all_embeddings(self) -> int:

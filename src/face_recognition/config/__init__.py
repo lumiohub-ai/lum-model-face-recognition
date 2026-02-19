@@ -1,27 +1,8 @@
-"""Configuration management using Pydantic models."""
+"""Configuration management."""
 
-from .models import (
-    CameraConfig,
-    ModelConfig,
-    APIConfig,
-    StorageConfig,
-    TrackingConfig,
-    DashboardConfig,
-    DatabaseConfig,
-    FaceRecognitionConfig as SystemConfig,  # Alias for backward compatibility
-)
-from .manager import ConfigurationManager
 from .constants import *
+from .camera_loader import load_cameras
 
 __all__ = [
-    "CameraConfig",
-    "ModelConfig",
-    "APIConfig",
-    "StorageConfig",
-    "TrackingConfig",
-    "DashboardConfig",
-    "DatabaseConfig",
-    "SystemConfig",
-    "FaceRecognitionConfig",
-    "ConfigurationManager",
+    "load_cameras",
 ]

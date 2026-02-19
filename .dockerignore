@@ -1,4 +1,55 @@
-# Ignore typical model/media/data outputs
+# =============================================================================
+# Docker Build Context Exclusions
+# Smaller context = faster builds
+# =============================================================================
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python cache and build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+*.dist-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+env/
+venv/
+myenv/
+.venv/
+
+# Testing
+tests/
+pytest_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Notebooks (large)
+notebooks/
+
+# Data and media files (large)
 *.jpg
 *.jpeg
 *.png
@@ -12,49 +63,39 @@
 *.npz
 *.zip
 *.tar.gz
+*.pkl
+*.pt
+*.pth
+*.onnx
+
+# Logs and temp files
+*.log
 *.cache
-*.egg
-*.egg-info/
-*.dist-info/
+logs/
+tmp/
+temp/
+
+# Data directories
+data/
+volumes/
+
+# Model weights (download at runtime)
+weights/
+*.weights
+
+# Local config (use .env.example instead)
+.env
+.env.local
+.env.*.local
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+Makefile
+
+# Misc
 *.csv
 *.dat
-*.log
 *.json
-
-# Ignore Python build/cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Ignore venvs and build artifacts
-env/
-venv/
-myenv/
-build/
-dist/
-tests/
-
-# Ignore specific folders inside data/ that contain large files
-data/collections/
-data/saved_videos/
-data/logs/
-
-# Ignore all inside data/
-data/**
-
-# But allow these:
-!data/
-!data/*.pkl
-!data/embeddings/
-
-# Allow wheels directory for offline PyTorch installation
-!wheels/
-!wheels/*.whl
-
-
-
-# Ignore documentation and test folders
-docs/**
-tests/**
-notebooks/** 
+!package.json
+!tsconfig.json

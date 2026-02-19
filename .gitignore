@@ -315,7 +315,11 @@ logs/**
 models/**
 recorded_videos/**
 compose.override.yml
-volumes/**modules/yolo_tracking/
+volumes/
+
+# Model weights (downloaded at runtime)
+*.pt
+*.pth
 
 # Media and data files
 *.mp4
@@ -323,3 +327,25 @@ volumes/**modules/yolo_tracking/
 *.jpg
 *.jpeg
 *.pkl
+*.avi
+*.png
+*.onnx
+
+# Node modules
+node_modules/
+
+# VSCode settings (override partial ignore above)
+.vscode/
+
+# Additional files to ignore
+*.legent
+buffalo_l.zip
+
+
+
+/docs/ACTION_RECOGNITION.md
+/docs/QUICKSTART_ACTION_RECOGNITION.md
+/docs/celery.md
+/docs/CELERY.md
+/docs/CELERY_READY.md
+/docs/QUICKSTART_CELERY.md

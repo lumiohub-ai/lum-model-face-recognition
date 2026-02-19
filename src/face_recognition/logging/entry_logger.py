@@ -5,7 +5,6 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import cv2
 import numpy as np
 from loguru import logger
 
@@ -41,6 +40,9 @@ class EntryLogger:
         self.max_track_lifetime_seconds = getattr(
             args, 'max_track_lifetime_seconds', 120
         )
+
+        # Track last seen location (camera) for each person
+        self.person_last_camera: Dict[str, str] = {}
 
         # Initialize API client
         api_host = os.getenv("API_HOST", getattr(args, 'api_host', "http://localhost:7091/"))
@@ -119,31 +121,43 @@ class EntryLogger:
             appear_time: Time when the person appeared
             camera_name: Name of the camera that detected the person
             camera_id: ID of the camera that detected the person
-            proof_image: Optional recognized frame image (numpy array)
+            proof_image: Optional annotated frame with person bbox as proof
 
         Returns:
             bool: True if the status was recorded, False if unchanged
         """
-        previous_status = self.person_status.get(name)
-        recorded = False
+        # Only process valid attendance statuses (IN/OUT)
+        status_upper = status.upper()
+        if status_upper not in ('IN', 'OUT'):
+            logger.debug(
+                f"Skipping non-attendance status '{status}' for {name} "
+                f"from camera {camera_name}"
+            )
+            return False
 
-        # Send location data to API every time person is recognized (if in production mode)
-        if self.args.production:
+        previous_status = self.person_status.get(name)
+        previous_camera = self.person_last_camera.get(name)
+        recorded = False
+        location_changed = previous_camera != camera_name
+
+        # Send location data to API if location (camera) changed (if in production mode)
+        if self.args.production and location_changed:
             self._send_location_data(name, status, appear_time, camera_name)
+            self.person_last_camera[name] = camera_name
 
         # If status is the same as before, do nothing else
-        if previous_status == status.upper():
+        if previous_status and previous_status == status_upper:
             timestamp = appear_time.strftime("%Y-%m-%d %H:%M:%S")
             logger.debug(
                 f"[{timestamp}] {name} | Status: {status} | "
-                f"Camera: {camera_name} (unchanged)"
+                f"Camera: {camera_name} ({'location changed' if location_changed else 'unchanged'})"
             )
             return recorded
 
         recorded = True
 
         # Update the cached status
-        self.person_status[name] = status.upper()
+        self.person_status[name] = status_upper
 
         # Format the appearance time
         today_date = appear_time.strftime("%Y-%m-%d")
@@ -196,7 +210,7 @@ class EntryLogger:
             name: Name of the person
             status: Entry/exit status (IN/OUT)
             camera_id: ID of the camera that detected the person
-            proof_image: Optional recognized frame image (numpy array)
+            proof_image: Optional annotated frame with person bbox as proof
         """
         user_id = next(
             (int(i['id']) for i in self.name_to_id if i['name'] == name),
@@ -207,7 +221,9 @@ class EntryLogger:
             logger.warning(f'User with name {name} not found in the database')
             return
 
-        response = self.api_client.create_attendance_record(user_id, status, camera_id, proof_image)
+        response = self.api_client.create_attendance_record(
+            user_id, status, camera_id, proof_image
+        )
         if response is None:
             logger.warning(f"Failed to create attendance record for {name}")
 
@@ -256,60 +272,6 @@ class EntryLogger:
             Response object if successful, None otherwise
         """
         return self.api_client.send_unrecognized_face(face, status, camera_id)
-
-    def visualize_entries(self, frame: np.ndarray, max_text_width: int = 0) -> None:
-        """Visualize recent entries on the frame.
-
-        Args:
-            frame: Frame to add visualization to
-            max_text_width: Maximum width of the text display
-        """
-        padding = 10
-        base_y = 30
-
-        # Calculate max text width
-        for entry in self.recent_entries:
-            text_size = cv2.getTextSize(entry, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-            max_text_width = max(max_text_width, text_size[0])
-
-        # Draw entry boxes
-        for i, entry in enumerate(self.recent_entries):
-            top_right_x = frame.shape[1] - max_text_width - padding * 2
-            cv2.rectangle(
-                frame,
-                (top_right_x, base_y - 25 + i * 35),
-                (frame.shape[1] - 10, base_y + i * 35 + 5),
-                (0, 0, 0),
-                -1,
-            )
-            cv2.putText(
-                frame,
-                entry,
-                (top_right_x + 5, base_y + i * 35),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2,
-            )
-
-    def send_annotated_frame(
-        self,
-        frame: np.ndarray,
-        camera_type: str,
-        camera_id: int
-    ) -> Optional[Any]:
-        """Send annotated frame to API.
-
-        Args:
-            frame: Annotated frame to send
-            camera_type: Camera type (IN/OUT)
-            camera_id: Camera index (0, 1, 2, etc.)
-
-        Returns:
-            Response object if API upload successful, None otherwise
-        """
-        # Upload to external API (can be disabled)
-        return self.api_client.upload_annotated_frame(frame, camera_id, camera_type)
 
     def save_status_info(self, video_name: str = 'status_info') -> str:
         """Get the path to the status information log file.

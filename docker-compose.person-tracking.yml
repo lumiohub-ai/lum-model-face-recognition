@@ -1,0 +1,155 @@
+version: '3.8'
+
+# Docker Compose configuration for Person Tracking System
+# Usage:
+#   docker-compose -f docker-compose.person-tracking.yml up -d
+#   docker-compose -f docker-compose.person-tracking.yml logs -f person-tracking
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: person-tracking-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: person-tracking-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  person-tracking:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: humblebeeintel/person-tracking:latest
+    container_name: person-tracking-app
+    network_mode: host
+    environment:
+      # Application slug
+      FR_SLUG: ${FR_SLUG:-face-recognition}
+
+      # Client configuration
+      HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
+
+      # API credentials
+      SA_EMAIL: ${SA_EMAIL}
+      SA_PASSWORD: ${SA_PASSWORD}
+      API_HOST: ${API_HOST:-http://localhost:7091}
+
+      # Camera configuration
+      HB_IN: ${HB_IN:-}
+      HB_OUT: ${HB_OUT:-}
+      HB_IN_MANAGEMENT: ${HB_IN_MANAGEMENT:-}
+
+      # Database configuration
+      USE_PGVECTOR: ${USE_PGVECTOR:-true}
+      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5434}
+      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-face_recognition_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
+
+      # Redis configuration
+      REDIS_HOST: ${REDIS_HOST:-localhost}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # Backend API (optional)
+      SO_BACKEND_API_URL: ${SO_BACKEND_API_URL:-}
+
+      # Performance
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    volumes:
+      # Configuration
+      - ./configs/person_tracking:/app/face-recognition/configs/person_tracking
+
+      # Output storage
+      - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
+
+      # Logs
+      - ./logs/person-tracking:/var/log/face-recognition
+
+      # Credentials (if needed)
+      - ./credentials:/app/face-recognition/credentials
+
+      # Model cache (persist downloaded models)
+      - model-cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # Optional: API service for querying events
+  person-tracking-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: humblebeeintel/person-tracking:latest
+    container_name: person-tracking-api
+    environment:
+      HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    volumes:
+      - ./src:/app/face-recognition/src:ro
+    ports:
+      - "${API_PORT:-5002}:5002"
+    depends_on:
+      - postgres
+      - redis
+    command: ["uvicorn", "src.person_tracking.api.app:app", "--host", "0.0.0.0", "--port", "5002"]
+    profiles:
+      - api  # Only starts with: docker-compose --profile api up
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  model-cache:
+    driver: local
+
+networks:
+  default:
+    name: person-tracking-network

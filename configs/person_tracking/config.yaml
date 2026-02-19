@@ -1,0 +1,96 @@
+# Person Tracking & Phone Usage Detection - Configuration
+# This configuration file defines settings for person tracking, face recognition,
+# and phone usage detection.
+
+# Project settings
+project_name: "person_tracking"
+client_slug: "${HB_CLIENTSLUG}"  # Organization identifier from environment
+
+# Camera configurations
+cameras:
+  - camera_id: 1
+    camera_name: "Office Entry"
+    video_path: "${HB_IN}"  # RTSP URL or video file path from environment
+
+    # Person Detection (YOLOv8-Pose)
+    person_detection:
+      model_size: "s"           # n/s/m/l/x (s=small, balanced)
+      confidence_threshold: 0.7  # 0.0-1.0
+      iou_threshold: 0.45        # NMS threshold
+
+    # Person Tracking (BoT-SORT)
+    person_tracking:
+      tracker_type: "botsort"    # botsort/bytetrack/ocsort
+      max_track_age: 120         # seconds
+      min_track_hits: 3          # frames before confirming track
+      iou_threshold: 0.3         # track association threshold
+
+    # Face Recognition
+    face_recognition:
+      match_threshold: 0.3            # cosine similarity threshold
+      identity_lock_frames: 5         # M frames for identity lock
+      identity_consensus: 0.60        # 60% votes needed (3/5)
+      min_window_duration_ms: 333     # ~5 frames at 15 FPS
+
+    # Phone Detection (YOLOv8)
+    phone_detection:
+      model_size: "n"            # n/s/m/l/x (n=nano, fastest)
+      confidence_threshold: 0.4   # 0.0-1.0
+
+    # Phone Usage Logic
+    phone_usage:
+      confirmation_frames: 8           # N frames for usage confirmation
+      confirmation_consensus: 0.75     # 75% frames (6/8)
+      min_duration_ms: 500             # minimum duration
+
+      # Spatial thresholds (meters)
+      hand_distance_threshold: 0.20    # 20cm hand-to-phone
+      head_distance_threshold: 0.25    # 25cm phone-to-head
+      upper_body_zone_margin: 0.30     # 30cm above head
+
+      # Logic: require X of Y checks
+      required_checks: 2               # Of: zone, hand, head
+
+    # Performance
+    performance:
+      target_fps: 12              # target frames per second
+      resize_width: 1280          # resize for performance (null = no resize)
+      batch_size: 1               # batch size for inference
+
+    # Storage
+    storage:
+      save_annotated_frames: true
+      save_phone_usage_clips: true
+      output_dir: "volumes/storage/person-tracking"
+      clip_duration_seconds: 10
+
+# Database configuration (shared with face recognition service)
+database:
+  use_pgvector: true
+  postgres_host: "${POSTGRES_HOST}"
+  postgres_port: 5434
+  postgres_user: "${POSTGRES_USER}"
+  postgres_password: "${POSTGRES_PASSWORD}"
+  postgres_db: "${POSTGRES_DB}"
+
+# Redis configuration (for pub/sub)
+redis:
+  host: "${REDIS_HOST}"
+  port: 6379
+  db: 0
+
+# Logging configuration
+logging:
+  level: "INFO"               # DEBUG/INFO/WARNING/ERROR
+  console: true
+  file: true
+  file_path: "logs/person_tracking.log"
+  csv_logging: true
+  csv_path: "volumes/storage/person-tracking/logs"
+
+# API configuration
+api:
+  host: "0.0.0.0"
+  port: 5002
+  backend_url: "${SO_BACKEND_API_URL}"  # Backend API (post-MVP)
+  enable_docs: true           # Enable Swagger/OpenAPI docs

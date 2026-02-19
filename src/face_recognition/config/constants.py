@@ -34,64 +34,6 @@ MIN_FRAMES_FOR_RECOGNITION = 3
 DEFAULT_MINIMUM_FACE_SIZE = 30
 
 # ============================================================================
-# Enhanced Filter Constants (New)
-# ============================================================================
-
-# Quality thresholds
-DEFAULT_MIN_FRONTALITY_SCORE = 0.65
-DEFAULT_MIN_LAPLACIAN_VARIANCE = 100.0
-DEFAULT_MIN_BRIGHTNESS = 40
-DEFAULT_MAX_BRIGHTNESS = 220
-DEFAULT_MIN_LANDMARK_SPREAD = 0.12
-
-# Recognition confidence zones
-DEFAULT_RECOGNIZED_THRESHOLD = 0.40
-DEFAULT_TRUE_UNKNOWN_THRESHOLD = 0.22
-DEFAULT_MIN_TOP2_MARGIN = 0.08
-DEFAULT_MAX_UNKNOWN_SIMILARITY = 0.25
-
-# Temporal deduplication
-DEFAULT_DEDUP_CACHE_TTL = 300  # 5 minutes
-DEFAULT_DEDUP_SIMILARITY_THRESHOLD = 0.85
-DEFAULT_DEDUP_CROSS_CAMERA_WINDOW = 60  # 1 minute
-
-# Track quality
-DEFAULT_MIN_TRACK_QUALITY_SCORE = 0.60
-DEFAULT_MIN_QUALITY_FRAMES = 3
-DEFAULT_MIN_UNRECOGNIZED_TRACK_LIFETIME = 2.5  # seconds
-
-# Rate limiting
-DEFAULT_MAX_UNKNOWNS_PER_CAMERA_PER_MINUTE = 8
-
-# ============================================================================
-# Video Processing Constants
-# ============================================================================
-
-# Default frame dimensions for display
-DISPLAY_FRAME_WIDTH = 1280
-DISPLAY_FRAME_HEIGHT = 720
-
-# Concatenated frame dimensions
-CONCAT_FRAME_WIDTH = 1920
-CONCAT_FRAME_HEIGHT = 720
-
-# FPS calculation window (number of frames)
-FPS_CALCULATION_WINDOW = 30
-
-# ============================================================================
-# API Constants
-# ============================================================================
-
-# Default API timeout in seconds
-DEFAULT_API_TIMEOUT = 30
-
-# Maximum retry attempts for API calls
-MAX_API_RETRY_ATTEMPTS = 3
-
-# Retry delay (exponential backoff base in seconds)
-API_RETRY_BASE_DELAY = 1
-
-# ============================================================================
 # Storage Constants
 # ============================================================================
 
@@ -166,32 +108,13 @@ IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp"]
 VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv"]
 
 # ============================================================================
-# Camera/Stream Constants
+# System Monitoring Constants
 # ============================================================================
 
-# Camera types
-CAMERA_TYPE_IN = "IN"
-CAMERA_TYPE_OUT = "OUT"
-CAMERA_TYPE_MANAGEMENT = "MANAGEMENT"
-
-# Stream reconnection settings
-STREAM_RECONNECT_DELAY_SECONDS = 5
-STREAM_MAX_RECONNECT_ATTEMPTS = 10
-
-# Frame queue size for streaming
-FRAME_QUEUE_MAXSIZE = 1
-
-# ============================================================================
-# Recognition Status Constants
-# ============================================================================
-
-STATUS_RECOGNIZED = "RECOGNIZED"
-STATUS_UNRECOGNIZED = "UNRECOGNIZED"
-STATUS_PARTIAL_MATCH = "PARTIAL_MATCH"
-
-# Entry/Exit status
-STATUS_IN = "IN"
-STATUS_OUT = "OUT"
+DEFAULT_MONITOR_FLUSH_INTERVAL = 3600.0  # 1 hour
+DEFAULT_MONITOR_SAMPLE_INTERVAL = 60.0  # 60 seconds
+SYSTEM_MONITOR_LOG_DIR = "system"
+SYSTEM_METRICS_FILE_PREFIX = "system_metrics"
 
 # ============================================================================
 # Validation Constants
@@ -207,14 +130,3 @@ MAX_GPU_ID = 7  # Typical maximum GPU count
 MIN_FACE_SIZE = 10
 MAX_FACE_SIZE = 10000
 
-# ============================================================================
-# HTTP Status Codes (for reference)
-# ============================================================================
-
-HTTP_OK = 200
-HTTP_CREATED = 201
-HTTP_BAD_REQUEST = 400
-HTTP_UNAUTHORIZED = 401
-HTTP_FORBIDDEN = 403
-HTTP_NOT_FOUND = 404
-HTTP_INTERNAL_SERVER_ERROR = 500

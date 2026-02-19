@@ -1,8 +1,8 @@
 """Video stream handling module for processing camera streams and video files."""
 
+import os
 import cv2
 import threading
-import queue
 import time
 import logging
 import gc
@@ -25,10 +25,27 @@ class StreamHandler:
         self.src = src
         self.is_video = self.is_video_file(src)
         self.logger = logger
-        self.cap = self._create_capture(src)
+
+        # Configure RTSP options for better compatibility and smooth playback
+        if isinstance(src, str) and src.startswith('rtsp://'):
+            # Set FFmpeg options BEFORE creating VideoCapture
+            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+                'rtsp_transport;tcp|'        # Use TCP for reliability
+                'buffer_size;1024000|'       # 1MB buffer for network stability
+                'max_delay;500000|'          # Max 0.5s delay
+                'fflags;nobuffer|'           # Minimize buffering for real-time
+                'flags;low_delay'            # Low latency mode
+            )
+            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            # Set buffer size: 3 frames is optimal for real-time playback
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        else:
+            self.cap = cv2.VideoCapture(src)
         self.stopped = False
         self.lock = threading.Lock()
-        self.frame_queue = queue.Queue(maxsize=1)  # Keep only the latest frame
+        # NO QUEUE - use latest frame only to prevent jitter and lag
+        self.latest_frame = None
+        self.latest_ret = False
         self.reconnect_delay = 1  # Initial delay between reconnection attempts
         self.max_delay = 30  # Maximum delay between reconnection attempts
         self.last_gc_time = time.time()
@@ -93,7 +110,20 @@ class StreamHandler:
         attempt_count = 1
 
         while True:  # Infinite reconnection loop
-            self.cap = self._create_capture(self.src)
+            # Configure RTSP options for better compatibility
+            if isinstance(self.src, str) and self.src.startswith('rtsp://'):
+                # Set same FFmpeg options as initial connection
+                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+                    'rtsp_transport;tcp|'
+                    'buffer_size;1024000|'
+                    'max_delay;500000|'
+                    'fflags;nobuffer|'
+                    'flags;low_delay'
+                )
+                self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+            else:
+                self.cap = cv2.VideoCapture(self.src)
             ret, _ = self.cap.read()
             if ret:
                 self.logger.warning(f"Successfully reconnected to stream: {self.src}")
@@ -152,15 +182,11 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
 
-            # Clear the queue before putting new frame
-            try:
-                while not self.frame_queue.empty():
-                    self.frame_queue.get_nowait()
-            except queue.Empty:
-                pass
-
-            # Put the new frame
-            self.frame_queue.put((ret, frame))
+            # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
+            # This prevents jitter by ensuring we never show old frames
+            with self.lock:
+                self.latest_ret = ret
+                self.latest_frame = frame
 
             # Periodically run garbage collection
             current_time = time.time()
@@ -184,24 +210,13 @@ class StreamHandler:
 
             return ret, frame
 
-        try:
-            if not self.frame_queue.empty():
-                self.ret, self.frame = self.frame_queue.get(timeout=0.5)
-            # If queue is empty but we have a last valid frame, return it
+        # LATEST FRAME ONLY: Return the most recent frame from background thread
+        # No queue, no old frames, no jitter
+        with self.lock:
+            if self.latest_frame is not None:
+                self.ret = self.latest_ret
+                self.frame = self.latest_frame
             return self.ret, self.frame
-        except queue.Empty:
-            # Queue is empty and no frame was received in time
-            if not self.stopped:
-                self.logger.warning("No frame available in queue")
-            return self.ret, self.frame
-
-    def get_first_frame(self) -> Any:
-        """Get the first frame that was captured from the video source.
-
-        Returns:
-            The first frame captured from the video source
-        """
-        return self.frame
 
     def stop(self) -> None:
         """Stop the frame reading thread and release resources."""
@@ -210,26 +225,8 @@ class StreamHandler:
                 return
             self.stopped = True
 
-        # Clear the queue
-        try:
-            while not self.frame_queue.empty():
-                self.frame_queue.get_nowait()
-        except queue.Empty:
-            pass
-
         if self.thread is not None:
-            self.thread.join()
+            self.thread.join(timeout=5.0)  # Don't block forever on shutdown
+            if self.thread.is_alive():
+                logger.warning(f"Stream thread for camera {self.camera_id} did not stop cleanly")
         self.cap.release()
-        # cv2.destroyAllWindows()
-
-    def __enter__(self) -> "StreamHandler":
-        """Context manager entry method.
-
-        Returns:
-            Started StreamHandler instance
-        """
-        return self.start()
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        """Context manager exit method that ensures resources are properly released."""
-        self.stop()
