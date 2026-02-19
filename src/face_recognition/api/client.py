@@ -1,6 +1,7 @@
 
 """API client for SmartOffice backend integration."""
 
+import base64
 import io
 import time
 from datetime import datetime, timezone
@@ -86,165 +87,50 @@ class APIClient:
 
         return response
 
-    def _retry_with_backoff(
-        self,
-        request_func,
-        max_retries: int = 3,
-        initial_delay: float = 1.0,
-        backoff_factor: float = 2.0,
-        retry_status_codes: set = {502, 503, 504}
-    ) -> Optional[requests.Response]:
-        """Retry a request with exponential backoff.
-
-        Args:
-            request_func: Function that makes the request
-            max_retries: Maximum number of retry attempts
-            initial_delay: Initial delay in seconds before first retry
-            backoff_factor: Multiplier for delay between retries
-            retry_status_codes: HTTP status codes that should trigger a retry
+    def get_users(self) -> List[Dict[str, Any]]:
+        """Retrieve all users from the API.
 
         Returns:
-            Response object if successful, None otherwise
-        """
-        delay = initial_delay
-        last_exception = None
-
-        for attempt in range(max_retries):
-            try:
-                response = request_func()
-
-                # Handle token expiry
-                response = self._handle_token_expiry(response, request_func)
-
-                # Success
-                if response.status_code in [200, 201]:
-                    return response
-
-                # Retry on specific error codes
-                if response.status_code in retry_status_codes:
-                    if attempt < max_retries - 1:
-                        logger.warning(
-                            f"Request failed with status {response.status_code}, "
-                            f"retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})"
-                        )
-                        time.sleep(delay)
-                        delay *= backoff_factor
-                        continue
-                    else:
-                        logger.error(
-                            f"Request failed with status {response.status_code} "
-                            f"after {max_retries} attempts"
-                        )
-                        return None
-                else:
-                    # Don't retry on other status codes
-                    return response
-
-            except requests.exceptions.Timeout as e:
-                last_exception = e
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        f"Request timed out, retrying in {delay:.1f}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    time.sleep(delay)
-                    delay *= backoff_factor
-                    continue
-                else:
-                    logger.error(f"Request timed out after {max_retries} attempts: {e}")
-                    return None
-
-            except requests.exceptions.RequestException as e:
-                last_exception = e
-                logger.error(f"Request failed with exception: {e}")
-                return None
-
-        return None
-
-    def _is_location_circuit_breaker_open(self) -> bool:
-        """Check if the circuit breaker for location API is open.
-
-        Returns:
-            True if circuit breaker is open (should not attempt requests), False otherwise
-        """
-        current_time = time.time()
-
-        # Check if circuit breaker is open
-        if current_time < self._location_circuit_breaker_open_until:
-            return True
-
-        # Circuit breaker timeout has passed, reset and allow retry
-        if self._location_circuit_breaker_open_until > 0:
-            logger.info("Location API circuit breaker timeout passed, attempting to reconnect")
-            self._location_circuit_breaker_failures = 0
-            self._location_circuit_breaker_open_until = 0
-
-        return False
-
-    def _record_location_failure(self):
-        """Record a failure for the location API circuit breaker."""
-        self._location_circuit_breaker_failures += 1
-
-        if self._location_circuit_breaker_failures >= self._location_circuit_breaker_threshold:
-            self._location_circuit_breaker_open_until = (
-                time.time() + self._location_circuit_breaker_timeout
-            )
-            logger.warning(
-                f"Location API circuit breaker opened after {self._location_circuit_breaker_failures} "
-                f"consecutive failures. Will retry after {self._location_circuit_breaker_timeout}s"
-            )
-
-    def _record_location_success(self):
-        """Record a success for the location API circuit breaker."""
-        if self._location_circuit_breaker_failures > 0:
-            logger.info("Location API recovered, resetting circuit breaker")
-        self._location_circuit_breaker_failures = 0
-        self._location_circuit_breaker_open_until = 0
-
-    def get_org_unique_id(self) -> Optional[str]:
-        """Fetch the unique_id of the organization matching this client's slug.
-
-        Returns:
-            The organization's unique_id if found, None otherwise
+            List of user dictionaries with 'name' and 'id' fields
         """
         if not self.auth.is_authenticated():
             logger.error("Not authenticated")
-            return None
+            return []
 
-        url = f"{self.base_url}/organizations"
+        url = f"{self.base_url}/org/{self.client_slug}/users"
 
         def make_request():
-            headers = {
-                "Authorization": f"Bearer {self.token}",
-                "Accept": "application/json",
-            }
-            return self.session.get(url, headers=headers, timeout=10)
+            return self.session.get(
+                url,
+                params={"status": "active"}
+            )
 
         try:
             response = make_request()
             response = self._handle_token_expiry(response, make_request)
-            response.raise_for_status()
+
+            if response.status_code == 200:
+                users = response.json()
+                return [
+                    {
+                        'name': user.get('full_name'),
+                        'id': user.get('id')
+                    }
+                    for user in users
+                    if user.get('full_name') and user.get('id')
+                ]
+            elif response.status_code == 404:
+                logger.warning("No users found in the database")
+                return []
+            else:
+                logger.error(
+                    f"Error fetching users: {response.status_code} - {response.text}"
+                )
+                return []
+
         except Exception as e:
-            logger.warning(f"[get_org_unique_id] Request failed: {e}")
-            return None
-
-        try:
-            data = response.json()
-        except ValueError:
-            logger.warning("[get_org_unique_id] Invalid JSON response")
-            return None
-
-        unique_id = next(
-            (org["unique_id"] for org in data if org.get("slug") == self.client_slug),
-            None
-        )
-
-        if not unique_id:
-            logger.warning(
-                f"[get_org_unique_id] No organization found for slug '{self.client_slug}'"
-            )
-
-        return unique_id
+            logger.error(f"Error fetching users: {e}")
+            return []
 
     def get_all_users(
         self,
@@ -390,7 +276,7 @@ class APIClient:
             user_id: ID of the user to create record for
             status: Either 'IN' or 'OUT'
             camera_id: ID of the camera that detected the person
-            proof_image: Optional recognized frame image (numpy array)
+            proof_image: Optional annotated frame with person bbox as proof
 
         Returns:
             Response object if successful, None otherwise
@@ -419,26 +305,35 @@ class APIClient:
             "source": "auto"
         }
 
-        if camera_id is not None:
-            data["camera_id"] = str(camera_id)
+        # Encode proof_image if provided
+        encoded_image = None
+        if proof_image is not None and proof_image.size > 0:
+            success, encoded = cv2.imencode('.jpg', proof_image)
+            if success:
+                encoded_image = encoded
+            else:
+                logger.warning("Failed to encode proof_image, sending record without image")
 
         def make_request():
-            headers = {"Authorization": f"Bearer {self.token}"}
-
-            # If proof_image is provided, send as multipart/form-data
-            if proof_image is not None and proof_image.size > 0:
-                success, encoded_image = cv2.imencode('.jpg', proof_image)
-                if not success:
-                    logger.error("Proof image encoding failed")
-                    return self.session.post(url, data=data, headers=headers)
-
+            if encoded_image is not None:
+                # Send as multipart/form-data with image file
+                headers = {"Authorization": f"Bearer {self.token}"}
                 files = [
-                    ('proof_image', ('proof_image.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg'))
+                    ('proof_image', ('proof.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg')),
                 ]
-                return self.session.post(url, data=data, files=files, headers=headers)
+                return self.session.post(
+                    f"{self.base_url}/org/{self.client_slug}/attendance-records",
+                    data=record_data,
+                    files=files,
+                    headers=headers
+                )
             else:
-                # Send without image
-                return self.session.post(url, data=data, headers=headers)
+                # Send as JSON without image
+                return self.session.post(
+                    f"{self.base_url}/org/{self.client_slug}/attendance-records",
+                    json=record_data,
+                    headers={"Content-Type": "application/json"}
+                )
 
         try:
             response = make_request()
@@ -461,14 +356,16 @@ class APIClient:
         self,
         face: np.ndarray,
         status: str,
-        camera_id: Optional[int] = None
+        camera_id: Optional[int] = None,
+        notes: Optional[str] = None
     ) -> Optional[requests.Response]:
         """Send unrecognized face image to the API.
 
         Args:
             face: Detected face image (numpy array)
             status: Status of the user ('IN' or 'OUT')
-            camera_id: ID of the camera that detected the unrecognized face
+            camera_id: Optional camera ID that detected the face
+            notes: Optional notes about the detection
 
         Returns:
             Response object if successful, None otherwise
@@ -492,8 +389,11 @@ class APIClient:
             'user_status': status.lower()
         }
 
+        # Add optional fields if provided
         if camera_id is not None:
-            data['camera_id'] = str(camera_id)
+            data['camera_id'] = camera_id
+        if notes:
+            data['notes'] = notes
 
         if face is None or face.size == 0:
             logger.warning("No face detected to send")
@@ -529,12 +429,158 @@ class APIClient:
             logger.error(f"Send unrecognized face request failed: {str(e)}")
             return None
 
+    def send_activities(
+        self,
+        activity_type: str,
+        camera_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+        proof_image: Optional[np.ndarray]=None,
+
+    ) -> Optional[requests.Response]:
+        """Send activity to the API.
+
+        Args:
+            face: Detected face image (numpy array)
+            status: Status of the user ('IN' or 'OUT')
+            camera_id: Optional camera ID that detected the face
+            notes: Optional notes about the detection
+
+        Returns:
+            Response object if successful, None otherwise
+        """
+        if not self.auth.is_authenticated():
+            logger.critical("Not authenticated. Please login first.")
+            return None
+
+        activity_type = activity_type.lower()
+        if activity_type not in ['phone_usage', 'sleeping', 'not_focusing','talking', 'working','unknown']:
+            logger.warning(
+                f"Invalid status '{activity_type}'. Activity type must be in range of 'phone_usage', 'sleeping', 'not_focusing','talking', 'working' or 'unknown'"
+            )
+            return None
+
+        url = self.base_url + f'/org/{self.client_slug}/activities'
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        data = {
+            'user_id': user_id,
+            'activity_type': activity_type,
+            'timestamp': timestamp,
+            'metadata': '{}'
+        }
+
+        # Add optional fields if provided
+        if confidence_score is not None:
+            data['confidence_score'] = confidence_score
+        if camera_id is not None:
+            data['camera_id'] = camera_id
+
+        # Log the exact payload being sent
+        logger.info(f"API Request Details: activity_type='{activity_type}' (len={len(activity_type)}), user_id={user_id} (type={type(user_id).__name__}), camera_id={camera_id}")
+        logger.debug(f"Full data payload: {data}")
+
+        image = True
+        if proof_image is None or proof_image.size == 0:
+            image = False
+        if image:
+            success, encoded_image = cv2.imencode('.jpg', proof_image)
+            if not success:
+                logger.error("Image encoding failed")
+                return None
+
+        def make_request():
+            headers = {'Authorization': f'Bearer {self.token}'}
+            # Prepare file payload - create fresh BytesIO for each retry
+            # Always send as multipart/form-data (matching API expectation)
+            if image:
+                files = [
+                    ('proof_image', ('proof.jpg', io.BytesIO(encoded_image.tobytes()), 'image/jpeg')),
+                ]
+            else:
+                # Send empty file to maintain multipart/form-data format
+                files = [
+                    ('proof_image', ('', io.BytesIO(b''), 'application/octet-stream')),
+                ]
+
+            logger.debug(f"POST {url} with data keys: {list(data.keys())}, has_image: {image}")
+            return requests.post(url, headers=headers, files=files, data=data)
+
+        try:
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
+
+            if response.status_code not in [200, 201]:
+                logger.error(
+                    f"Send {activity_type} failed with status {response.status_code}: "
+                    f"{response.text}"
+                )
+                return None
+
+            return response
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Send {activity_type} request failed: {str(e)}")
+            return None
+
+    def get_user_action(
+        self,
+        image: np.ndarray,
+        vlm_api_url: str = "http://localhost:8001",
+        timeout: int = 30
+    ) -> Optional[Dict[str, Any]]:
+        """Get user action from VLM API.
+
+        Args:
+            image: Person crop image (numpy array, BGR format)
+            vlm_api_url: URL of VLM API service
+            timeout: Request timeout in seconds
+
+        Returns:
+            Dictionary with action result, or None if failed
+            Example: {"action": "using phone", "raw_output": "...", "inference_time_ms": 245}
+        """
+        try:
+            # Encode image to base64
+            success, buffer = cv2.imencode('.jpg', image)
+            if not success:
+                logger.error("Failed to encode image for VLM API")
+                return None
+
+            image_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
+
+            # Prepare request
+            payload = {"image": image_b64}
+            url = f"{vlm_api_url}/api/recognize-action"
+
+            # Send request (no authentication needed for VLM API)
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=timeout,
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.status_code not in [200, 201]:
+                logger.error(
+                    f"VLM API request failed with status {response.status_code}: "
+                    f"{response.text}"
+                )
+                return None
+
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"VLM API request failed: {str(e)}")
+            return None
+
     def get_cameras(self, application: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get cameras from the API, optionally filtered by application.
 
         Args:
             application: Optional filter for camera application type
-                        (e.g., 'attendance')
+                        (e.g., 'attendance', 'unrecognized', 'activity')
+                        Note: Camera application field is a JSONB array
 
         Returns:
             List of camera configuration dictionaries
@@ -556,85 +602,28 @@ class APIClient:
             cameras = response.json()
 
             # Filter by application if specified
+            # Application field is a JSONB array: ["attendance", "unrecognized", "activity"]
             if application:
-                cameras = [
-                    cam for cam in cameras
-                    if application in cam.get('application', [])
-                ]
+                filtered_cameras = []
+                for cam in cameras:
+                    cam_apps = cam.get('application', [])
+                    # Handle both array and legacy string format
+                    if isinstance(cam_apps, list):
+                        if application in cam_apps:
+                            filtered_cameras.append(cam)
+                    elif isinstance(cam_apps, str):
+                        # Legacy format or single string
+                        if cam_apps == application:
+                            filtered_cameras.append(cam)
+                cameras = filtered_cameras
+
+                logger.info(f"Filtered {len(cameras)} camera(s) with application='{application}'")
 
             return cameras
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch cameras: {str(e)}")
             return []
-
-    def get_face_recognition_camera_configs(self) -> Dict[str, List[Any]]:
-        """Fetch and parse camera configurations for face recognition.
-
-        Retrieves cameras with 'attendance' in their application list and parses them
-        into the format required by HBFace initialization.
-
-        Returns:
-            Dictionary containing camera configuration lists with keys:
-            - cam_types: List of camera types (IN/OUT)
-            - video_path: List of stream URLs
-            - camera_name: List of camera names
-            - camera_id: List of camera IDs
-            - match_threshold: List of matching thresholds
-            - roi: List of ROI tuples (or None if no ROIs)
-            - line_points: List of virtual line points (or None if no lines)
-
-        Raises:
-            ValueError: If no cameras found with 'attendance' in application list
-        """
-        # Fetch cameras with 'attendance' in application list
-        cameras = self.get_cameras(application='attendance')
-
-        if not cameras:
-            raise ValueError("No cameras found with 'attendance' in application list")
-
-        # Parse camera configs into HBFace parameters
-        cam_types = []
-        video_paths = []
-        camera_names = []
-        camera_ids = []
-        match_thresholds = []
-        roi_list = []
-        line_points_list = []
-
-        for cam in cameras:
-            # Map API fields to HBFace parameters
-            cam_types.append(cam.get('camera_type', '').upper())
-            camera_ids.append(int(cam.get('id')))
-            camera_names.append(cam.get('name', ''))
-            video_paths.append(cam.get('stream_url', ''))
-            match_thresholds.append(float(cam.get('matching_threshold', 0.5)))
-
-            # Handle optional ROI points: [[x1, y1], [x2, y2]] -> (x1, y1, x2, y2)
-            roi_points = cam.get('roi_points')
-            if roi_points and len(roi_points) >= 2:
-                roi_list.append(tuple(roi_points[0] + roi_points[1]))
-            else:
-                roi_list.append(None)
-
-            # Handle optional virtual line points: [[x1, y1], [x2, y2]]
-            virtual_line = cam.get('virtual_line_points')
-            if virtual_line and len(virtual_line) >= 2:
-                line_points_list.append([tuple(virtual_line[0]), tuple(virtual_line[1])])
-            else:
-                line_points_list.append(None)
-
-        logger.info(f"Loaded {len(cameras)} camera configurations from API")
-
-        return {
-            'cam_types': cam_types,
-            'video_path': video_paths,
-            'camera_name': camera_names,
-            'camera_id': camera_ids,
-            'match_threshold': match_thresholds,
-            'roi': roi_list if any(roi_list) else None,
-            'line_points': line_points_list if any(line_points_list) else None,
-        }
 
     def send_user_location(
         self,
@@ -749,3 +738,4 @@ class APIClient:
         except requests.exceptions.RequestException as e:
             logger.debug(f"API upload request failed: {str(e)}")
             return None
+
