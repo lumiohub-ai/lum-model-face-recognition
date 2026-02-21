@@ -1,46 +1,10 @@
-# Docker Compose configuration for Person Tracking System
-# Usage:
-#   Development: docker compose -f compose.yml -f compose.override.dev.yml up -d
-#   Production:  docker compose -f compose.yml -f compose.override.prod.yml up -d
-
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: person-tracking-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
-      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-db:/docker-entrypoint-initdb.d
-    ports:
-      - "${POSTGRES_PORT:-5434}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-face_recognition} -d ${POSTGRES_DB:-face_embeddings}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: person-tracking-redis
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+  # Ollama - VLM for Action Recognition
   ollama:
     image: ollama/ollama:latest
     container_name: person-tracking-ollama
     ports:
-      - "11435:11434"
+      - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     deploy:
@@ -55,14 +19,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    environment:
-      - OLLAMA_DEBUG=0
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llava:7b}
+    restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -74,81 +31,27 @@ services:
         fi
         wait
 
+  # Main AI Service (Person Tracking + Face Recognition)
   person-tracking:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        - BUILDKIT_INLINE_CACHE=1
+    image: humblebeeintel/person-tracking:dev
     container_name: person-tracking-app
     network_mode: host
+    env_file:
+      - .env
     environment:
-      # Application slug
-      FR_SLUG: ${FR_SLUG:-face-recognition}
-
-      # Client configuration
-      HB_CLIENTSLUG: ${HB_CLIENTSLUG:-default_client}
-
-      # API credentials
-      SA_EMAIL: ${SA_EMAIL}
-      SA_PASSWORD: ${SA_PASSWORD}
-      API_HOST: ${API_HOST:-http://localhost:7091}
-
-      # Camera configuration
-      HB_IN: ${HB_IN:-}
-      HB_OUT: ${HB_OUT:-}
-      HB_IN_MANAGEMENT: ${HB_IN_MANAGEMENT:-}
-
-      # Database configuration
-      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
-      POSTGRES_PORT: ${POSTGRES_PORT:-5434}
-      POSTGRES_USER: ${POSTGRES_USER:-face_recognition}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-face_recognition_pass}
-      POSTGRES_DB: ${POSTGRES_DB:-face_embeddings}
-
-      # Redis configuration
-      REDIS_HOST: ${REDIS_HOST:-localhost}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-
-      # Logging
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-
-      # Backend API (optional)
-      SO_BACKEND_API_URL: ${SO_BACKEND_API_URL:-}
-
-      # Ollama API for action recognition
-      OLLAMA_API_URL: ${OLLAMA_API_URL:-http://localhost:11435}
-
-      # Disable SSL verification for model downloads (InsightFace)
-      REQUESTS_CA_BUNDLE: ""
-      CURL_CA_BUNDLE: ""
-
-      # Suppress FFmpeg verbose logging
-      OPENCV_FFMPEG_LOGLEVEL: "-8"
-      AV_LOG_FORCE_NOCOLOR: "1"
-      MPLCONFIGDIR: /tmp/matplotlib
-
-      # Performance
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+      PYTHONWARNINGS: "ignore::FutureWarning"
     volumes:
-      # Mount .env for configuration
-      - ./.env:/app/face-recognition/.env:ro
-      # Configuration
-      - ./configs:/app/face-recognition/configs:ro
-      # Output storage
-      - ./volumes/storage/person-tracking:/app/face-recognition/volumes/storage/person-tracking
-      # Application logs (CSV metrics, attendance logs)
-      - ./volumes/storage:/app/volumes/storage
-      # Logs
-      - ./logs/person-tracking:/var/log/face-recognition
-      # Model cache (fr-user has write access)
-      - ./volumes/models/insightface:/home/fr-user/.insightface
+      - ./.env:/app/.env:ro
+      - ./src:/app/src
+      - ./configs:/app/configs
+      - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
+      - ./credentials:/app/credentials
+      - ./volumes/models/insightface:/root/.insightface
+      - ./volumes/models/huggingface:/root/.cache/huggingface
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       ollama:
         condition: service_started
     deploy:
@@ -158,21 +61,61 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "pgrep", "-f", "python.*src.main"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+    restart: "no"
+    tty: true
+    stdin_open: true
+
+  # Celery Worker (Embeddings + Detections)
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: humblebeeintel/person-tracking:dev
+    container_name: celery-worker
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./src:/app/src
+      - ./configs:/app/configs
+      - ./credentials:/app/credentials
+      - ./volumes/models/insightface:/root/.insightface
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: celery -A workers.celery_app worker -Q embeddings,detections -l info
+    working_dir: /app/src
+    restart: unless-stopped
+
+  # Flower - Celery Monitoring
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: humblebeeintel/person-tracking:dev
+    container_name: celery-flower
+    network_mode: host
+    environment:
+      CELERY_BROKER_URL: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/0
+      CELERY_RESULT_BACKEND: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/1
+      PYTHONUNBUFFERED: 1
+      PYTHONPATH: /app/src:/app
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      - celery-worker
+    command: celery -A workers.celery_app.celery flower --port=5555
+    working_dir: /app/src
+    restart: unless-stopped
 
 volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
   ollama_data:
     driver: local
-
-networks:
-  default:
-    name: person-tracking-network

@@ -1,0 +1,47 @@
+"""
+MDA Channel Definitions
+
+Commands: Backend -> AI Service (Redis Streams)
+Events: AI Service -> Backend (Redis Pub/Sub)
+"""
+
+# ============================================================
+# COMMANDS (Backend -> AI Service) - Redis Streams
+# ============================================================
+COMMAND_STREAMS = {
+    'EMBEDDING': 'commands:embedding',
+    'CAMERA': 'commands:camera',
+}
+
+
+# ============================================================
+# EVENTS (AI Service -> Backend) - Redis Pub/Sub
+# Ephemeral notifications - data already persisted in DB
+# ============================================================
+EVENT_CHANNELS = {
+    'ATTENDANCE': 'events:attendance',
+    'UNRECOGNIZED': 'events:unrecognized',
+    'ACTIVITY': 'events:activity',
+    'LOCATION': 'events:location',
+    'EMBEDDING': 'events:embedding',
+}
+
+# Event types
+EVENT_TYPES = {
+    'ATTENDANCE_RECORDED': 'AttendanceRecorded',
+    'UNRECOGNIZED_FACE_SAVED': 'UnrecognizedFaceSaved',
+    'ACTIVITY_DETECTED': 'ActivityDetected',
+    'USER_LOCATION_UPDATED': 'UserLocationUpdated',
+    'EMBEDDING_CREATED': 'EmbeddingCreated',
+    'EMBEDDING_FAILED': 'EmbeddingFailed',
+}
+
+
+# ============================================================
+# INTERNAL CHANNELS (AI Service internal communication)
+# Used for notifying camera engine to reload embeddings/status
+# ============================================================
+INTERNAL_CHANNELS = {
+    'EMBEDDING_RELOAD': 'internal:embedding:reload',
+    'STATUS_RELOAD': 'internal:status:reload',
+}

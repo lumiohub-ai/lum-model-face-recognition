@@ -22,7 +22,7 @@ fi
 
 
 ## --- Variables --- ##
-_DEFAULT_SERVICE="${FR_SLUG}"
+_DEFAULT_SERVICE="person-tracking"
 ## --- Variables --- ##
 
 
