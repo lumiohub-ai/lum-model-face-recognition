@@ -2,7 +2,6 @@
 
 import pickle
 import numpy as np
-import cv2
 from sklearn.metrics.pairwise import cosine_similarity
 from typing import Dict, Tuple
 
@@ -30,7 +29,7 @@ class FaceRecognition:
         else:
             self.db_names, self.db_embs = self.load_embeddings()
 
-        self._rebuild_name_index()
+        self._rebuild_name_index()      
 
     def load_embeddings(self):
         """Load face embeddings from the database file (pickle mode).

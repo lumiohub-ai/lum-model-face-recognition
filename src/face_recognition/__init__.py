@@ -9,61 +9,80 @@ This package provides a comprehensive face recognition system with:
 """
 
 from .__version__ import __version__
-from .hbface import HBFace
 from .smart_office_engine import SmartOfficeEngine
 
 # Core components
-from .core import FaceEngine, FaceDetector, FaceTracker, FaceRecognizer, TrackManager
+from .core import FaceDetector, FaceRecognizer, ModelFactory, FrameProcessor
 
 # Configuration
-from .config import ConfigurationManager, SystemConfig
 from .config import constants
 
 # Logging
-from .logging import setup_structured_logging, EntryLogger, CSVLogger
+from .logging import setup_structured_logging, EntryLogger, CSVLogger, SystemMonitor
+
+# Services
+from .services import EmbeddingSyncService, EngineLifecycle
 
 # Storage
-from .storage import Database, CloudStorageManager
+from .storage import PgVectorStore
 
 # Video processing
-from .video import StreamHandler, FrameProcessor
+from .video import StreamHandler, StreamManager
 
 # API
 from .api import APIClient, AuthenticationService
 
+# Startup utilities
+from .startup import (
+    init_smart_office_app,
+    load_config,
+    load_dotenv_if_exists,
+    validate_environment,
+    setup_logging,
+    log_startup_info,
+)
+
 __all__ = [
     # Main entry points
-    "HBFace",
     "SmartOfficeEngine",
 
     # Core
-    "FaceEngine",
     "FaceDetector",
-    "FaceTracker",
     "FaceRecognizer",
-    "TrackManager",
+    "ModelFactory",
+    "FrameProcessor",
 
     # Configuration
-    "ConfigurationManager",
-    "SystemConfig",
     "constants",
 
     # Logging
     "setup_structured_logging",
     "EntryLogger",
     "CSVLogger",
+    "SystemMonitor",
+
+    # Services
+    "EmbeddingSyncService",
+    "EngineLifecycle",
 
     # Storage
-    "Database",
-    "CloudStorageManager",
+    "PgVectorStore",
 
     # Video
     "StreamHandler",
-    "FrameProcessor",
+    "StreamManager",
 
     # API
     "APIClient",
     "AuthenticationService",
+
+    # Startup utilities
+    "init_smart_office_app",
+    "load_config",
+    "load_dotenv_if_exists",
+    "validate_environment",
+    "setup_logging",
+    "log_startup_info",
 
     # Version
     "__version__",

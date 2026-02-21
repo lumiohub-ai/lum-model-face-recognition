@@ -3,7 +3,6 @@
 
 import base64
 import io
-import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,12 +48,6 @@ class APIClient:
 
         if not self.token:
             logger.error("Failed to authenticate with API")
-
-        # Circuit breaker state for location API
-        self._location_circuit_breaker_failures = 0
-        self._location_circuit_breaker_open_until = 0
-        self._location_circuit_breaker_threshold = 5
-        self._location_circuit_breaker_timeout = 60  # seconds
 
     @property
     def session(self) -> requests.Session:
@@ -295,14 +288,11 @@ class APIClient:
         # Generate timestamp in ISO 8601 format with milliseconds
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        url = f"{self.base_url}/org/{self.client_slug}/attendance-records"
-
-        # Prepare form data
-        data = {
-            "user_id": str(user_id),
+        record_data = {
+            "user_id": user_id,
             "status": status.lower(),
-            "timestamp": timestamp,
-            "source": "auto"
+            "camera_id": camera_id,
+            "timestamp": timestamp
         }
 
         # Encode proof_image if provided
@@ -632,7 +622,7 @@ class APIClient:
         timestamp: str,
         status: str
     ) -> Optional[requests.Response]:
-        """Send user location data to the API with retry logic and circuit breaker.
+        """Send user location data to the API.
 
         Args:
             user_name: Full name of the user
@@ -653,13 +643,6 @@ class APIClient:
             )
             return None
 
-        # Check circuit breaker
-        if self._is_location_circuit_breaker_open():
-            logger.debug(
-                f"Location API circuit breaker is open, skipping location update for {user_name}"
-            )
-            return None
-
         url = f"{self.base_url}/org/{self.client_slug}/user-locations"
 
         data = {
@@ -671,25 +654,23 @@ class APIClient:
 
         def make_request():
             headers = {"Authorization": f"Bearer {self.token}"}
-            return self.session.post(url, headers=headers, json=data, timeout=10)
+            return self.session.post(url, headers=headers, json=data)
 
-        # Use retry with exponential backoff
-        response = self._retry_with_backoff(make_request, max_retries=3)
+        try:
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
 
-        if response and response.status_code in [200, 201]:
-            self._record_location_success()
+            if response.status_code not in [200, 201]:
+                logger.error(
+                    f"Send location failed with status {response.status_code}: "
+                    f"{response.text}"
+                )
+                return None
+
             return response
-        else:
-            self._record_location_failure()
-            if response:
-                logger.warning(
-                    f"Failed to send location data for {user_name} "
-                    f"with status {response.status_code}"
-                )
-            else:
-                logger.warning(
-                    f"Failed to send location data for {user_name}"
-                )
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Send location request failed: {str(e)}")
             return None
 
     def upload_annotated_frame(

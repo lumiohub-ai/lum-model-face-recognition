@@ -255,23 +255,17 @@ class EntryLogger:
         if response is None:
             logger.warning(f"Failed to send location data for {name}")
 
-    def send_unrecognized_face(
-        self,
-        face: np.ndarray,
-        status: str,
-        camera_id: Optional[int] = None
-    ) -> Optional[Any]:
+    def send_unrecognized_face(self, face: np.ndarray, status: str) -> Optional[Any]:
         """Send unrecognized face image to the API.
 
         Args:
             face: Detected face image (numpy array)
             status: Status of the user ('IN' or 'OUT')
-            camera_id: ID of the camera that detected the unrecognized face
 
         Returns:
             Response object if successful, None otherwise
         """
-        return self.api_client.send_unrecognized_face(face, status, camera_id)
+        return self.api_client.send_unrecognized_face(face, status)
 
     def save_status_info(self, video_name: str = 'status_info') -> str:
         """Get the path to the status information log file.
