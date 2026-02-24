@@ -84,3 +84,9 @@ global_tracking:
 
     # Cache TTL in seconds
     cache_ttl_sec: 300
+
+  # Cache settings (Memory management for long-running processes)
+  cache:
+    # Maximum cached embeddings before LRU eviction
+    # Increase for systems with more RAM, decrease to save memory
+    max_embeddings: 10000

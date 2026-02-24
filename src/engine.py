@@ -9,19 +9,19 @@ Architecture:
 - Uses ModelFactory for ML model initialization
 - Uses StreamManager for video I/O
 - Uses FrameProcessor for processing logic
-- Uses EngineLifecycle for startup/shutdown
 """
 
 import os
 import time
+import cv2
 from typing import List, Optional
 
 from loguru import logger
 
 # Infrastructure
 from infrastructure.video import StreamManager, FrameAnnotator
-from infrastructure import EngineLifecycle, EntryLogger
-from infrastructure.storage import Repository
+from infrastructure import EntryLogger
+from infrastructure.storage import Repository, EmbeddingSyncService
 
 # Domain
 from domain.face_detection import ModelFactory, FrameProcessor
@@ -59,8 +59,9 @@ class SmartOfficeEngine:
         self.applications = applications or ['attendance']
         self.config = kwargs
 
-        # Lifecycle manager
-        self.lifecycle = EngineLifecycle()
+        # Lifecycle state
+        self._running = False
+        self._start_time = 0.0
 
         # Initialize repository for database access
         self.repository = Repository(client_slug)
@@ -84,14 +85,10 @@ class SmartOfficeEngine:
         self.models.initialize_all()
 
         # Sync embeddings on startup
-        self.lifecycle.sync_embeddings_on_startup(
-            client_slug=client_slug,
-            face_recognizer=self.models.face_recognizer,
-            config=self.config
-        )
+        self._sync_embeddings_on_startup()
 
         # Build name-to-ID mapping for activity tracking
-        self.name_to_id_map = self.lifecycle.build_name_to_id_map(client_slug)
+        self.name_to_id_map = self._build_name_to_id_map()
 
         # Initialize stream manager
         self.stream_manager = StreamManager(self.camera_configs)
@@ -120,9 +117,6 @@ class SmartOfficeEngine:
 
         # Display settings
         self.show_display = kwargs.get('show', False)
-
-        # Set up signal handlers
-        self.lifecycle.setup_signal_handlers(self._stop)
 
         logger.info(f"SmartOfficeEngine initialized with {len(self.camera_configs)} camera(s)")
 
@@ -156,13 +150,14 @@ class SmartOfficeEngine:
 
         return EntryLogger(args=args)
 
-    def _stop(self) -> None:
+    def stop(self) -> None:
         """Stop the engine (signal handler callback)."""
-        self.lifecycle.mark_stopped()
+        self._running = False
 
     def run(self) -> None:
         """Run the main processing loop."""
-        self.lifecycle.mark_started()
+        self._running = True
+        self._start_time = time.time()
         last_metrics_log_time = time.time()
         last_validation_time = time.time()
         metrics_log_interval = 60.0
@@ -173,7 +168,7 @@ class SmartOfficeEngine:
         logger.info("SmartOfficeEngine started")
 
         try:
-            while self.lifecycle.running:
+            while self._running:
                 # Read frames from all cameras
                 frames = self.stream_manager.read_all_frames()
 
@@ -281,6 +276,19 @@ class SmartOfficeEngine:
             # Reload person status from API (fixes cache/database mismatch)
             self.entry_logger.reload_status()
 
+            # Refresh name-to-ID mapping for new/updated users
+            self.name_to_id_map = self._build_name_to_id_map()
+
+            # Update camera engines with new mapping
+            for engine in self.camera_engines:
+                engine.name_to_id_map = self.name_to_id_map
+
+            # Update entry logger's name_to_id
+            self.entry_logger.name_to_id = [
+                {'name': name, 'id': user_id}
+                for name, user_id in self.name_to_id_map.items()
+            ]
+
             logger.info(f"Face embeddings reloaded: {len(self.models.face_recognizer.db_names)} users")
             return True
 
@@ -290,13 +298,125 @@ class SmartOfficeEngine:
 
     def _cleanup(self) -> None:
         """Clean up resources."""
+        logger.info("Shutting down SmartOfficeEngine...")
+
+        # Log final global tracking metrics
+        if self.models.global_track_manager and self.models.global_track_manager.enabled:
+            self._log_final_metrics()
+
         # Stop action recognizer workers
         self.models.cleanup()
 
-        self.lifecycle.cleanup(
-            stream_manager=self.stream_manager,
-            global_track_manager=self.models.global_track_manager,
-            entry_logger=self.entry_logger,
-            show_display=self.show_display,
-            total_frames=self.frame_processor.total_frames
+        # Stop streams and writers
+        self.stream_manager.cleanup()
+
+        # Close display windows
+        if self.show_display:
+            cv2.destroyAllWindows()
+
+        # Save entry logger status
+        self.entry_logger.save_status_info()
+
+        # Log final stats
+        self._log_final_stats()
+
+        logger.info("SmartOfficeEngine shutdown complete")
+
+    def _sync_embeddings_on_startup(self) -> bool:
+        """Sync missing embeddings on startup.
+
+        Returns:
+            True if sync successful, False otherwise
+        """
+        try:
+            logger.info("=" * 80)
+            logger.info("STARTUP EMBEDDING SYNC")
+            logger.info("=" * 80)
+
+            # Initialize sync service
+            sync_service = EmbeddingSyncService(
+                client_slug=self.client_slug,
+                gpu_id=0,
+                config=self.config
+            )
+
+            # Run sync
+            result = sync_service.sync_missing_embeddings()
+
+            if result.get('success'):
+                users_processed = result.get('users_processed', 0)
+                embeddings_added = result.get('embeddings_added', 0)
+
+                if users_processed > 0:
+                    logger.info(
+                        f"Startup sync complete: {users_processed} users processed, "
+                        f"{embeddings_added} embeddings added"
+                    )
+                    self.models.face_recognizer.reload_embeddings()
+                    logger.info("Face recognizer reloaded with new embeddings")
+                else:
+                    logger.info("No missing embeddings - database is up to date")
+
+                logger.info("=" * 80)
+                return True
+            else:
+                logger.error(f"Startup sync failed: {result.get('error')}")
+                logger.info("=" * 80)
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to sync embeddings on startup: {e}")
+            logger.warning("Continuing with existing embeddings...")
+            return False
+
+    def _build_name_to_id_map(self) -> dict:
+        """Build mapping of user names to IDs from database.
+
+        Returns:
+            Dictionary mapping name -> user_id
+        """
+        try:
+            users = self.repository.get_user_name_to_id()
+            name_map = {}
+
+            for user in users:
+                name = user.get('name')
+                user_id = user.get('id')
+                if name and user_id:
+                    name_map[name] = user_id
+
+            logger.info(f"Built name-to-ID mapping for {len(name_map)} users")
+            return name_map
+
+        except Exception as e:
+            logger.warning(f"Failed to build name-to-ID map: {e}")
+            return {}
+
+    def _log_final_metrics(self) -> None:
+        """Log final global tracking metrics."""
+        logger.info("=" * 80)
+        logger.info("PHASE 0 - FINAL BASELINE METRICS")
+        logger.info("=" * 80)
+
+        self.models.global_track_manager.log_baseline_summary()
+
+        metrics = self.models.global_track_manager.get_baseline_metrics()
+        logger.info(f"Total tracks created: {metrics['total_tracks_created']}")
+        logger.info(f"Total tracks removed: {metrics['total_tracks_removed']}")
+        logger.info(f"Average track duration: {metrics['avg_track_duration_sec']:.1f}s")
+        logger.info(f"Face visibility rate: {metrics['face_visibility_rate']:.1%}")
+        logger.info(f"Faces detected: {metrics['total_faces_detected']}")
+        logger.info(f"Faces not visible: {metrics['total_faces_not_visible']}")
+        logger.info("=" * 80)
+
+    def _log_final_stats(self) -> None:
+        """Log final processing statistics."""
+        elapsed = time.time() - self._start_time if self._start_time > 0 else 0
+        total_frames = self.frame_processor.total_frames
+        fps = total_frames / elapsed if elapsed > 0 else 0
+
+        logger.info(
+            f"Final Stats | Frames: {total_frames} | "
+            f"Avg FPS: {fps:.1f} | "
+            f"Total Runtime: {elapsed:.0f}s"
         )

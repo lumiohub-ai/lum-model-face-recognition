@@ -1,8 +1,22 @@
-"""Database configuration and connection management for pgvector."""
+"""Database configuration and connection management for pgvector.
+
+IMPORTANT: DatabaseConfig uses Singleton pattern to ensure only ONE database
+connection pool is created per application instance. This prevents:
+- Multiple connection pools consuming excessive resources
+- Connection pool exhaustion
+- Duplicate initialization logging
+
+Usage:
+    # Always use get_instance() instead of __init__
+    db_config = DatabaseConfig.get_instance()
+"""
 
 import os
+import threading
+from typing import Generator
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import QueuePool
+from sqlalchemy.engine import Connection
 from contextlib import contextmanager
 from loguru import logger
 
@@ -10,14 +24,35 @@ from .validators import validate_client_slug, validate_schema_name
 
 
 class DatabaseConfig:
-    """PostgreSQL database configuration with pgvector support."""
+    """PostgreSQL database configuration with pgvector support (Singleton)."""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls) -> 'DatabaseConfig':
+        """Singleton pattern - prevent direct instantiation.
+
+        Users should call DatabaseConfig.get_instance() instead.
+        """
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
 
     def __init__(self):
         """Initialize database configuration from environment variables.
 
+        Only runs once due to Singleton pattern.
+
         Raises:
             ValueError: If required environment variables are not set
         """
+        # Prevent re-initialization
+        if self._initialized:
+            return
+
         self.host = os.getenv('POSTGRES_HOST', 'localhost')
         self.port = int(os.getenv('POSTGRES_PORT', 5433))
         self.user = os.getenv('POSTGRES_USER', 'face_recognition')
@@ -48,7 +83,35 @@ class DatabaseConfig:
             pool_recycle=3600,   # Recycle connections after 1 hour
         )
 
-        logger.info(f"Database configured: {self.host}:{self.port}/{self.database}")
+        # SECURITY: Log connection info WITHOUT password
+        logger.info(f"✅ Database connection pool initialized: {self.user}@{self.host}:{self.port}/{self.database}")
+
+        self._initialized = True
+
+    @classmethod
+    def get_instance(cls) -> 'DatabaseConfig':
+        """Get the singleton instance of DatabaseConfig.
+
+        This is the recommended way to access DatabaseConfig.
+
+        Returns:
+            DatabaseConfig: The singleton instance
+        """
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @property
+    def safe_connection_string(self) -> str:
+        """Get connection string with password masked for logging.
+
+        Returns:
+            Connection string with password replaced by asterisks
+        """
+        return (
+            f"postgresql://{self.user}:****@"
+            f"{self.host}:{self.port}/{self.database}"
+        )
 
     def test_connection(self) -> bool:
         """Test database connection.
@@ -185,7 +248,7 @@ class DatabaseConfig:
             raise
 
     @contextmanager
-    def get_connection(self):
+    def get_connection(self) -> Generator[Connection, None, None]:
         """Context manager for database connections.
 
         Usage:

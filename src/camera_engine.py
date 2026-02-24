@@ -403,8 +403,7 @@ class CameraEngine:
             )
 
             # Action recognition (only for locked identities and if 'activity' is enabled in camera application)
-            if (identity_locked and self.action_recognizer and self.action_recognizer.enabled
-                and 'activity' in self.application):
+            if (identity_locked and self.action_recognizer and self.action_recognizer.enabled and 'activity' in self.application):
                 self._check_and_queue_action_recognition(
                     track_id=track_id,
                     identity=identity,
@@ -789,6 +788,7 @@ class CameraEngine:
         current_time = time.time()
         last_check_time = self.last_action_check_per_identity.get(identity, 0.0)
         time_since_last_check = current_time - last_check_time
+
 
         if time_since_last_check < self.action_recognizer.check_interval_seconds:
             return  # Too soon, skip

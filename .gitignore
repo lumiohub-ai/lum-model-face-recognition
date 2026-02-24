@@ -340,12 +340,3 @@ node_modules/
 # Additional files to ignore
 *.legent
 buffalo_l.zip
-
-
-
-/docs/ACTION_RECOGNITION.md
-/docs/QUICKSTART_ACTION_RECOGNITION.md
-/docs/celery.md
-/docs/CELERY.md
-/docs/CELERY_READY.md
-/docs/QUICKSTART_CELERY.md

@@ -27,7 +27,7 @@ from loguru import logger
 def get_db_connection():
     """Get database connection for writing AI-owned data."""
     from infrastructure.storage.db_config import DatabaseConfig
-    return DatabaseConfig()
+    return DatabaseConfig.get_instance()
 
 
 def get_event_publisher(client_slug: str):

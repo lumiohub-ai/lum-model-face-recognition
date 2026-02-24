@@ -1,9 +1,11 @@
 """Face recognition module for comparing face embeddings and identifying people."""
 
-import pickle
+import json
+import os
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple, Any
+from loguru import logger
 
 
 class FaceRecognition:
@@ -29,24 +31,174 @@ class FaceRecognition:
         else:
             self.db_names, self.db_embs = self.load_embeddings()
 
-        self._rebuild_name_index()      
+        self._rebuild_name_index()
 
-    def load_embeddings(self):
-        """Load face embeddings from the database file (pickle mode).
+    def load_embeddings(self) -> Tuple[List[str], np.ndarray]:
+        """Load face embeddings from the database file (JSON format - secure).
+
+        SECURITY: Uses JSON instead of pickle to prevent arbitrary code execution.
+        Pickle deserialization can execute malicious code embedded in the file.
 
         Returns:
             Tuple containing lists of names and their corresponding face embeddings
+
+        Raises:
+            FileNotFoundError: If database file doesn't exist
+            ValueError: If file format is invalid or corrupted
         """
-        with open(self.args.db_path, 'rb') as f:
+        db_path = self.args.db_path
+
+        # Check file extension to determine format
+        if db_path.endswith('.json'):
+            return self._load_from_json(db_path)
+        elif db_path.endswith('.npz'):
+            return self._load_from_npz(db_path)
+        elif db_path.endswith('.pkl') or db_path.endswith('.pickle'):
+            # SECURITY WARNING: Pickle is deprecated due to RCE vulnerability
+            # Migrate to JSON or NPZ format
+            logger.warning(
+                f"SECURITY WARNING: Loading from pickle file '{db_path}' is deprecated. "
+                "Pickle deserialization can execute arbitrary code. "
+                "Please migrate to JSON (.json) or NumPy (.npz) format."
+            )
+            return self._load_from_pickle_legacy(db_path)
+        else:
+            # Default to JSON for new files
+            return self._load_from_json(db_path)
+
+    def _load_from_json(self, path: str) -> Tuple[List[str], np.ndarray]:
+        """Load embeddings from secure JSON format.
+
+        Args:
+            path: Path to JSON file
+
+        Returns:
+            Tuple of (names, embeddings)
+        """
+        if not os.path.exists(path):
+            logger.warning(f"Embeddings file not found: {path}")
+            return [], np.array([])
+
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # Validate structure
+        if not isinstance(data, dict):
+            raise ValueError(f"Invalid JSON structure in {path}: expected dict")
+
+        db_names = data.get('names', [])
+        embeddings_list = data.get('embeddings', [])
+
+        if not isinstance(db_names, list) or not isinstance(embeddings_list, list):
+            raise ValueError(f"Invalid data types in {path}")
+
+        # Convert embeddings to numpy array
+        db_embs = np.array(embeddings_list, dtype=np.float32) if embeddings_list else np.array([])
+
+        # Process names (remove suffixes)
+        db_names = [name.split('_')[0] for name in db_names]
+
+        logger.info(f"Loaded {len(db_names)} embeddings from JSON: {path}")
+        return db_names, db_embs
+
+    def _load_from_npz(self, path: str) -> Tuple[List[str], np.ndarray]:
+        """Load embeddings from NumPy NPZ format (secure binary).
+
+        Args:
+            path: Path to NPZ file
+
+        Returns:
+            Tuple of (names, embeddings)
+        """
+        if not os.path.exists(path):
+            logger.warning(f"Embeddings file not found: {path}")
+            return [], np.array([])
+
+        # NPZ is safe - it only loads numpy arrays, no code execution
+        data = np.load(path, allow_pickle=False)  # SECURITY: Disable pickle in npz
+
+        db_names = data['names'].tolist() if 'names' in data else []
+        db_embs = data['embeddings'] if 'embeddings' in data else np.array([])
+
+        # Process names (remove suffixes)
+        db_names = [name.split('_')[0] for name in db_names]
+
+        logger.info(f"Loaded {len(db_names)} embeddings from NPZ: {path}")
+        return db_names, db_embs
+
+    def _load_from_pickle_legacy(self, path: str) -> Tuple[List[str], np.ndarray]:
+        """Load embeddings from legacy pickle format (DEPRECATED - security risk).
+
+        SECURITY WARNING: This method exists only for backward compatibility.
+        Pickle can execute arbitrary code during deserialization.
+        Migrate to JSON or NPZ format immediately.
+
+        Args:
+            path: Path to pickle file
+
+        Returns:
+            Tuple of (names, embeddings)
+        """
+        import pickle
+        import hashlib
+
+        if not os.path.exists(path):
+            logger.warning(f"Embeddings file not found: {path}")
+            return [], np.array([])
+
+        # SECURITY: Log file hash for audit trail
+        with open(path, 'rb') as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+        logger.warning(f"Loading pickle file with SHA256: {file_hash}")
+
+        # Load with restricted unpickler would be ideal, but for compatibility we log and proceed
+        with open(path, 'rb') as f:
             data = pickle.load(f)
 
         db_embs = data['embeddings']
         db_names = data['names']
         db_names = [name.split('_')[0] for name in db_names]
 
+        # Encourage migration by logging
+        logger.warning(
+            f"MIGRATION RECOMMENDED: Convert pickle to JSON using: "
+            f"FaceRecognition.convert_pickle_to_json('{path}')"
+        )
+
         return db_names, db_embs
 
-    def load_embeddings_from_pgvector(self):
+    @staticmethod
+    def convert_pickle_to_json(pickle_path: str, json_path: str = None) -> str:
+        """Convert legacy pickle file to secure JSON format.
+
+        Args:
+            pickle_path: Path to existing pickle file
+            json_path: Output JSON path (default: same name with .json extension)
+
+        Returns:
+            Path to created JSON file
+        """
+        import pickle
+
+        if json_path is None:
+            json_path = pickle_path.rsplit('.', 1)[0] + '.json'
+
+        with open(pickle_path, 'rb') as f:
+            data = pickle.load(f)
+
+        # Convert numpy arrays to lists for JSON serialization
+        json_data = {
+            'names': data['names'] if isinstance(data['names'], list) else data['names'].tolist(),
+            'embeddings': data['embeddings'].tolist() if hasattr(data['embeddings'], 'tolist') else data['embeddings']
+        }
+
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f)
+
+        logger.info(f"Converted pickle to JSON: {pickle_path} -> {json_path}")
+        return json_path
+
+    def load_embeddings_from_pgvector(self) -> Tuple[List[str], np.ndarray]:
         """Load face embeddings from pgvector database.
 
         Returns:
