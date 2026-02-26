@@ -178,8 +178,8 @@ class ImageFetcher:
             allowed_gcs_buckets: Optional list of allowed GCS bucket names
             allowed_http_domains: Optional list of allowed HTTP domains
         """
-        self.gcs_credentials = os.getenv('GCS_CREDENTIALS_PATH')
-        self.gcs_bucket = os.getenv('GCS_BUCKET', 'hbai-general-data')
+        self.gcs_credentials = os.getenv('SO_GCS_CREDENTIALS_PATH')
+        self.gcs_bucket = os.getenv('SO_GCS_BUCKET', 'hbai-general-data')
         self.gcs_client = None
 
         # Configure URL validator

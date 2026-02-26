@@ -76,7 +76,7 @@ def send_to_dlq(task_name: str, task_id: str, args: tuple, kwargs: dict,
     import redis
 
     if broker_url is None:
-        broker_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+        broker_url = os.getenv('SO_CELERY_BROKER_URL', 'redis://localhost:6379/0')
 
     dlq_message = {
         'task_name': task_name,

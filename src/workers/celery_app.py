@@ -20,11 +20,11 @@ from kombu import Queue, Exchange
 from loguru import logger
 
 # Get Redis config directly from env (avoids circular import with messaging module)
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_HOST = os.getenv('SO_REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('SO_REDIS_PORT', 6379))
 
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', f'redis://{REDIS_HOST}:{REDIS_PORT}/0')
-CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
+CELERY_BROKER_URL = os.getenv('SO_CELERY_BROKER_URL', f'redis://{REDIS_HOST}:{REDIS_PORT}/0')
+CELERY_RESULT_BACKEND = os.getenv('SO_CELERY_RESULT_BACKEND', f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
 
 # Create Celery app
 celery = Celery(
@@ -76,7 +76,7 @@ celery.conf.update(
 
     # Worker settings
     worker_prefetch_multiplier=1,
-    worker_concurrency=int(os.getenv('CELERY_CONCURRENCY', 2)),
+    worker_concurrency=int(os.getenv('SO_CELERY_CONCURRENCY', 2)),
 
     # Result settings
     result_expires=3600,  # 1 hour

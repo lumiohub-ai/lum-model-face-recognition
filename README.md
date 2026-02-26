@@ -102,32 +102,33 @@ nano .env
 
 ```bash
 # Client/Tenant Configuration
-HB_CLIENTSLUG=your_organization_slug    # Unique organization identifier
+SO_CLIENT_SLUG=your_organization_slug    # Unique organization identifier
 
 # PostgreSQL (pgvector database)
-POSTGRES_HOST=localhost                  # Database host
-POSTGRES_PORT=5432                       # Database port
-POSTGRES_USER=postgres                   # Database user
-POSTGRES_PASSWORD=your_secure_password   # REQUIRED: No default for security
-POSTGRES_DB=smart_office                 # Database name
+SO_POSTGRES_HOST=localhost                  # Database host
+SO_POSTGRES_PORT=5432                       # Database port
+SO_POSTGRES_USER=postgres                   # Database user
+SO_POSTGRES_PASSWORD=your_secure_password   # REQUIRED: No default for security
+SO_POSTGRES_DB=smart_office                 # Database name
 
 # Redis (Message-Driven Architecture)
-REDIS_HOST=localhost                     # Redis host
-REDIS_PORT=6379                          # Redis port
+SO_REDIS_HOST=localhost                     # Redis host
+SO_REDIS_PORT=6379                          # Redis port
 
 # Celery (Task Queue)
-CELERY_BROKER_URL=redis://host
-CELERY_RESULT_BACKEND=redis://host
+SO_CELERY_BROKER_URL=redis://${SO_REDIS_HOST}:${SO_REDIS_PORT}/0
+SO_CELERY_RESULT_BACKEND=redis://${SO_REDIS_HOST}:${SO_REDIS_PORT}/1
 
 # Google Cloud Storage
-GCS_CREDENTIALS_PATH=/path/to/gcs-service-account
-GCS_BUCKET=your-gcs-bucket
+SO_GCS_CREDENTIALS_PATH=/app/credentials/gcs-service-account.json
+SO_GCS_BUCKET=your-gcs-bucket
 
 # Action Recognition (Ollama)
-OLLAMA_API_URL=http://localhost:11434
-OLLAMA_MODEL=gemma3:4b
+SO_OLLAMA_API_URL=http://localhost:11434
+SO_OLLAMA_MODEL=gemma3:4b
 
-LOG_LEVEL=INFO
+# Application Settings
+SO_LOG_LEVEL=INFO
 ```
 
 ### Step 3: Build and Start

@@ -247,9 +247,9 @@ def main() -> None:
         env_file=project_root.parent / '.env',
     )
 
-    client_slug = os.getenv('HB_CLIENTSLUG')
+    client_slug = os.getenv('SO_CLIENT_SLUG')
     if not client_slug:
-        logger.error("HB_CLIENTSLUG environment variable is required")
+        logger.error("SO_CLIENT_SLUG environment variable is required")
         sys.exit(1)
 
     # Log startup information

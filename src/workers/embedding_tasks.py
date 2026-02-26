@@ -19,7 +19,7 @@ IMPORTANT: Tasks use BaseTaskWithRetry for:
 
 import os
 from typing import Dict, Any, Optional
-from celery import shared_task
+from workers.celery_app import celery
 from celery.exceptions import SoftTimeLimitExceeded
 from loguru import logger
 
@@ -94,7 +94,7 @@ def notify_embedding_reload(client_slug: str, user_id: int, action: str):
         logger.warning(f"[Celery] Failed to notify embedding reload: {e}")
 
 
-@shared_task(
+@celery.task(
     bind=True,
     base=BaseTaskWithRetry,
     name='embedding.add_user',
@@ -197,7 +197,7 @@ def _publish_failure_event(client_slug: str, command_id: str, user_id: Any, erro
         logger.error(f"[Celery] Failed to publish error event: {pub_error}")
 
 
-@shared_task(
+@celery.task(
     bind=True,
     base=BaseTaskWithRetry,
     name='embedding.update_user',
@@ -278,7 +278,7 @@ def process_update_user(self, command_id: str, client_slug: str, user_data: Dict
         raise RetryableError(str(e))
 
 
-@shared_task(
+@celery.task(
     bind=True,
     base=BaseTaskWithRetry,
     name='embedding.delete_user',

@@ -20,7 +20,7 @@ Data Ownership:
 import os
 from typing import Dict, Any, Optional
 from datetime import datetime
-from celery import shared_task
+from workers.celery_app import celery
 from loguru import logger
 
 
@@ -47,7 +47,7 @@ def get_schema_name(client_slug: str) -> str:
 # ATTENDANCE TASK
 # =============================================================================
 
-@shared_task(bind=True, name='detection.record_attendance', queue='detections', max_retries=3)
+@celery.task(bind=True, name='detection.record_attendance', queue='detections', max_retries=3)
 def task_record_attendance(
     self,
     client_slug: str,
@@ -147,7 +147,7 @@ def task_record_attendance(
 # UNRECOGNIZED FACE TASK
 # =============================================================================
 
-@shared_task(bind=True, name='detection.save_unrecognized', queue='detections', max_retries=3)
+@celery.task(bind=True, name='detection.save_unrecognized', queue='detections', max_retries=3)
 def task_save_unrecognized_face(
     self,
     client_slug: str,
@@ -247,7 +247,7 @@ def task_save_unrecognized_face(
 # ACTIVITY TASK
 # =============================================================================
 
-@shared_task(bind=True, name='detection.record_activity', queue='detections', max_retries=3)
+@celery.task(bind=True, name='detection.record_activity', queue='detections', max_retries=3)
 def task_record_activity(
     self,
     client_slug: str,
@@ -346,7 +346,7 @@ def task_record_activity(
 # USER LOCATION TASK
 # =============================================================================
 
-@shared_task(bind=True, name='detection.update_user_location', queue='detections', max_retries=3)
+@celery.task(bind=True, name='detection.update_user_location', queue='detections', max_retries=3)
 def task_update_user_location(
     self,
     client_slug: str,

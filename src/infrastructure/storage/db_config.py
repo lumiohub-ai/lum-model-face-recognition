@@ -53,19 +53,19 @@ class DatabaseConfig:
         if self._initialized:
             return
 
-        self.host = os.getenv('POSTGRES_HOST', 'localhost')
-        self.port = int(os.getenv('POSTGRES_PORT', 5433))
-        self.user = os.getenv('POSTGRES_USER', 'face_recognition')
+        self.host = os.getenv('SO_POSTGRES_HOST', 'localhost')
+        self.port = int(os.getenv('SO_POSTGRES_PORT', 5433))
+        self.user = os.getenv('SO_POSTGRES_USER', 'face_recognition')
 
         # SECURITY: Require password to be explicitly set (no default)
-        self.password = os.getenv('POSTGRES_PASSWORD')
+        self.password = os.getenv('SO_POSTGRES_PASSWORD')
         if not self.password:
             raise ValueError(
-                "POSTGRES_PASSWORD environment variable is required. "
+                "SO_POSTGRES_PASSWORD environment variable is required. "
                 "Please set a secure password in your environment."
             )
 
-        self.database = os.getenv('POSTGRES_DB', 'face_embeddings')
+        self.database = os.getenv('SO_POSTGRES_DB', 'face_embeddings')
 
         # Build connection string
         self.connection_string = (
