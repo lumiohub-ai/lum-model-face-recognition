@@ -19,7 +19,6 @@ from .track_manager import TrackManager
 from .recognizer import FaceRecognition  # FaceRecognition is the class name in recognizer.py
 from .deduplicator import UnknownDeduplicator
 from .filter_metrics import FilterMetrics
-from ..services.redis_pubsub import RedisSubscriber
 
 
 class FaceEngine:
@@ -68,18 +67,6 @@ class FaceEngine:
             f"{self.face_recognition.args.db_path}"
         )
 
-        # Start Redis subscriber for real-time embedding updates
-        self.redis_subscriber = None
-        if getattr(args, 'use_pgvector', False):
-            try:
-                self.redis_subscriber = RedisSubscriber(
-                    client_slug=self.client_slug,
-                    on_update=self._on_embedding_update
-                )
-                self.redis_subscriber.start()
-            except Exception as e:
-                args.logger.warning(f"Failed to start Redis subscriber: {e}")
-
         # Initialize temporal deduplicator for unknown faces
         cache_ttl = getattr(args, 'dedup_cache_ttl_seconds', 300)
         similarity_threshold = getattr(args, 'dedup_similarity_threshold', 0.85)
@@ -113,26 +100,6 @@ class FaceEngine:
         )
         if not os.path.exists(self.data_collection_path):
             os.makedirs(self.data_collection_path)
-
-    def _on_embedding_update(self, action: str, user_name: str) -> None:
-        """Callback for Redis embedding update events.
-
-        Args:
-            action: Action type ('add_user', 'update_user', 'delete_user')
-            user_name: Name of the user affected
-        """
-        try:
-            self.args.logger.info(f"🔄 Reloading embeddings due to {action} for {user_name}")
-
-            # Reload embeddings from pgvector database
-            self.face_recognition.reload_embeddings()
-
-            self.args.logger.info(
-                f"✅ Embeddings reloaded successfully. "
-                f"Total: {len(self.face_recognition.db_embs)}"
-            )
-        except Exception as e:
-            self.args.logger.error(f"❌ Failed to reload embeddings: {e}")
 
     def _setup_filter_logging(self) -> None:
         """Setup logging for filter decisions."""
@@ -335,20 +302,6 @@ class FaceEngine:
                     self.face_recognition.db_embs, [emb], axis=0
                 )
 
-                # Save to pgvector database if enabled
-                if self.face_recognition.use_pgvector and self.face_recognition.pgvector_store:
-                    try:
-                        self.face_recognition.pgvector_store.add_embedding(
-                            user_id=user.get('id', user['name']),
-                            user_name=user['name'],
-                            image_url=user.get('image_path', ''),
-                            embedding=emb,
-                            external_id=user.get('external_id'),
-                            metadata={'source': 'backend_sync'}
-                        )
-                    except Exception as e:
-                        self.args.logger.error(f"Failed to save embedding to pgvector: {e}")
-
             self.args.logger.info(
                 f"Added {user['name']} to the database with {len(embedding)} images."
             )
@@ -365,13 +318,6 @@ class FaceEngine:
                 self.face_recognition.db_embs = np.delete(
                     self.face_recognition.db_embs, index, axis=0
                 )
-
-                # Delete from pgvector database if enabled
-                if self.face_recognition.use_pgvector and self.face_recognition.pgvector_store:
-                    try:
-                        self.face_recognition.pgvector_store.delete_user_embeddings(name)
-                    except Exception as e:
-                        self.args.logger.error(f"Failed to delete from pgvector: {e}")
 
                 # Rebuild index after deletion
                 self.face_recognition._rebuild_name_index()

@@ -1,0 +1,23 @@
+# Minimal requirements for R&D pipeline (no production deps)
+# Install with: pip install -r requirements.rnd.txt
+
+# Core
+numpy
+opencv-python-headless
+PyYAML
+loguru
+scikit-learn
+tqdm
+
+# Face detection / tracking
+onnxruntime-gpu   # swap for onnxruntime if no GPU
+# InsightFace is installed from local submodule, see setup below
+
+# Tracking
+lap
+filterpy
+shapely
+
+# Misc
+pytz
+psutil

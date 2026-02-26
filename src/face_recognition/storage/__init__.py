@@ -1,9 +1,5 @@
-"""Data storage components for face embeddings and cloud storage."""
+"""Data storage components for face embeddings."""
 
 from .database import Database
-from .cloud_storage import CloudStorageManager
 
-__all__ = [
-    "Database",
-    "CloudStorageManager",
-]
+__all__ = ["Database"]

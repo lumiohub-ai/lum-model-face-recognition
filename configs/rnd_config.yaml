@@ -14,13 +14,12 @@ minimum_face_size: 50
 max_track_lifetime_seconds: 30
 
 videos:
-  - path: "data/videos/sample1.mp4"
-    annotation: "data/annotations/sample1.json"
-    camera_name: "cam1"
+  - path: "volumes/src/datset/chockpoint/P1E_S1/P1E_S1_C1"
+    annotation: "volumes/src/annotation/chockpoint/P1E/P1E_S1/P1E_S1_C1.json"
+    camera_name: "P1E_S1_C1"
     cam_type: "IN"
 
-  # Add more videos below:
-  # - path: "data/videos/sample2.mp4"
-  #   annotation: "data/annotations/sample2.json"
-  #   camera_name: "cam2"
-  #   cam_type: "IN"
+  - path: "volumes/src/datset/chockpoint/P1E_S1/P1E_S1_C3"
+    annotation: "volumes/src/annotation/chockpoint/P1E/P1E_S1/P1E_S1_C3.json"
+    camera_name: "P1E_S1_C3"
+    cam_type: "IN"

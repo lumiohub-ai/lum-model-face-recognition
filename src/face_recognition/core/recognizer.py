@@ -20,16 +20,7 @@ class FaceRecognition:
             args: Configuration arguments containing parameters for face recognition
         """
         self.args = args
-        self.use_pgvector = getattr(args, 'use_pgvector', False)
-        self.pgvector_store = None
-
-        if self.use_pgvector:
-            from ..storage.pgvector_store import PgVectorStore
-            self.pgvector_store = PgVectorStore(args.client_slug)
-            self.db_names, self.db_embs = self.load_embeddings_from_pgvector()
-        else:
-            self.db_names, self.db_embs = self.load_embeddings()
-
+        self.db_names, self.db_embs = self.load_embeddings()
         self._rebuild_name_index()
 
     def load_embeddings(self):
@@ -46,17 +37,6 @@ class FaceRecognition:
         db_names = [name.split('_')[0] for name in db_names]
 
         return db_names, db_embs
-
-    def load_embeddings_from_pgvector(self):
-        """Load face embeddings from pgvector database.
-
-        Returns:
-            Tuple containing lists of names and their corresponding face embeddings
-        """
-        names, embeddings = self.pgvector_store.get_all_embeddings()
-        # Names already processed by pgvector_store
-        self.args.logger.info(f"Loaded {len(names)} embeddings from pgvector")
-        return names, embeddings
 
     def _rebuild_name_index(self) -> None:
         """Rebuild the name-to-index mapping for O(1) lookups.
@@ -79,14 +59,7 @@ class FaceRecognition:
         return self.name_to_index.get(name)
 
     def update_pkl(self):
-        """Update the pickle file with the current embeddings and names.
-
-        Note: This method is deprecated when using pgvector mode.
-        """
-        if self.use_pgvector:
-            self.args.logger.warning("update_pkl() called in pgvector mode - ignoring")
-            return
-
+        """Update the pickle file with the current embeddings and names."""
         data = {
             'embeddings': self.db_embs,
             'names': self.db_names
@@ -96,15 +69,8 @@ class FaceRecognition:
         self.args.logger.info(f"Updated {self.args.db_path} with {len(self.db_embs)} embeddings")
 
     def reload_embeddings(self):
-        """Reload embeddings from storage (pgvector or pickle).
-
-        This method can be called to refresh the in-memory embeddings cache.
-        """
-        if self.use_pgvector:
-            self.db_names, self.db_embs = self.load_embeddings_from_pgvector()
-        else:
-            self.db_names, self.db_embs = self.load_embeddings()
-
+        """Reload embeddings from pickle file into memory."""
+        self.db_names, self.db_embs = self.load_embeddings()
         self._rebuild_name_index()
         self.args.logger.info(f"Reloaded {len(self.db_embs)} embeddings")
 

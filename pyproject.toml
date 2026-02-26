@@ -33,4 +33,4 @@ namespaces = false
 
 [tool.setuptools.dynamic]
 version = { attr = "face_recognition.__version__.__version__" }
-dependencies = { file = "./requirements.txt" }
+dependencies = { file = "./requirements.rnd.txt" }

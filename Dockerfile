@@ -49,7 +49,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=private \
 	/opt/conda/condabin/conda install -y python=${PYTHON_VERSION} pip && \
 	/opt/conda/bin/pip install --timeout 60 -U pip
 
-COPY setup.py setup.cfg pyproject.toml requirements.txt ./
+COPY setup.py setup.cfg pyproject.toml requirements.rnd.txt ./
 COPY src ./src
 COPY modules ./modules
 
@@ -75,7 +75,7 @@ RUN --mount=type=cache,target=/root/.cache,sharing=locked \
     /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/insightface && \
     /opt/conda/bin/pip install --timeout 1200 --retries 5 ./modules/yolo_tracking && \
     /opt/conda/bin/pip install --timeout 1200 --retries 5 . && \
-    /opt/conda/bin/pip install --timeout 1200 --retries 5 -r ./requirements.txt
+    /opt/conda/bin/pip install --timeout 1200 --retries 5 -r ./requirements.rnd.txt
 ## Here is the base image:
 FROM ${BASE_IMAGE} AS base
 

@@ -79,19 +79,6 @@ CONCAT_FRAME_HEIGHT = 720
 FPS_CALCULATION_WINDOW = 30
 
 # ============================================================================
-# API Constants
-# ============================================================================
-
-# Default API timeout in seconds
-DEFAULT_API_TIMEOUT = 30
-
-# Maximum retry attempts for API calls
-MAX_API_RETRY_ATTEMPTS = 3
-
-# Retry delay (exponential backoff base in seconds)
-API_RETRY_BASE_DELAY = 1
-
-# ============================================================================
 # Storage Constants
 # ============================================================================
 

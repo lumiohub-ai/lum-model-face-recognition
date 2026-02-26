@@ -1,0 +1,23 @@
+services:
+  face-recognition:
+    image: humblebeeintel/face-recognition
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    working_dir: /app/face-recognition
+    command: python examples/clients/rnd_main.py
+    environment:
+      - FR_SLUG=face-recognition
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONPATH=/app/face-recognition/src:/app/face-recognition
+      - USE_PGVECTOR=false
+      - PRODUCTION=false
+    volumes:
+      - ./src:/app/face-recognition/src
+      - ./scripts:/app/face-recognition/scripts
+      - ./configs:/app/face-recognition/configs
+      - ./volumes/src:/app/face-recognition/volumes/src
+      - ./volumes/rnd_results:/app/face-recognition/volumes/rnd_results
+      - ./volumes/storage/face-recognition/logs:/app/volumes/storage/face-recognition/logs
+      - ./volumes/storage/face-recognition/data:/app/volumes/storage/face-recognition/data

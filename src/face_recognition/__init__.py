@@ -1,68 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Face Recognition System for SmartOffice.
-
-This package provides a comprehensive face recognition system with:
-- Real-time face detection and tracking
-- Face recognition with embedding-based matching
-- Multi-camera support
-- API integration for attendance tracking
-"""
+"""Face Recognition System — R&D pipeline."""
 
 from .__version__ import __version__
-from .hbface import HBFace
-
-# Core components
 from .core import FaceEngine, FaceDetector, FaceTracker, FaceRecognizer, TrackManager
-
-# Configuration
-from .config import ConfigurationManager, SystemConfig
-from .config import constants
-
-# Logging
-from .logging import setup_structured_logging, EntryLogger, CSVLogger
-
-# Storage
-from .storage import Database, CloudStorageManager
-
-# Video processing
+from .logging import EntryLogger, CSVLogger
+from .storage import Database
 from .video import StreamHandler, FrameProcessor
-
-# API
-from .api import APIClient, AuthenticationService
+from .rnd import RnDRunner
 
 __all__ = [
-    # Main entry point
-    "HBFace",
-
-    # Core
+    "__version__",
     "FaceEngine",
     "FaceDetector",
     "FaceTracker",
     "FaceRecognizer",
     "TrackManager",
-
-    # Configuration
-    "ConfigurationManager",
-    "SystemConfig",
-    "constants",
-
-    # Logging
-    "setup_structured_logging",
     "EntryLogger",
     "CSVLogger",
-
-    # Storage
     "Database",
-    "CloudStorageManager",
-
-    # Video
     "StreamHandler",
     "FrameProcessor",
-
-    # API
-    "APIClient",
-    "AuthenticationService",
-
-    # Version
-    "__version__",
+    "RnDRunner",
 ]
