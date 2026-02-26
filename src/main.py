@@ -2,19 +2,26 @@
 Entry point for SmartOfficeEngine - Unified person tracking and face recognition.
 
 Uses Pure Message-Driven Architecture (MDA) via Redis.
+
+Architecture:
+- MDAManager: Handles Redis pub/sub and stream consumption
+- SmartOfficeEngine: Core video processing and face recognition
+- Lifecycle management with proper signal handling
 """
 
 import os
 import sys
 import signal
 import atexit
-import logging
 import threading
 import json
+import weakref
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
+from contextlib import contextmanager
 
 import redis
+from loguru import logger
 
 # Add project root to path
 project_root = Path(__file__).parent
@@ -26,7 +33,62 @@ from messaging import RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
 from messaging.redis_config import REDIS_HOST, REDIS_PORT
 
-logger = logging.getLogger(__name__)
+
+# ============================================================
+# Application Lifecycle Management
+# ============================================================
+
+class ApplicationLifecycle:
+    """Manages application lifecycle with proper cleanup.
+
+    Uses weak references to avoid circular dependencies and
+    ensures proper shutdown even on signal interrupts.
+    """
+
+    _instance: Optional['ApplicationLifecycle'] = None
+    _lock = threading.Lock()
+
+    def __init__(self):
+        self._shutdown_callbacks: list[Callable[[], None]] = []
+        self._is_shutting_down = False
+
+    @classmethod
+    def get_instance(cls) -> 'ApplicationLifecycle':
+        """Get singleton instance (thread-safe)."""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    def register_shutdown_callback(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be called on shutdown.
+
+        Args:
+            callback: Function to call during shutdown
+        """
+        self._shutdown_callbacks.append(callback)
+
+    def shutdown(self) -> None:
+        """Execute all shutdown callbacks."""
+        if self._is_shutting_down:
+            return
+
+        self._is_shutting_down = True
+        logger.info("[Lifecycle] Shutting down...")
+
+        for callback in reversed(self._shutdown_callbacks):
+            try:
+                callback()
+            except Exception as e:
+                logger.error(f"[Lifecycle] Shutdown callback error: {e}")
+
+        logger.info("[Lifecycle] Shutdown complete")
+
+    @property
+    def is_running(self) -> bool:
+        """Check if application is still running."""
+        return not self._is_shutting_down
 
 
 class MDAManager:
@@ -38,11 +100,11 @@ class MDAManager:
         self.stream_consumer = None
         self._running = False
 
-    def set_engine(self, engine: SmartOfficeEngine):
+    def set_engine(self, engine: SmartOfficeEngine) -> None:
         """Set the engine reference for reload operations."""
         self.engine = engine
 
-    def start(self):
+    def start(self) -> None:
         """Initialize and start all MDA components."""
         if self._running:
             logger.warning("[MDA] Already running")
@@ -64,7 +126,7 @@ class MDAManager:
         self._running = True
         logger.info("[MDA] All components started")
 
-    def stop(self):
+    def stop(self) -> None:
         """Gracefully shutdown MDA components."""
         if self.stream_consumer:
             logger.info("[MDA] Stopping stream consumer...")
@@ -72,7 +134,7 @@ class MDAManager:
         self._running = False
         logger.info("[MDA] Shutdown complete")
 
-    def _start_reload_listeners(self):
+    def _start_reload_listeners(self) -> None:
         """Start background listeners for internal reload notifications."""
         def create_listener(channel: str, handler):
             def listener():
@@ -106,7 +168,7 @@ class MDAManager:
             self._handle_status_reload
         )
 
-    def _handle_embedding_reload(self, data: dict):
+    def _handle_embedding_reload(self, data: dict) -> None:
         """Handle embedding reload notification."""
         logger.info(f"[MDA] Embedding reload: {data}")
         if self.engine:
@@ -115,7 +177,7 @@ class MDAManager:
         else:
             logger.warning("[MDA] Engine not available")
 
-    def _handle_status_reload(self, data: dict):
+    def _handle_status_reload(self, data: dict) -> None:
         """Handle status reload notification."""
         logger.info(f"[MDA] Status reload: {data}")
         if self.engine and hasattr(self.engine, 'entry_logger'):
@@ -124,7 +186,7 @@ class MDAManager:
         else:
             logger.warning("[MDA] Engine not available")
 
-    def _handle_camera_command(self, command_type: str, client_slug: str, payload: dict):
+    def _handle_camera_command(self, command_type: str, client_slug: str, payload: dict) -> None:
         """Handle camera config commands from Backend (multi-tenant)."""
         camera_id = payload.get('camera_id')
         logger.info(f"[MDA] Camera command: {command_type} for {client_slug} camera_id={camera_id}")
@@ -144,32 +206,51 @@ class MDAManager:
             logger.info(f"[MDA] StopCamera for camera {camera_id}")
 
 
-# Application instance (module-level for signal handlers)
-_app: Optional[MDAManager] = None
+# ============================================================
+# Signal Handling (No Global State)
+# ============================================================
+
+def create_signal_handler() -> Callable:
+    """Create signal handler that uses ApplicationLifecycle.
+
+    Returns:
+        Signal handler function
+    """
+    def signal_handler(signum: int, frame) -> None:
+        """Handle shutdown signals."""
+        signal_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
+        logger.info(f"Received signal {signal_name} ({signum}), shutting down...")
+
+        lifecycle = ApplicationLifecycle.get_instance()
+        lifecycle.shutdown()
+        sys.exit(0)
+
+    return signal_handler
 
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals."""
-    logger.info(f"Received signal {signum}, shutting down...")
-    if _app:
-        _app.stop()
-    sys.exit(0)
+def main() -> None:
+    """Main entry point for SmartOfficeEngine.
 
+    Initializes and runs the SmartOffice system with proper
+    lifecycle management and signal handling.
+    """
+    # Get lifecycle manager
+    lifecycle = ApplicationLifecycle.get_instance()
 
-def main():
-    """Main entry point for SmartOfficeEngine."""
-    global _app
-
-    # Register signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Register signal handlers (no global state needed)
+    handler = create_signal_handler()
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
 
     # Initialize application config
     config = init_smart_office_app(
         env_file=project_root.parent / '.env',
     )
 
-    client_slug = os.getenv('HB_CLIENTSLUG')
+    client_slug = os.getenv('SO_CLIENT_SLUG')
+    if not client_slug:
+        logger.error("SO_CLIENT_SLUG environment variable is required")
+        sys.exit(1)
 
     # Log startup information
     log_startup_info(client_slug=client_slug)
@@ -182,13 +263,27 @@ def main():
     )
 
     # Initialize MDA manager
-    _app = MDAManager(client_slug)
-    _app.set_engine(engine)
-    atexit.register(_app.stop)
+    mda_manager = MDAManager(client_slug)
+    mda_manager.set_engine(engine)
 
-    # Start MDA and run engine
-    _app.start()
-    engine.run()
+    # Register shutdown callbacks (in order of dependency)
+    lifecycle.register_shutdown_callback(engine.stop if hasattr(engine, 'stop') else lambda: None)
+    lifecycle.register_shutdown_callback(mda_manager.stop)
+
+    # Also register with atexit for non-signal exits
+    atexit.register(lifecycle.shutdown)
+
+    try:
+        # Start MDA and run engine
+        mda_manager.start()
+        engine.run()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        raise
+    finally:
+        lifecycle.shutdown()
 
 
 if __name__ == "__main__":

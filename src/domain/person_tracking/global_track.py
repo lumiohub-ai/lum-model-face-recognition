@@ -8,14 +8,20 @@ Philosophy:
 - Conservative matching with hard rejection rules
 - Body ReID as primary signal (face often not visible)
 - Feature flag for safe rollout
+
+Memory Management:
+- LRU cache with configurable max size for embedding cache
+- Automatic eviction of oldest entries when limit exceeded
+- Periodic cleanup of stale entries
 """
 
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 import time
+import threading
 
 import numpy as np
 import torch
@@ -29,6 +35,111 @@ from .global_track_model import (
     CameraTrackInfo,
     CachedEmbedding
 )
+
+
+class LRUCache:
+    """Thread-safe LRU cache with max size limit.
+
+    Used for embedding cache to prevent unbounded memory growth.
+    """
+
+    def __init__(self, max_size: int = 10000):
+        """Initialize LRU cache.
+
+        Args:
+            max_size: Maximum number of entries (default 10000)
+        """
+        self.max_size = max_size
+        self._cache: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()
+        self._eviction_count = 0
+
+    def get(self, key: Any) -> Optional[Any]:
+        """Get item and move to end (most recent).
+
+        Args:
+            key: Cache key
+
+        Returns:
+            Cached value or None if not found
+        """
+        with self._lock:
+            if key not in self._cache:
+                return None
+            # Move to end (most recently used)
+            self._cache.move_to_end(key)
+            return self._cache[key]
+
+    def put(self, key: Any, value: Any) -> None:
+        """Add or update item.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        with self._lock:
+            if key in self._cache:
+                # Update existing and move to end
+                self._cache.move_to_end(key)
+                self._cache[key] = value
+            else:
+                # Add new entry
+                self._cache[key] = value
+
+                # Evict oldest if over limit
+                while len(self._cache) > self.max_size:
+                    oldest_key = next(iter(self._cache))
+                    del self._cache[oldest_key]
+                    self._eviction_count += 1
+
+    def delete(self, key: Any) -> bool:
+        """Delete item from cache.
+
+        Args:
+            key: Cache key
+
+        Returns:
+            True if deleted, False if not found
+        """
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+                return True
+            return False
+
+    def __contains__(self, key: Any) -> bool:
+        """Check if key exists."""
+        with self._lock:
+            return key in self._cache
+
+    def __len__(self) -> int:
+        """Get cache size."""
+        with self._lock:
+            return len(self._cache)
+
+    def clear(self) -> None:
+        """Clear all entries."""
+        with self._lock:
+            self._cache.clear()
+
+    def items(self):
+        """Iterate over items (snapshot to avoid lock issues)."""
+        with self._lock:
+            return list(self._cache.items())
+
+    def keys(self):
+        """Get all keys (snapshot)."""
+        with self._lock:
+            return list(self._cache.keys())
+
+    def get_stats(self) -> Dict[str, int]:
+        """Get cache statistics."""
+        with self._lock:
+            return {
+                'size': len(self._cache),
+                'max_size': self.max_size,
+                'eviction_count': self._eviction_count,
+            }
 
 
 class GlobalTrackManager:
@@ -72,15 +183,17 @@ class GlobalTrackManager:
         self._global_id_max = 2**31 - 1  # INT32_MAX for database compatibility
         self._global_id_warn_threshold = self._global_id_max - 100000
 
+        # Configuration values (needed before cache init)
+        self._init_config_values()
+
         # Embedding cache for interval-based extraction
-        self.embedding_cache: Dict[Tuple[int, int], CachedEmbedding] = {}
+        # MEMORY MANAGEMENT: Use LRU cache with configurable max size
+        cache_max_size = self.config.get('cache', {}).get('max_embeddings', 10000)
+        self.embedding_cache = LRUCache(max_size=cache_max_size)
 
         # ReID model (lazy initialization)
         self._body_reid_model = None
         self._device = None
-
-        # Configuration values
-        self._init_config_values()
 
         # Metrics for monitoring
         self.metrics = GlobalTrackingMetrics()
@@ -448,13 +561,13 @@ class GlobalTrackManager:
 
         body_quality = detection_confidence
 
-        # Cache the embedding
-        self.embedding_cache[(camera_id, local_track_id)] = CachedEmbedding(
+        # Cache the embedding (using LRU cache)
+        self.embedding_cache.put((camera_id, local_track_id), CachedEmbedding(
             embedding=body_embedding,
             frame_num=frame_num,
             quality=body_quality,
             timestamp=datetime.now()
-        )
+        ))
 
         # STEP 3: Hard rejection - low quality
         if body_quality < self.min_quality:
@@ -665,10 +778,10 @@ class GlobalTrackManager:
         """Update embedding if interval passed."""
         key = (camera_id, local_track_id)
 
-        if key not in self.embedding_cache:
+        cached = self.embedding_cache.get(key)
+        if cached is None:
             return
 
-        cached = self.embedding_cache[key]
         frames_since_last = frame_num - cached.frame_num
 
         # Only extract if interval passed
@@ -681,12 +794,12 @@ class GlobalTrackManager:
                 return
 
             # Update cache
-            self.embedding_cache[key] = CachedEmbedding(
+            self.embedding_cache.put(key, CachedEmbedding(
                 embedding=new_embedding,
                 frame_num=frame_num,
                 quality=quality,
                 timestamp=datetime.now()
-            )
+            ))
             self.metrics.cache_hit_rate = 0  # Reset on update
 
             # Update global track prototype
@@ -899,8 +1012,8 @@ class GlobalTrackManager:
 
             # Check if already assigned and cache is fresh
             if local_id in self.local_to_global[camera_id]:
-                if key in self.embedding_cache:
-                    cached = self.embedding_cache[key]
+                cached = self.embedding_cache.get(key)
+                if cached is not None:
                     if (frame_num - cached.frame_num) < self.extract_interval_frames:
                         # Cache is fresh, no extraction needed
                         tracks_with_cache.append(track)
@@ -921,12 +1034,12 @@ class GlobalTrackManager:
             for track, emb in zip(tracks_to_extract, embeddings):
                 if emb is not None:
                     key = (camera_id, track['track_id'])
-                    self.embedding_cache[key] = CachedEmbedding(
+                    self.embedding_cache.put(key, CachedEmbedding(
                         embedding=emb,
                         frame_num=frame_num,
                         quality=track.get('confidence', 0.0),
                         timestamp=datetime.now()
-                    )
+                    ))
 
         # Step 3: Assign global IDs using cached embeddings
         all_tracks = tracks_to_extract + tracks_with_cache
@@ -1079,8 +1192,7 @@ class GlobalTrackManager:
 
         # Clean up embedding cache
         cache_key = (camera_id, local_track_id)
-        if cache_key in self.embedding_cache:
-            del self.embedding_cache[cache_key]
+        self.embedding_cache.delete(cache_key)
 
         # Clean up local_to_global mapping to prevent memory leak
         if camera_id in self.local_to_global and local_track_id in self.local_to_global[camera_id]:
@@ -1349,15 +1461,21 @@ class GlobalTrackManager:
         cutoff_time = datetime.now() - timedelta(seconds=max_age_sec)
         stale_keys = []
 
+        # Get snapshot of items from LRU cache
         for key, cached in self.embedding_cache.items():
             if cached.timestamp < cutoff_time:
                 stale_keys.append(key)
 
         for key in stale_keys:
-            del self.embedding_cache[key]
+            self.embedding_cache.delete(key)
 
         if stale_keys:
-            logger.debug(f"CACHE_CLEANUP | removed={len(stale_keys)} entries")
+            cache_stats = self.embedding_cache.get_stats()
+            logger.debug(
+                f"CACHE_CLEANUP | removed={len(stale_keys)} entries "
+                f"size={cache_stats['size']}/{cache_stats['max_size']} "
+                f"evictions={cache_stats['eviction_count']}"
+            )
 
         return len(stale_keys)
 
@@ -1627,8 +1745,8 @@ class GlobalTrackManager:
 
         # Transfer embedding if available
         cache_key = (camera_id, local_track_id)
-        if cache_key in self.embedding_cache:
-            cached = self.embedding_cache[cache_key]
+        cached = self.embedding_cache.get(cache_key)
+        if cached is not None:
             target_track.add_embedding(
                 cached.embedding, cached.quality,
                 self.top_k_size, self.prototype_alpha

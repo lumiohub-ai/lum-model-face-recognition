@@ -34,7 +34,8 @@ class PgVectorStore:
         # Double-check the schema name itself
         validate_schema_name(self.schema_name)
 
-        self.db_config = DatabaseConfig()
+        # Use singleton database config (shared connection pool)
+        self.db_config = DatabaseConfig.get_instance()
 
         # Ensure schema exists (init_schema also validates)
         self.db_config.init_schema(self.client_slug)

@@ -69,8 +69,8 @@ class ActionRecognizer:
             inference_timeout: Timeout for Ollama API calls in seconds (default: 30s)
             actions: Dictionary of actions from config (action_name -> {backend_type, description})
         """
-        self.ollama_api_url = ollama_api_url or os.getenv("OLLAMA_API_URL", "http://localhost:11434")
-        self.client_slug = client_slug or os.getenv("HB_CLIENTSLUG")
+        self.ollama_api_url = ollama_api_url or os.getenv("SO_OLLAMA_API_URL", "http://localhost:11434")
+        self.client_slug = client_slug or os.getenv("SO_CLIENT_SLUG")
         self.enabled = enabled
         self.check_interval_seconds = check_interval_seconds
         self.max_queue_size = max_queue_size

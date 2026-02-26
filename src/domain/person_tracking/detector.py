@@ -10,15 +10,22 @@ Detects persons in video frames using Ultralytics YOLO models.
 from typing import List, Dict, Optional
 import numpy as np
 from numpy.typing import NDArray
-from ultralytics import YOLO
 from loguru import logger
 import torch
 import ssl
-import urllib3
+import warnings
 
-# Disable SSL verification for model downloads (development only)
-ssl._create_default_https_context = ssl._create_unverified_context
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# SECURITY: Do NOT disable SSL verification globally.
+# SSL verification is critical for preventing MITM attacks.
+# Model downloads should use proper SSL or be done offline.
+#
+# If you need to download models in environments with SSL issues:
+# 1. Download models manually and place in the expected location
+# 2. Use YOLO_CONFIG_DIR environment variable to specify local model path
+# 3. Use a proper certificate authority
+
+# Import YOLO after ensuring SSL is not globally compromised
+from ultralytics import YOLO
 
 
 class PersonDetector:

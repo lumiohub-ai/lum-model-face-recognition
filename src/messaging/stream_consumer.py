@@ -6,31 +6,110 @@ Commands are reliable - persisted until acknowledged.
 
 Commands: Backend → AI Service (Redis Streams)
 Events: AI Service → Backend (Redis Pub/Sub)
+
+Features:
+- Consumer groups for reliable delivery
+- Idempotency checking to prevent duplicate processing
+- Dead-Letter Queue for invalid/unparseable messages
+- Graceful shutdown with message acknowledgment
 """
 
 import os
 import json
 import time
 import threading
-import logging
+import traceback
+from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 import redis
+from loguru import logger
 
-from workers.embedding_tasks import (
-    process_add_user,
-    process_update_user,
-    process_delete_user,
-)
 from .redis_config import REDIS_URL
 from .channels import COMMAND_STREAMS
 
-logger = logging.getLogger(__name__)
+# NOTE: Worker task imports are done lazily in _dispatch_embedding_command
+# to avoid circular imports with celery_app.py
+
 
 # Consumer group name
 CONSUMER_GROUP = 'ai-service-group'
 
 # Idempotency cache TTL (24 hours)
 IDEMPOTENCY_TTL = 86400
+
+# DLQ TTL (7 days)
+DLQ_TTL = 7 * 24 * 3600
+
+
+class MessageDLQ:
+    """Dead-Letter Queue for invalid or failed messages.
+
+    Stores messages that cannot be processed for later inspection and retry.
+    """
+
+    DLQ_KEY_PREFIX = 'dlq:stream:'
+
+    def __init__(self, redis_client: redis.Redis):
+        """Initialize DLQ with Redis client.
+
+        Args:
+            redis_client: Redis connection
+        """
+        self.redis = redis_client
+
+    def send(self, stream: str, message_id: str, raw_data: Any,
+             error: str, error_type: str = 'PARSE_ERROR') -> None:
+        """Send a failed message to the Dead-Letter Queue.
+
+        Args:
+            stream: Original stream name
+            message_id: Redis stream message ID
+            raw_data: Original message data
+            error: Error description
+            error_type: Category of error (PARSE_ERROR, VALIDATION_ERROR, etc.)
+        """
+        dlq_key = f'{self.DLQ_KEY_PREFIX}{stream.replace(":", "_")}'
+
+        dlq_entry = {
+            'stream': stream,
+            'message_id': message_id,
+            'raw_data': str(raw_data)[:5000],  # Truncate large payloads
+            'error': error,
+            'error_type': error_type,
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'consumer': os.getenv('HOSTNAME', 'unknown'),
+        }
+
+        try:
+            # Store in Redis list (LPUSH for FIFO when consuming with RPOP)
+            self.redis.lpush(dlq_key, json.dumps(dlq_entry))
+            self.redis.expire(dlq_key, DLQ_TTL)
+
+            # Also add to index for quick lookup
+            self.redis.hset(f'{dlq_key}:index', message_id, json.dumps(dlq_entry))
+            self.redis.expire(f'{dlq_key}:index', DLQ_TTL)
+
+            logger.warning(
+                f"[StreamConsumer] Message sent to DLQ: stream={stream} "
+                f"message_id={message_id} error_type={error_type} error={error}"
+            )
+        except Exception as e:
+            logger.error(f"[StreamConsumer] Failed to send to DLQ: {e}")
+
+    def get_count(self, stream: str) -> int:
+        """Get number of messages in DLQ for a stream.
+
+        Args:
+            stream: Stream name
+
+        Returns:
+            Number of messages in DLQ
+        """
+        dlq_key = f'{self.DLQ_KEY_PREFIX}{stream.replace(":", "_")}'
+        try:
+            return self.redis.llen(dlq_key)
+        except Exception:
+            return 0
 
 
 class StreamConsumer:
@@ -57,9 +136,12 @@ class StreamConsumer:
         self._thread: Optional[threading.Thread] = None
         self._camera_handler: Optional[Callable] = None
 
+        # Initialize Dead-Letter Queue
+        self.dlq = MessageDLQ(self.redis)
+
         logger.info(f"[StreamConsumer] Initialized: {self.consumer_name}")
 
-    def set_camera_handler(self, handler: Callable[[str, str, Dict], None]):
+    def set_camera_handler(self, handler: Callable[[str, str, Dict], None]) -> None:
         """
         Set handler for camera commands.
 
@@ -68,7 +150,7 @@ class StreamConsumer:
         """
         self._camera_handler = handler
 
-    def _ensure_consumer_groups(self):
+    def _ensure_consumer_groups(self) -> None:
         """Create consumer groups if they don't exist."""
         for name, stream in COMMAND_STREAMS.items():
             try:
@@ -80,7 +162,7 @@ class StreamConsumer:
                 # Group already exists, that's fine
                 logger.debug(f"[StreamConsumer] Consumer group already exists for {stream}")
 
-    def start(self):
+    def start(self) -> None:
         """Start consuming from all streams in a background thread."""
         if self._running:
             logger.warning("[StreamConsumer] Already running")
@@ -92,7 +174,7 @@ class StreamConsumer:
         self._thread.start()
         logger.info("[StreamConsumer] Started consuming from Redis Streams")
 
-    def _consume_loop(self):
+    def _consume_loop(self) -> None:
         """Main consumption loop."""
         streams = {stream: '>' for stream in COMMAND_STREAMS.values()}
 
@@ -120,9 +202,11 @@ class StreamConsumer:
                 logger.error(f"[StreamConsumer] Error in consume loop: {e}")
                 time.sleep(0.5)
 
-    def _process_message(self, stream: str, message_id: str, data: Dict[str, str]):
+    def _process_message(self, stream: str, message_id: str, data: Dict[str, str]) -> None:
         """
         Process a single message and dispatch to appropriate handler.
+
+        Invalid or unparseable messages are sent to DLQ, not silently dropped.
 
         Args:
             stream: Stream name
@@ -134,46 +218,88 @@ class StreamConsumer:
         idempotency_key = data.get('idempotency_key', '')
         payload_str = data.get('payload', '{}')
 
+        # Step 1: Parse JSON payload
         try:
             payload = json.loads(payload_str)
-        except json.JSONDecodeError:
-            logger.error(f"[StreamConsumer] Invalid JSON payload: {payload_str}")
+        except json.JSONDecodeError as e:
+            # IMPORTANT: Send to DLQ instead of silently dropping
+            self.dlq.send(
+                stream=stream,
+                message_id=message_id,
+                raw_data=data,
+                error=f"Invalid JSON payload: {e}",
+                error_type='PARSE_ERROR'
+            )
+            # ACK to remove from pending (it's now in DLQ)
             self._ack(stream, message_id)
             return
 
-        # Idempotency check
+        # Step 2: Validate required fields
+        if not command_type:
+            self.dlq.send(
+                stream=stream,
+                message_id=message_id,
+                raw_data=data,
+                error="Missing required field: command_type",
+                error_type='VALIDATION_ERROR'
+            )
+            self._ack(stream, message_id)
+            return
+
+        # Step 3: Idempotency check
         if self._is_duplicate(idempotency_key):
-            logger.warning(f"[StreamConsumer] Duplicate command ignored: {idempotency_key}")
+            logger.debug(f"[StreamConsumer] Duplicate command ignored: {idempotency_key}")
             self._ack(stream, message_id)
             return
 
-        logger.info(f"[StreamConsumer] Processing {command_type}", {
-            'command_id': command_id,
-            'stream': stream,
-            'message_id': message_id,
-        })
+        logger.info(
+            f"[StreamConsumer] Processing {command_type} "
+            f"command_id={command_id} stream={stream} message_id={message_id}"
+        )
 
         try:
-            # Dispatch based on stream
+            # Step 4: Dispatch based on stream
             if stream == COMMAND_STREAMS['EMBEDDING']:
                 self._dispatch_embedding_command(command_id, command_type, payload)
             elif stream == COMMAND_STREAMS['CAMERA']:
                 self._dispatch_camera_command(command_id, command_type, payload)
             else:
                 logger.warning(f"[StreamConsumer] Unknown stream: {stream}")
+                self.dlq.send(
+                    stream=stream,
+                    message_id=message_id,
+                    raw_data=data,
+                    error=f"Unknown stream: {stream}",
+                    error_type='ROUTING_ERROR'
+                )
+                self._ack(stream, message_id)
+                return
 
-            # Mark as processed
+            # Step 5: Mark as processed and acknowledge
             self._mark_processed(idempotency_key)
-
-            # Acknowledge the message
             self._ack(stream, message_id)
 
         except Exception as e:
-            logger.error(f"[StreamConsumer] Error processing {command_type}: {e}")
-            # Don't ACK - message will be redelivered
+            # Log error with traceback
+            tb_str = traceback.format_exc()
+            logger.error(
+                f"[StreamConsumer] Error processing {command_type}: {e}\n{tb_str}"
+            )
+            # Don't ACK - message will be redelivered by Redis
+            # After multiple redeliveries, consider moving to DLQ manually
 
-    def _dispatch_embedding_command(self, command_id: str, command_type: str, payload: Dict):
-        """Dispatch embedding commands to Celery tasks."""
+    def _dispatch_embedding_command(self, command_id: str, command_type: str, payload: Dict) -> None:
+        """Dispatch embedding commands to Celery tasks.
+
+        Uses lazy imports to avoid circular import with celery_app.py.
+        """
+        # Lazy import to avoid circular imports
+        from workers.embedding_tasks import (
+            process_add_user,
+            process_update_user,
+            process_delete_user,
+        )
+
         client_slug = payload.get('client_slug')
         user_id = payload.get('user_id')
         full_name = payload.get('full_name', 'Unknown')
@@ -210,7 +336,7 @@ class StreamConsumer:
         else:
             logger.warning(f"[StreamConsumer] Unknown embedding command: {command_type}")
 
-    def _dispatch_camera_command(self, command_id: str, command_type: str, payload: Dict):
+    def _dispatch_camera_command(self, command_id: str, command_type: str, payload: Dict) -> None:
         """Dispatch camera commands to handler."""
         logger.info(f"[StreamConsumer] Dispatching camera command: {command_type}")
 
@@ -233,14 +359,14 @@ class StreamConsumer:
         key = f"idempotency:{idempotency_key}"
         return bool(self.redis.exists(key))
 
-    def _mark_processed(self, idempotency_key: str):
+    def _mark_processed(self, idempotency_key: str) -> None:
         """Mark command as processed."""
         if not idempotency_key:
             return
         key = f"idempotency:{idempotency_key}"
         self.redis.setex(key, IDEMPOTENCY_TTL, '1')
 
-    def _ack(self, stream: str, message_id: str):
+    def _ack(self, stream: str, message_id: str) -> None:
         """Acknowledge a message."""
         try:
             self.redis.xack(stream, CONSUMER_GROUP, message_id)
@@ -248,7 +374,7 @@ class StreamConsumer:
         except Exception as e:
             logger.error(f"[StreamConsumer] Failed to ACK {message_id}: {e}")
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the consumer gracefully."""
         logger.info("[StreamConsumer] Stopping...")
         self._running = False

@@ -53,7 +53,7 @@ class RedisClient:
             logger.error(f"[MDA] Failed to publish to {channel}: {e}")
             return False
 
-    def subscribe(self, channel: str, handler: Callable[[Dict[str, Any]], None]):
+    def subscribe(self, channel: str, handler: Callable[[Dict[str, Any]], None]) -> None:
         """
         Subscribe to a Redis channel with a handler.
 
@@ -79,7 +79,7 @@ class RedisClient:
                     logger.error(f"[MDA] Handler error: {e}")
         return wrapper
 
-    def start(self):
+    def start(self) -> None:
         """Start listening for messages in a background thread."""
         if self._running:
             logger.warning("[MDA] Subscriber already running")
@@ -90,7 +90,7 @@ class RedisClient:
         self._thread.start()
         logger.info("[MDA] Redis subscriber started")
 
-    def _listen(self):
+    def _listen(self) -> None:
         """Background listening loop."""
         while self._running:
             try:
@@ -99,7 +99,7 @@ class RedisClient:
                 if self._running:
                     logger.error(f"[MDA] Listen error: {e}")
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the subscriber gracefully."""
         logger.info("[MDA] Stopping Redis subscriber...")
         self._running = False

@@ -117,12 +117,12 @@ def setup_logging(
 
     Args:
         log_level: Log level (DEBUG, INFO, WARNING, ERROR).
-                  If None, uses LOG_LEVEL env var or defaults to INFO.
+                  If None, uses SO_LOG_LEVEL env var or defaults to INFO.
         log_dir: Directory for log files.
         app_name: Application name for log file naming.
     """
     if log_level is None:
-        log_level = os.getenv("LOG_LEVEL", "INFO")
+        log_level = os.getenv("SO_LOG_LEVEL", "INFO")
 
     # Remove default loguru handler
     logger.remove()
@@ -170,7 +170,7 @@ def init_smart_office_app(
 
     Args:
         required_env_vars: List of required environment variable names.
-                          Defaults to HB_CLIENTSLUG.
+                          Defaults to SO_CLIENT_SLUG.
         config_path: Path to YAML config file.
         env_file: Path to .env file for local development.
         log_level: Override log level.
@@ -182,7 +182,7 @@ def init_smart_office_app(
         SystemExit: If required environment variables are missing.
     """
     if required_env_vars is None:
-        required_env_vars = ["HB_CLIENTSLUG"]
+        required_env_vars = ["SO_CLIENT_SLUG"]
 
     # Step 1: Load .env file if present
     load_dotenv_if_exists(env_file)

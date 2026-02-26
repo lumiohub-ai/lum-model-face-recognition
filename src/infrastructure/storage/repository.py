@@ -21,13 +21,12 @@ class Repository:
     def __init__(self, client_slug: str):
         self.client_slug = validate_client_slug(client_slug)
         self.schema = f"org_{self.client_slug}"
-        self._db: Optional[DatabaseConfig] = None
+        # Use singleton database config (shared connection pool)
+        self._db = DatabaseConfig.get_instance()
 
     @property
     def db(self) -> DatabaseConfig:
-        """Lazy initialization of database connection."""
-        if self._db is None:
-            self._db = DatabaseConfig()
+        """Get the shared database connection."""
         return self._db
 
     def get_all_users(self) -> List[Dict[str, Any]]:

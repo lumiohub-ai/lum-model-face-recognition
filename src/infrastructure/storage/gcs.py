@@ -1,10 +1,13 @@
 """Fetch and upload images to/from Google Cloud Storage or HTTP URLs."""
 
 import os
+import re
 import uuid
+import ipaddress
 import requests
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Set, List
+from urllib.parse import urlparse
 from io import BytesIO
 from PIL import Image
 import numpy as np
@@ -20,20 +23,170 @@ except ImportError:
     logger.warning("google-cloud-storage not installed, GCS download disabled")
 
 
+# SECURITY: URL validation to prevent SSRF attacks
+class URLValidator:
+    """Validates URLs to prevent Server-Side Request Forgery (SSRF) attacks.
+
+    SSRF allows attackers to make the server fetch resources from internal
+    networks or cloud metadata endpoints.
+    """
+
+    # Allowed URL schemes
+    ALLOWED_SCHEMES: Set[str] = {'https', 'http', 'gs'}
+
+    # Blocked IP ranges (internal networks, cloud metadata, localhost)
+    BLOCKED_IP_RANGES: List[str] = [
+        '127.0.0.0/8',      # Localhost
+        '10.0.0.0/8',       # Private network (Class A)
+        '172.16.0.0/12',    # Private network (Class B)
+        '192.168.0.0/16',   # Private network (Class C)
+        '169.254.0.0/16',   # Link-local / AWS metadata
+        '100.64.0.0/10',    # Carrier-grade NAT
+        '0.0.0.0/8',        # Current network
+        '224.0.0.0/4',      # Multicast
+        '240.0.0.0/4',      # Reserved
+        '::1/128',          # IPv6 localhost
+        'fc00::/7',         # IPv6 private
+        'fe80::/10',        # IPv6 link-local
+    ]
+
+    # Blocked hostnames
+    BLOCKED_HOSTNAMES: Set[str] = {
+        'localhost',
+        'metadata.google.internal',
+        'metadata.google.com',
+        '169.254.169.254',  # Cloud metadata endpoint
+        'metadata',
+    }
+
+    # Allowed GCS buckets (whitelist approach)
+    ALLOWED_GCS_BUCKETS: Set[str] = set()  # Empty = allow all; populate for stricter security
+
+    # Allowed HTTP domains (whitelist approach)
+    ALLOWED_HTTP_DOMAINS: Set[str] = {
+        'storage.googleapis.com',
+        'storage.cloud.google.com',
+    }
+
+    @classmethod
+    def configure(cls, allowed_gcs_buckets: List[str] = None, allowed_http_domains: List[str] = None):
+        """Configure allowed buckets and domains.
+
+        Args:
+            allowed_gcs_buckets: List of allowed GCS bucket names
+            allowed_http_domains: List of allowed HTTP domains
+        """
+        if allowed_gcs_buckets:
+            cls.ALLOWED_GCS_BUCKETS = set(allowed_gcs_buckets)
+        if allowed_http_domains:
+            cls.ALLOWED_HTTP_DOMAINS.update(allowed_http_domains)
+
+    @classmethod
+    def is_safe_url(cls, url: str) -> tuple[bool, str]:
+        """Check if a URL is safe to fetch.
+
+        Args:
+            url: URL to validate
+
+        Returns:
+            Tuple of (is_safe, reason)
+        """
+        if not url:
+            return False, "Empty URL"
+
+        # Handle GCS URLs separately
+        if url.startswith('gs://'):
+            return cls._validate_gcs_url(url)
+
+        # Parse URL
+        try:
+            parsed = urlparse(url)
+        except Exception as e:
+            return False, f"Invalid URL format: {e}"
+
+        # Check scheme
+        if parsed.scheme.lower() not in cls.ALLOWED_SCHEMES:
+            return False, f"Blocked scheme: {parsed.scheme}"
+
+        # Check hostname
+        hostname = parsed.hostname
+        if not hostname:
+            return False, "No hostname in URL"
+
+        hostname_lower = hostname.lower()
+
+        # Check blocked hostnames
+        if hostname_lower in cls.BLOCKED_HOSTNAMES:
+            return False, f"Blocked hostname: {hostname}"
+
+        # Check if hostname is an IP address
+        try:
+            ip = ipaddress.ip_address(hostname)
+            # Check against blocked IP ranges
+            for blocked_range in cls.BLOCKED_IP_RANGES:
+                if ip in ipaddress.ip_network(blocked_range, strict=False):
+                    return False, f"Blocked IP range: {hostname}"
+        except ValueError:
+            # Not an IP address, check domain whitelist
+            if cls.ALLOWED_HTTP_DOMAINS:
+                domain_allowed = any(
+                    hostname_lower == domain or hostname_lower.endswith('.' + domain)
+                    for domain in cls.ALLOWED_HTTP_DOMAINS
+                )
+                if not domain_allowed:
+                    return False, f"Domain not in allowlist: {hostname}"
+
+        return True, "URL is safe"
+
+    @classmethod
+    def _validate_gcs_url(cls, url: str) -> tuple[bool, str]:
+        """Validate GCS URL.
+
+        Args:
+            url: GCS URL (gs://bucket/path)
+
+        Returns:
+            Tuple of (is_safe, reason)
+        """
+        # Parse gs://bucket/path
+        match = re.match(r'^gs://([^/]+)(/.*)?$', url)
+        if not match:
+            return False, "Invalid GCS URL format"
+
+        bucket_name = match.group(1)
+
+        # If whitelist is configured, check it
+        if cls.ALLOWED_GCS_BUCKETS and bucket_name not in cls.ALLOWED_GCS_BUCKETS:
+            return False, f"GCS bucket not in allowlist: {bucket_name}"
+
+        return True, "GCS URL is safe"
+
+
 class ImageFetcher:
     """Fetch and process images from various sources.
 
     Supports:
     - Google Cloud Storage (gs:// URLs)
-    - HTTP/HTTPS URLs
+    - HTTP/HTTPS URLs (with SSRF protection)
     - Local file paths (for testing)
     """
 
-    def __init__(self):
-        """Initialize image fetcher with GCS credentials if available."""
-        self.gcs_credentials = os.getenv('GCS_CREDENTIALS_PATH')
-        self.gcs_bucket = os.getenv('GCS_BUCKET', 'hbai-general-data')
+    def __init__(self, allowed_gcs_buckets: List[str] = None, allowed_http_domains: List[str] = None):
+        """Initialize image fetcher with GCS credentials if available.
+
+        Args:
+            allowed_gcs_buckets: Optional list of allowed GCS bucket names
+            allowed_http_domains: Optional list of allowed HTTP domains
+        """
+        self.gcs_credentials = os.getenv('SO_GCS_CREDENTIALS_PATH')
+        self.gcs_bucket = os.getenv('SO_GCS_BUCKET', 'hbai-general-data')
         self.gcs_client = None
+
+        # Configure URL validator
+        if allowed_gcs_buckets:
+            URLValidator.configure(allowed_gcs_buckets=allowed_gcs_buckets)
+        if allowed_http_domains:
+            URLValidator.configure(allowed_http_domains=allowed_http_domains)
 
         # Initialize GCS client if credentials exist
         if GCS_AVAILABLE and self.gcs_credentials and os.path.exists(self.gcs_credentials):
@@ -54,6 +207,8 @@ class ImageFetcher:
     def fetch_image(self, url: str) -> Optional[np.ndarray]:
         """Fetch image from GCS, HTTP, or local path.
 
+        SECURITY: All URLs are validated to prevent SSRF attacks.
+
         Args:
             url: Image URL (gs://, http://, https://, or file path)
 
@@ -61,6 +216,13 @@ class ImageFetcher:
             np.ndarray: Image in BGR format (OpenCV), or None if failed
         """
         try:
+            # SECURITY: Validate URL before fetching
+            if url.startswith('gs://') or url.startswith('http://') or url.startswith('https://'):
+                is_safe, reason = URLValidator.is_safe_url(url)
+                if not is_safe:
+                    logger.warning(f"SSRF_BLOCKED: {reason} - URL: {url}")
+                    return None
+
             if url.startswith('gs://'):
                 return self._fetch_from_gcs(url)
             elif url.startswith('http://') or url.startswith('https://'):
