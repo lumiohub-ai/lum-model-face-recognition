@@ -25,10 +25,7 @@ services:
       - |
         /bin/ollama serve &
         sleep 5
-        if ! ollama list | grep -q "$OLLAMA_MODEL"; then
-          echo "Pulling $OLLAMA_MODEL model..."
-          ollama pull $OLLAMA_MODEL
-        fi
+        ollama pull gemma3:4b
         wait
 
   # Main AI Service (Person Tracking + Face Recognition)

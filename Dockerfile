@@ -46,7 +46,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy and install local modules
 COPY modules ./modules
-RUN pip install ./modules/insightface
+RUN pip install ./modules/insightface 
 RUN pip install ./modules/yolo_tracking
 
 # Copy entrypoint scripts

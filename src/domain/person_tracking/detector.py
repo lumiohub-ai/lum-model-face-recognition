@@ -198,11 +198,6 @@ class PersonDetector:
 
                     detections.append(detection)
 
-            # Explicitly cleanup YOLO results to free GPU memory
-            del results
-            if self.device == 'cuda' and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
             # Verbose logging disabled to reduce log noise
             # logger.debug(f"Detected {len(detections)} person(s) in frame")
             return detections
