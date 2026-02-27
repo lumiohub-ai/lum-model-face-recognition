@@ -11,7 +11,6 @@ Architecture:
 - Uses FrameProcessor for processing logic
 """
 
-import os
 import time
 import cv2
 from typing import List, Optional
@@ -27,7 +26,7 @@ from infrastructure.storage import Repository, EmbeddingSyncService
 from domain.face_detection import ModelFactory, FrameProcessor
 
 # Config
-from config import load_cameras
+from config import load_cameras_from_db
 
 # Local
 from camera_engine import CameraEngine
@@ -62,18 +61,14 @@ class SmartOfficeEngine:
         # Lifecycle state
         self._running = False
         self._start_time = 0.0
+        self.needs_reinit = False
 
         # Initialize repository for database access
         self.repository = Repository(client_slug)
 
-        # Load camera configurations
-        use_db = self.config.get(
-            'use_api_for_cameras',
-            os.getenv('USE_API_FOR_CAMERAS', 'true').lower() == 'true'
-        )
-        self.camera_configs = load_cameras(
+        # Load camera configurations from database
+        self.camera_configs = load_cameras_from_db(
             client_slug=client_slug,
-            use_db=use_db,
             applications=self.applications
         )
 
@@ -213,14 +208,8 @@ class SmartOfficeEngine:
         try:
             logger.info("Reloading camera configurations...")
 
-            use_db = self.config.get(
-                'use_api_for_cameras',
-                os.getenv('USE_API_FOR_CAMERAS', 'true').lower() == 'true'
-            )
-
-            new_configs = load_cameras(
+            new_configs = load_cameras_from_db(
                 client_slug=self.client_slug,
-                use_db=use_db,
                 applications=self.applications
             )
 
@@ -246,10 +235,11 @@ class SmartOfficeEngine:
                             break
                 logger.info(f"Camera configurations updated (same {len(new_configs)} cameras)")
             else:
-                # Different cameras - need full reinit
-                logger.warning("Camera set changed - requires engine restart for full reinit")
+                # Camera set changed — restart engine to pick up new cameras
+                logger.info(f"Camera set changed: {old_ids} → {new_ids}. Restarting engine...")
+                self.needs_reinit = True
                 self.camera_configs = new_configs
-                logger.info(f"Camera configurations reloaded: {len(new_configs)} cameras")
+                self.stop()
 
             return True
 

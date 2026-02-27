@@ -77,14 +77,6 @@ global_tracking:
     #   - [1, 2]      # Room A - entrance and main area overlap
     #   - [3, 4, 5]   # Room B - three cameras with overlapping views
 
-  # Performance tuning
-  performance:
-    # Batch size for ReID extraction (future optimization)
-    batch_size: 16
-
-    # Cache TTL in seconds
-    cache_ttl_sec: 300
-
   # Cache settings (Memory management for long-running processes)
   cache:
     # Maximum cached embeddings before LRU eviction
