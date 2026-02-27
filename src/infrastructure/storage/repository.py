@@ -4,6 +4,7 @@ Direct database access replaces HTTP calls to Backend.
 All read operations for users, cameras, and attendance status.
 """
 
+import json
 from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 from loguru import logger
@@ -137,12 +138,20 @@ class Repository:
                 cameras = []
 
                 for row in result.fetchall():
+                    # JSONB may arrive as a raw JSON string depending on the driver version
+                    cam_apps = row[4]
+                    if isinstance(cam_apps, str):
+                        try:
+                            cam_apps = json.loads(cam_apps)
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+
                     camera = {
                         'id': row[0],
                         'name': row[1],
                         'stream_url': row[2],
                         'camera_type': row[3],
-                        'application': row[4],
+                        'application': cam_apps,
                         'matching_threshold': row[5],
                         'virtual_line_points': row[6],
                         'roi_points': row[7],
@@ -151,7 +160,6 @@ class Repository:
 
                     # Filter by application if specified
                     if application:
-                        cam_apps = camera.get('application', [])
                         if isinstance(cam_apps, list) and application in cam_apps:
                             cameras.append(camera)
                         elif isinstance(cam_apps, str) and cam_apps == application:

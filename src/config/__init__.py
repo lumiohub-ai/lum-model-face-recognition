@@ -4,7 +4,7 @@ Configuration
 Application settings and startup utilities.
 """
 
-from .camera_loader import load_cameras
+from .camera_loader import load_cameras_from_db
 from .startup import (
     init_smart_office_app,
     load_config,
@@ -17,7 +17,7 @@ from .logging import setup_structured_logging
 
 __all__ = [
     # Camera
-    "load_cameras",
+    "load_cameras_from_db",
     # Startup
     "init_smart_office_app",
     "load_config",

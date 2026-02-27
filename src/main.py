@@ -99,6 +99,7 @@ class MDAManager:
         self.engine: Optional[SmartOfficeEngine] = None
         self.stream_consumer = None
         self._running = False
+        self._camera_ready = threading.Event()
 
     def set_engine(self, engine: SmartOfficeEngine) -> None:
         """Set the engine reference for reload operations."""
@@ -200,10 +201,14 @@ class MDAManager:
                 else:
                     logger.warning("[MDA] Camera reload returned False")
             else:
-                logger.warning("[MDA] Engine not available")
+                # Engine not initialized yet — signal main thread to init
+                logger.info("[MDA] Camera command received — signalling engine init")
+                self._camera_ready.set()
 
         elif command_type == 'StopCamera':
             logger.info(f"[MDA] StopCamera for camera {camera_id}")
+            if self.engine:
+                self.engine.reload_camera_configs()
 
 
 # ============================================================
@@ -255,35 +260,62 @@ def main() -> None:
     # Log startup information
     log_startup_info(client_slug=client_slug)
 
-    # Initialize SmartOfficeEngine
-    engine = SmartOfficeEngine(
-        client_slug=client_slug,
-        applications=['attendance'],
-        **config
-    )
-
-    # Initialize MDA manager
+    # Start MDA first so camera commands can be received while waiting for cameras
     mda_manager = MDAManager(client_slug)
+    lifecycle.register_shutdown_callback(mda_manager.stop)
+    atexit.register(lifecycle.shutdown)
+    mda_manager.start()
+
+    # Initialize engine — if no cameras yet, wait for a camera command via MDA
+    engine = None
+    while lifecycle.is_running and engine is None:
+        try:
+            engine = SmartOfficeEngine(
+                client_slug=client_slug,
+                applications=['attendance'],
+                **config
+            )
+        except ValueError:
+            logger.info("No cameras configured yet — waiting for camera")
+            mda_manager._camera_ready.wait()
+            mda_manager._camera_ready.clear()
+
+    if engine is None:
+        return
+
     mda_manager.set_engine(engine)
 
-    # Register shutdown callbacks (in order of dependency)
-    lifecycle.register_shutdown_callback(engine.stop if hasattr(engine, 'stop') else lambda: None)
-    lifecycle.register_shutdown_callback(mda_manager.stop)
+    # Outer loop: handles engine restarts when camera set changes
+    while lifecycle.is_running:
+        shutdown_cb = engine.stop if hasattr(engine, 'stop') else lambda: None
+        lifecycle.register_shutdown_callback(shutdown_cb)
 
-    # Also register with atexit for non-signal exits
-    atexit.register(lifecycle.shutdown)
+        try:
+            engine.run()
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received")
+            break
+        except Exception as e:
+            logger.error(f"Fatal error: {e}")
+            raise
 
-    try:
-        # Start MDA and run engine
-        mda_manager.start()
-        engine.run()
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        raise
-    finally:
-        lifecycle.shutdown()
+        # engine.run() returned — check if it was due to a camera set change
+        if not engine.needs_reinit:
+            break
+
+        logger.info("Reinitializing engine with updated camera set...")
+        try:
+            engine = SmartOfficeEngine(
+                client_slug=client_slug,
+                applications=['attendance'],
+                **config
+            )
+            mda_manager.set_engine(engine)
+        except Exception as e:
+            logger.error(f"Failed to reinitialize engine: {e}")
+            break
+
+    lifecycle.shutdown()
 
 
 if __name__ == "__main__":
