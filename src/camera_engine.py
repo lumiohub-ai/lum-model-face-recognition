@@ -523,7 +523,6 @@ class CameraEngine:
             return {'face_detected': False, 'name': None, 'similarity': 0.0}
 
         face = faces[0]
-        embedding = face.embedding / np.linalg.norm(face.embedding)
 
         # Get face crop for unrecognized faces
         face_bbox = face.bbox.astype(int)
@@ -546,11 +545,11 @@ class CameraEngine:
                 'recognized': False,
                 'name': None,
                 'similarity': 0.0,
-                'embedding': embedding,
+                'embedding': face.embedding,
                 'face_image': face_image
             }
 
-        similarities = self.face_recognizer.compute_similarities(np.array([embedding]))
+        similarities = self.face_recognizer.compute_similarities(np.array([face.embedding]))
         best_idx, best_similarity = self.face_recognizer.get_best_match(similarities)
 
         if best_similarity >= self.match_threshold:
@@ -569,7 +568,7 @@ class CameraEngine:
                 'recognized': True,
                 'name': name,
                 'similarity': best_similarity,
-                'embedding': embedding,
+                'embedding': face.embedding,
                 'face_image': face_image
             }
         else:
@@ -587,7 +586,7 @@ class CameraEngine:
                 'recognized': False,
                 'name': None,
                 'similarity': best_similarity,
-                'embedding': embedding,
+                'embedding': face.embedding,
                 'face_image': face_image
             }
 

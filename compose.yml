@@ -1,8 +1,7 @@
 services:
-  # Ollama - VLM for Action Recognition
   ollama:
     image: ollama/ollama:latest
-    container_name: person-tracking-ollama
+    container_name: lumiohub-person-tracking-ollama
     ports:
       - "11434:11434"
     volumes:
@@ -15,7 +14,7 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -28,13 +27,12 @@ services:
         ollama pull gemma3:4b
         wait
 
-  # Main AI Service (Person Tracking + Face Recognition)
   person-tracking:
     build:
       context: .
       dockerfile: Dockerfile
-    image: humblebeeintel/person-tracking:dev
-    container_name: person-tracking-app
+    image: humblebeeai/person-tracking-app
+    container_name: lumiohub-person-tracking-app
     network_mode: host
     env_file:
       - .env
@@ -62,13 +60,12 @@ services:
     tty: true
     stdin_open: true
 
-  # Celery Worker (Embeddings + Detections)
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    image: humblebeeintel/person-tracking:dev
-    container_name: celery-worker
+    image: humblebeeai/celery-worker
+    container_name: lumiohub-celery-worker
     network_mode: host
     env_file:
       - .env
@@ -92,13 +89,12 @@ services:
     working_dir: /app/src
     restart: unless-stopped
 
-  # Flower - Celery Monitoring
   flower:
     build:
       context: .
       dockerfile: Dockerfile
-    image: humblebeeintel/person-tracking:dev
-    container_name: celery-flower
+    image: humblebeeai/celery-flower
+    container_name: lumiohub-celery-flower
     network_mode: host
     environment:
       CELERY_BROKER_URL: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/0

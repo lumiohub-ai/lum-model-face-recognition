@@ -230,6 +230,10 @@ class PgVectorStore:
 
                 embeddings = np.array(embeddings, dtype=np.float32)
 
+                # Pre-normalize to unit vectors so matching can use np.dot instead of cosine_similarity
+                norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+                embeddings = embeddings / np.where(norms == 0, 1, norms)
+
                 logger.info(f"Loaded {len(names)} embeddings from {self.schema_name}")
                 return names, embeddings
 

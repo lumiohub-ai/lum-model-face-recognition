@@ -124,18 +124,10 @@ class ModelFactory:
 
     def _create_face_recognizer(self) -> FaceRecognition:
         """Create and configure face recognizer."""
-        # Create args object for FaceRecognition
         args = type('Args', (), {})()
-
-        # Use config setting with fallback to env var
-        args.use_pgvector = self.config.get(
-            'use_pgvector',
-            os.getenv('USE_PGVECTOR', 'true').lower() == 'true'
-        )
         args.client_slug = self.client_slug
         args.match_threshold = self.config.get('match_threshold', 0.3)
         args.logger = logger
-        args.db_path = None
 
         return FaceRecognition(args)
 
