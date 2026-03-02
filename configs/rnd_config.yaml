@@ -10,6 +10,7 @@ output_dir: "volumes/rnd_results"
 client_slug: "rnd"
 timezone: "UTC"
 debug: true
+eval: true
 minimum_face_size: 50
 max_track_lifetime_seconds: 30
 
@@ -19,7 +20,7 @@ videos:
     camera_name: "P1E_S1_C1"
     cam_type: "IN"
 
-  - path: "volumes/src/datset/chockpoint/P1E_S1/P1E_S1_C3"
-    annotation: "volumes/src/annotation/chockpoint/P1E/P1E_S1/P1E_S1_C3.json"
-    camera_name: "P1E_S1_C3"
-    cam_type: "IN"
+  # - path: "volumes/src/datset/chockpoint/P1E_S1/P1E_S1_C3"
+  #   annotation: "volumes/src/annotation/chockpoint/P1E/P1E_S1/P1E_S1_C3.json"
+  #   camera_name: "P1E_S1_C3"
+  #   cam_type: "IN"

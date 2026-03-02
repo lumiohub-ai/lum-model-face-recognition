@@ -123,6 +123,7 @@ class RnDRunner:
         args.shadow_mode = False
         args.production = False
         args.debug = self.config.get("debug", True)
+        args.eval = self.config.get("eval", False)
         args.logger = logger
 
         args.cam_type = video_entry.get("cam_type", "IN")
@@ -131,6 +132,10 @@ class RnDRunner:
         args.video_path = video_entry["path"]
         args.roi = video_entry.get("roi", None)
         args.line_points = video_entry.get("line_points", None)
+        args.fps = self.config.get("fps", 25)
+
+        output_dir = self.config.get("output_dir", "volumes/rnd_results")
+        args.txt_path = os.path.join(output_dir, f"{args.camera_name}_eval.csv")
 
         return args
 

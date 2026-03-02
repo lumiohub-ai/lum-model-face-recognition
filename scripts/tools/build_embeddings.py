@@ -37,7 +37,7 @@ def build_embeddings(input_dir: str, output_path: str, gpu_id: int) -> None:
 
     image_files = sorted([
         f for f in os.listdir(input_dir)
-        if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp"))
+        if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".pgm"))
     ])
 
     if not image_files:
@@ -51,18 +51,28 @@ def build_embeddings(input_dir: str, output_path: str, gpu_id: int) -> None:
     skipped = 0
 
     for img_file in image_files:
-        stem = os.path.splitext(img_file)[0]          # e.g. "oybek_1"
-        if "_" not in stem:
-            print(f"  [SKIP] Filename must be {{name}}_{{index}}: {img_file}")
-            skipped += 1
-            continue
+        stem = os.path.splitext(img_file)[0]          # e.g. "oybek_1" or "0001"
+        # Accept both {name}_{index} and plain {name} formats
+        name = stem.split("_")[0] if "_" in stem else stem
 
         img_path = os.path.join(input_dir, img_file)
-        frame = cv2.imread(img_path)
+        frame = cv2.imread(img_path, cv2.IMREAD_COLOR)
         if frame is None:
-            print(f"  [SKIP] Cannot read: {img_path}")
-            skipped += 1
-            continue
+            # Fallback for formats cv2 may read as grayscale (e.g. PGM)
+            frame = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            if frame is None:
+                print(f"  [SKIP] Cannot read: {img_path}")
+                skipped += 1
+                continue
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        elif len(frame.shape) == 2 or frame.shape[2] == 1:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+        # Upscale small face crops so the detector can find the face
+        h, w = frame.shape[:2]
+        if max(h, w) < 256:
+            scale = 256 / max(h, w)
+            frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LINEAR)
 
         emb = detector.compute_embedding(frame)
         if emb is None:
@@ -70,9 +80,9 @@ def build_embeddings(input_dir: str, output_path: str, gpu_id: int) -> None:
             skipped += 1
             continue
 
-        names.append(stem)           # store full stem e.g. "oybek_1"
+        names.append(stem)           # store full stem e.g. "oybek_1" or "0001"
         embeddings.append(emb)
-        print(f"  [OK]   {img_file}  →  name: '{stem}'")
+        print(f"  [OK]   {img_file}  →  name: '{name}'")
 
     if not embeddings:
         print("\nNo embeddings collected. Check your images.")

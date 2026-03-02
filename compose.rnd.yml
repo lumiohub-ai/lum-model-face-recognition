@@ -6,7 +6,9 @@ services:
       dockerfile: Dockerfile
     network_mode: host
     working_dir: /app/face-recognition
-    command: python examples/clients/rnd_main.py
+    user: root
+    entrypoint: ["python"]
+    command: ["examples/clients/rnd_main.py"]
     environment:
       - FR_SLUG=face-recognition
       - NVIDIA_VISIBLE_DEVICES=all
@@ -16,6 +18,7 @@ services:
     volumes:
       - ./src:/app/face-recognition/src
       - ./scripts:/app/face-recognition/scripts
+      - ./examples:/app/face-recognition/examples
       - ./configs:/app/face-recognition/configs
       - ./volumes/src:/app/face-recognition/volumes/src
       - ./volumes/rnd_results:/app/face-recognition/volumes/rnd_results
