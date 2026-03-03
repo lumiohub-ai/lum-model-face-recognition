@@ -168,8 +168,6 @@ class GlobalTrackManager:
             self.enabled = app_config.get('enable_global_tracking', True)
         elif self.config.get('enabled') is not None:
             self.enabled = self.config.get('enabled', False)
-        else:
-            self.enabled = os.getenv('ENABLE_GLOBAL_TRACKING', 'true').lower() == 'true'
 
         # Global tracks
         self.global_tracks: Dict[int, GlobalTrack] = {}

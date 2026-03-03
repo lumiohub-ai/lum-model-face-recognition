@@ -13,7 +13,6 @@ Exception Hierarchy:
   - ValidationError: Input validation failed
 """
 
-import os
 import json
 import traceback
 from datetime import datetime
@@ -74,9 +73,10 @@ def send_to_dlq(task_name: str, task_id: str, args: tuple, kwargs: dict,
         broker_url: Redis broker URL (optional, uses env var if not provided)
     """
     import redis
+    from config.settings import settings
 
     if broker_url is None:
-        broker_url = os.getenv('SO_CELERY_BROKER_URL', 'redis://localhost:6379/0')
+        broker_url = settings.celery_broker_url
 
     dlq_message = {
         'task_name': task_name,

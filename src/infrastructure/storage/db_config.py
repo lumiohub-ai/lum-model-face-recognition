@@ -11,7 +11,6 @@ Usage:
     db_config = DatabaseConfig.get_instance()
 """
 
-import os
 import threading
 from typing import Generator
 from sqlalchemy import create_engine, text
@@ -20,6 +19,7 @@ from sqlalchemy.engine import Connection
 from contextlib import contextmanager
 from loguru import logger
 
+from config.settings import settings
 from .validators import validate_client_slug, validate_schema_name
 
 
@@ -53,19 +53,19 @@ class DatabaseConfig:
         if self._initialized:
             return
 
-        self.host = os.getenv('SO_POSTGRES_HOST', 'localhost')
-        self.port = int(os.getenv('SO_POSTGRES_PORT', 5433))
-        self.user = os.getenv('SO_POSTGRES_USER', 'face_recognition')
+        self.host = settings.postgres_host
+        self.port = settings.postgres_port
+        self.user = settings.postgres_user
 
         # SECURITY: Require password to be explicitly set (no default)
-        self.password = os.getenv('SO_POSTGRES_PASSWORD')
+        self.password = settings.postgres_password
         if not self.password:
             raise ValueError(
                 "SO_POSTGRES_PASSWORD environment variable is required. "
                 "Please set a secure password in your environment."
             )
 
-        self.database = os.getenv('SO_POSTGRES_DB', 'face_embeddings')
+        self.database = settings.postgres_db
 
         # Build connection string
         self.connection_string = (

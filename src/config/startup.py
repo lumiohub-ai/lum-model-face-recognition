@@ -2,47 +2,15 @@
 
 This module provides utilities for initializing the SmartOffice application:
 - Configuration loading from YAML files
-- Environment variable validation
 - Logging setup
-- .env file loading for local development
 """
 
-import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 
 import yaml
 from loguru import logger
-
-from .logging import setup_structured_logging
-
-
-def load_dotenv_if_exists(env_path: Optional[Path] = None) -> bool:
-    """Load .env file if it exists (for local development).
-
-    Docker deployments should use environment variables from docker-compose.
-
-    Args:
-        env_path: Optional path to .env file. If None, looks in current directory.
-
-    Returns:
-        True if .env file was loaded, False otherwise.
-    """
-    try:
-        from dotenv import load_dotenv
-
-        if env_path is None:
-            env_path = Path.cwd() / '.env'
-
-        if env_path.exists():
-            load_dotenv(env_path, override=True)
-            logger.debug(f"Loaded .env file from {env_path}")
-            return True
-        return False
-    except ImportError:
-        # dotenv not installed, use system environment variables
-        return False
 
 
 def load_config(config_path: Optional[str] = None, default_config: Optional[Dict] = None) -> Dict[str, Any]:
@@ -95,19 +63,6 @@ def load_config(config_path: Optional[str] = None, default_config: Optional[Dict
         return default_config
 
 
-def validate_environment(required_vars: List[str]) -> List[str]:
-    """Validate that required environment variables are set.
-
-    Args:
-        required_vars: List of required environment variable names.
-
-    Returns:
-        List of missing variable names (empty if all present).
-    """
-    missing = [var for var in required_vars if not os.getenv(var)]
-    return missing
-
-
 def setup_logging(
     log_level: Optional[str] = None,
     log_dir: str = "logs",
@@ -117,12 +72,13 @@ def setup_logging(
 
     Args:
         log_level: Log level (DEBUG, INFO, WARNING, ERROR).
-                  If None, uses SO_LOG_LEVEL env var or defaults to INFO.
+                  If None, uses SO_LOG_LEVEL from settings.
         log_dir: Directory for log files.
         app_name: Application name for log file naming.
     """
     if log_level is None:
-        log_level = os.getenv("SO_LOG_LEVEL", "INFO")
+        from config.settings import settings
+        log_level = settings.log_level
 
     # Remove default loguru handler
     logger.remove()
@@ -155,62 +111,30 @@ def setup_logging(
 
 
 def init_smart_office_app(
-    required_env_vars: Optional[List[str]] = None,
     config_path: Optional[str] = None,
-    env_file: Optional[Path] = None,
     log_level: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Initialize SmartOffice application with standard setup.
 
-    This function performs the following:
-    1. Loads .env file if present (for local development)
-    2. Validates required environment variables
-    3. Sets up logging
-    4. Loads configuration from YAML
+    1. Sets up logging
+    2. Loads configuration from YAML
 
     Args:
-        required_env_vars: List of required environment variable names.
-                          Defaults to SO_CLIENT_SLUG.
         config_path: Path to YAML config file.
-        env_file: Path to .env file for local development.
         log_level: Override log level.
 
     Returns:
         Configuration dictionary.
-
-    Raises:
-        SystemExit: If required environment variables are missing.
     """
-    if required_env_vars is None:
-        required_env_vars = ["SO_CLIENT_SLUG"]
-
-    # Step 1: Load .env file if present
-    load_dotenv_if_exists(env_file)
-
-    # Step 2: Setup logging first so we can log subsequent steps
     setup_logging(log_level=log_level)
 
-    # Step 3: Validate environment variables
-    missing = validate_environment(required_env_vars)
-    if missing:
-        logger.error(f"Missing required environment variables: {missing}")
-        sys.exit(1)
-
-    # Step 4: Load configuration
-    config_path_to_use = config_path or os.getenv("SMART_OFFICE_CONFIG")
-    config = load_config(config_path_to_use)
-
-    return config
+    from config.settings import settings
+    config_path_to_use = config_path or settings.config_path or None
+    return load_config(config_path_to_use)
 
 
 def log_startup_info(client_slug: str, **extra_info) -> None:
-    """Log standard startup information.
-
-    Args:
-        client_slug: Client organization slug.
-        api_host: API host URL.
-        **extra_info: Additional key-value pairs to log.
-    """
+    """Log standard startup information."""
     logger.info("=" * 60)
     logger.info("SmartOfficeEngine Starting")
     logger.info("=" * 60)

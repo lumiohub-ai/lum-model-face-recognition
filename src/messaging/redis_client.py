@@ -10,7 +10,7 @@ import logging
 from typing import Callable, Dict, Any, Optional
 import redis
 
-from .redis_config import REDIS_HOST, REDIS_PORT, REDIS_DB
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,9 @@ class RedisClient:
 
     def __init__(self):
         self.client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
+            host=settings.redis_host,
+            port=settings.redis_port,
+            db=settings.redis_db,
             decode_responses=True
         )
         self.pubsub = self.client.pubsub()
@@ -31,7 +31,7 @@ class RedisClient:
         self._handlers: Dict[str, Callable] = {}
         self._lock = threading.Lock()
 
-        logger.info(f"[MDA] Redis client initialized: {REDIS_HOST}:{REDIS_PORT}")
+        logger.info(f"[MDA] Redis client initialized: {settings.redis_host}:{settings.redis_port}")
 
     def publish(self, channel: str, message: Dict[str, Any]) -> bool:
         """

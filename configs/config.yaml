@@ -18,11 +18,10 @@ face_detection_padding: 20.0  # Padding % around detected faces for better recog
 # Action Recognition settings (Activity tracking via Ollama)
 action_recognition:
   enabled: true  # Enable action recognition
-  ollama_api_url: null  # Ollama API URL (null = use OLLAMA_API_URL env var, default: http://localhost:11434)
-  model_name: null  # Ollama model name (null = use OLLAMA_MODEL env var, default: gemma3:4b)
+  ollama_api_url: 'http://localhost:11434'  # Ollama API URL (default: http://localhost:11434)
   check_interval_seconds: 60  # Check each person every N seconds
-  async_workers: 1  # Number of background worker threads for inference
   max_queue_size: 50  # Maximum queued inference requests
+  async_workers: 1  # Number of background worker threads for inference
   inference_timeout: 30  # Timeout for Ollama API calls in seconds (prevents blocking on slow/hung inference)
   # Supported actions with backend mapping and descriptions for VLM prompt
   actions:

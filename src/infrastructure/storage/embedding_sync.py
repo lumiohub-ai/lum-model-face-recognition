@@ -36,8 +36,7 @@ class EmbeddingSyncService:
         # Get face detection padding from config or environment (default: 20%)
         if config and 'face_detection_padding' in config:
             padding_percent = float(config.get('face_detection_padding', 20.0))
-        else:
-            padding_percent = float(os.getenv('FACE_DETECTION_PADDING', '20.0'))
+
         self.detector = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
 
         self.store = PgVectorStore(client_slug)

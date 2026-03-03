@@ -14,23 +14,17 @@ NOTE: Exception classes and BaseTaskWithRetry are in task_base.py
 to avoid circular imports. Import from there in task modules.
 """
 
-import os
 from celery import Celery
 from kombu import Queue, Exchange
 from loguru import logger
 
-# Get Redis config directly from env (avoids circular import with messaging module)
-REDIS_HOST = os.getenv('SO_REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('SO_REDIS_PORT', 6379))
-
-CELERY_BROKER_URL = os.getenv('SO_CELERY_BROKER_URL', f'redis://{REDIS_HOST}:{REDIS_PORT}/0')
-CELERY_RESULT_BACKEND = os.getenv('SO_CELERY_RESULT_BACKEND', f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
+from config.settings import settings
 
 # Create Celery app
 celery = Celery(
     'smart_office',
-    broker=CELERY_BROKER_URL,
-    backend=CELERY_RESULT_BACKEND,
+    broker=settings.celery_broker_url,
+    backend=settings.celery_result_backend,
     include=[
         'workers.embedding_tasks',
         'workers.detection_tasks',
@@ -76,7 +70,7 @@ celery.conf.update(
 
     # Worker settings
     worker_prefetch_multiplier=1,
-    worker_concurrency=int(os.getenv('SO_CELERY_CONCURRENCY', 2)),
+    worker_concurrency=settings.celery_concurrency,
 
     # Result settings
     result_expires=3600,  # 1 hour
@@ -102,7 +96,7 @@ celery.conf.update(
 )
 
 # Log configuration (use logger, not print)
-logger.info(f"[Celery] Configured with broker: {CELERY_BROKER_URL}")
+logger.info(f"[Celery] Configured with broker: {settings.celery_broker_url}")
 logger.info(f"[Celery] Task timeouts: soft={celery.conf.task_soft_time_limit}s, hard={celery.conf.task_time_limit}s")
 
 # Re-export from task_base for backward compatibility
@@ -128,6 +122,4 @@ __all__ = [
     'DatabaseError',
     'ModelInferenceError',
     'send_to_dlq',
-    'CELERY_BROKER_URL',
-    'CELERY_RESULT_BACKEND',
 ]

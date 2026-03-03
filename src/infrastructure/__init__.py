@@ -9,7 +9,6 @@ External services and I/O operations.
 from .storage import PgVectorStore, ImageFetcher, EmbeddingSyncService, Repository
 from .video import StreamHandler, StreamManager, FrameAnnotator
 from .entry_logger import EntryLogger
-from .csv_logger import CSVLogger
 
 __all__ = [
     # Storage
@@ -23,5 +22,4 @@ __all__ = [
     "FrameAnnotator",
     # Services
     "EntryLogger",
-    "CSVLogger",
 ]

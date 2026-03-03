@@ -9,16 +9,13 @@ Architecture:
 - Lifecycle management with proper signal handling
 """
 
-import os
 import sys
 import signal
 import atexit
 import threading
 import json
-import weakref
 from pathlib import Path
 from typing import Optional, Callable
-from contextlib import contextmanager
 
 import redis
 from loguru import logger
@@ -29,9 +26,9 @@ sys.path.insert(0, str(project_root))
 
 from config import init_smart_office_app, log_startup_info
 from engine import SmartOfficeEngine
+from config.settings import settings
 from messaging import RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
-from messaging.redis_config import REDIS_HOST, REDIS_PORT
 
 
 # ============================================================
@@ -139,7 +136,7 @@ class MDAManager:
         """Start background listeners for internal reload notifications."""
         def create_listener(channel: str, handler):
             def listener():
-                r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+                r = redis.Redis(host=settings.redis_host, port=settings.redis_port, decode_responses=True)
                 pubsub = r.pubsub()
                 pubsub.subscribe(channel)
                 logger.info(f"[MDA] Subscribed to {channel}")
@@ -248,11 +245,9 @@ def main() -> None:
     signal.signal(signal.SIGTERM, handler)
 
     # Initialize application config
-    config = init_smart_office_app(
-        env_file=project_root.parent / '.env',
-    )
+    config = init_smart_office_app()
 
-    client_slug = os.getenv('SO_CLIENT_SLUG')
+    client_slug = settings.client_slug
     if not client_slug:
         logger.error("SO_CLIENT_SLUG environment variable is required")
         sys.exit(1)

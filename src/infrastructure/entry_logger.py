@@ -7,16 +7,12 @@ from typing import Dict, Optional
 import numpy as np
 from loguru import logger
 
-from .csv_logger import CSVLogger
-
-
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
 
     Uses:
     - Repository: Direct database reads (users, status)
     - Celery tasks: Write operations (attendance, location, unrecognized faces)
-    - CSVLogger: Local CSV logging
     """
 
     def __init__(self, args, max_entries: int = 3):
@@ -31,15 +27,6 @@ class EntryLogger:
         # Initialize repository for database reads
         from infrastructure.storage.repository import Repository
         self.repository = Repository(self.client_slug)
-
-        # Initialize CSV logger
-        log_file_path = f'/app/volumes/storage/person-tracking/logs/{self.client_slug}/status_info.csv'
-        rotation_period = getattr(self.args, 'csv_log_rotation', '2 weeks')
-        self.csv_logger = CSVLogger(
-            log_file_path=log_file_path,
-            rotation_period=rotation_period,
-            logger_instance=args.logger
-        )
 
         # Get user information from database
         self.current_users = args.db_names
@@ -119,9 +106,7 @@ class EntryLogger:
         if self.args.production:
             self._send_attendance(name, status, camera_id, camera_name, proof_image)
 
-        # Log to console and CSV
         self._log_status_to_console(name, status, today_time)
-        self.csv_logger.log_status(name, status, today_time, today_date)
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
 
         return recorded
@@ -242,6 +227,3 @@ class EntryLogger:
             logger.error(f"[Celery] Failed to queue unrecognized face: {e}")
             return False
 
-    def save_status_info(self) -> str:
-        """Get the path to the status information log file."""
-        return f"Status information saved to {self.csv_logger.get_log_path()}"

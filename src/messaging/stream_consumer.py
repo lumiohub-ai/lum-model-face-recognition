@@ -14,7 +14,6 @@ Features:
 - Graceful shutdown with message acknowledgment
 """
 
-import os
 import json
 import time
 import threading
@@ -24,7 +23,7 @@ from typing import Dict, Any, Optional, Callable
 import redis
 from loguru import logger
 
-from .redis_config import REDIS_URL
+from config.settings import settings
 from .channels import COMMAND_STREAMS
 
 # NOTE: Worker task imports are done lazily in _dispatch_embedding_command
@@ -77,7 +76,7 @@ class MessageDLQ:
             'error': error,
             'error_type': error_type,
             'timestamp': datetime.utcnow().isoformat() + 'Z',
-            'consumer': os.getenv('HOSTNAME', 'unknown'),
+            'consumer': settings.hostname,
         }
 
         try:
@@ -130,8 +129,8 @@ class StreamConsumer:
         Args:
             consumer_name: Unique name for this consumer (default: hostname)
         """
-        self.redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        self.consumer_name = consumer_name or os.getenv('HOSTNAME', f'ai-consumer-{os.getpid()}')
+        self.redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        self.consumer_name = consumer_name or settings.hostname
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._camera_handler: Optional[Callable] = None

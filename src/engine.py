@@ -304,8 +304,7 @@ class SmartOfficeEngine:
         if self.show_display:
             cv2.destroyAllWindows()
 
-        # Save entry logger status
-        self.entry_logger.save_status_info()
+
 
         # Log final stats
         self._log_final_stats()

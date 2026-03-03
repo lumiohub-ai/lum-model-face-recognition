@@ -34,16 +34,6 @@ class ActionRecognizer:
     - Configurable actions via config.yaml
     """
 
-    # Default action mapping (used if no config provided)
-    DEFAULT_ACTIONS = {
-        "sleeping": {"backend_type": "sleeping", "description": "head resting on desk, leaning back with eyes closed, or slumped over"},
-        "using phone": {"backend_type": "phone_usage", "description": "holding a phone, looking down at a device in hand"},
-        "working with computer": {"backend_type": "working", "description": "sitting at a desk facing a screen or typing"},
-        "talking with someone": {"backend_type": "talking", "description": "facing another person, gesturing, or in conversation"},
-        "not_focusing": {"backend_type": "not_focusing", "description": "distracted, looking away from work, wandering attention"},
-        "idle": {"backend_type": "unknown", "description": "standing still, sitting without doing anything specific, looking around"},
-    }
-
     def __init__(
         self,
         ollama_api_url: Optional[str] = None,
@@ -54,7 +44,7 @@ class ActionRecognizer:
         num_workers: int = 1,
         model_name: str = "gemma3:4b",
         inference_timeout: int = 30,
-        actions: Optional[Dict] = None
+        actions: Dict = None
     ):
         """Initialize action recognizer.
 
@@ -67,10 +57,10 @@ class ActionRecognizer:
             num_workers: Number of background worker threads
             model_name: Ollama model to use for inference
             inference_timeout: Timeout for Ollama API calls in seconds (default: 30s)
-            actions: Dictionary of actions from config (action_name -> {backend_type, description})
+            actions: Dictionary of actions from config.yaml (action_name -> {backend_type, description})
         """
-        self.ollama_api_url = ollama_api_url or os.getenv("SO_OLLAMA_API_URL", "http://localhost:11434")
-        self.client_slug = client_slug or os.getenv("SO_CLIENT_SLUG")
+        self.ollama_api_url = ollama_api_url
+        self.client_slug = client_slug
         self.enabled = enabled
         self.check_interval_seconds = check_interval_seconds
         self.max_queue_size = max_queue_size
@@ -78,8 +68,7 @@ class ActionRecognizer:
         self.model_name = model_name
         self.inference_timeout = inference_timeout
 
-        # Build action mapping from config or use defaults
-        self.actions_config = actions or self.DEFAULT_ACTIONS
+        self.actions_config = actions or {}
         self.action_mapping = self._build_action_mapping()
         self.prompt_template = self._build_prompt_template()
 
