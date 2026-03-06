@@ -315,7 +315,6 @@ logs/**
 models/**
 recorded_videos/**
 compose.override.yml
-modules/yolo_tracking/
 
 # Runtime data volumes (datasets, annotations, videos, embeddings, results)
 volumes/

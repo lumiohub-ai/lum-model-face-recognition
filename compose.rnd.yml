@@ -16,6 +16,7 @@ services:
       - USE_PGVECTOR=false
       - PRODUCTION=false
     volumes:
+      - ${DATA_ROOT}:/mnt/data/humoyun
       - ./src:/app/face-recognition/src
       - ./scripts:/app/face-recognition/scripts
       - ./examples:/app/face-recognition/examples

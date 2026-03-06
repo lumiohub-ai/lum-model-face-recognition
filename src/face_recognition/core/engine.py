@@ -729,37 +729,44 @@ class FaceEngine:
 
             # Get appropriate image for this recognition result
             image = self._get_recognition_image(track_id, recognition_info)
-            if image is None and recognition_info['recognized'] == 'unrecognized':
-                # Unrecognized face failed validation
-                self.track_manager.delete_track_cache(track_id)
-                continue
+
+            # Gate 1: skip image-less unrecognized tracks only in non-eval mode
+            if not self.args.eval:
+                if image is None and recognition_info['recognized'] == 'unrecognized':
+                    # Unrecognized face failed validation
+                    self.track_manager.delete_track_cache(track_id)
+                    continue
 
             # Enhanced filtering for unrecognized faces
             if recognition_info['recognized'] == 'unrecognized':
-                # Use comprehensive multi-stage filtering
-                should_send, reason, filtered_image, quality_score = self.should_send_unrecognized_to_dashboard(
-                    track_id, recognition_info
-                )
+                if not self.args.eval:
+                    # Gate 2: production filter — use comprehensive multi-stage filtering
+                    should_send, reason, filtered_image, quality_score = self.should_send_unrecognized_to_dashboard(
+                        track_id, recognition_info
+                    )
 
-                # In shadow mode, log but always send
-                if self.shadow_mode:
-                    if not should_send:
-                        self.args.logger.debug(
-                            f"SHADOW MODE: Would have filtered {track_id} - {reason} (quality: {quality_score:.2f})"
-                        )
-                    # Continue with original logic in shadow mode
-                    image = self._get_recognition_image(track_id, recognition_info)
+                    # In shadow mode, log but always send
+                    if self.shadow_mode:
+                        if not should_send:
+                            self.args.logger.debug(
+                                f"SHADOW MODE: Would have filtered {track_id} - {reason} (quality: {quality_score:.2f})"
+                            )
+                        # Continue with original logic in shadow mode
+                        image = self._get_recognition_image(track_id, recognition_info)
+                    else:
+                        # Production mode: actually filter
+                        if not should_send:
+                            self.args.logger.debug(
+                                f"Filtered unrecognized {track_id}: {reason} (quality: {quality_score:.2f})"
+                            )
+                            self.track_manager.delete_track_cache(track_id)
+                            continue
+
+                        # Use the filtered image
+                        image = filtered_image
                 else:
-                    # Production mode: actually filter
-                    if not should_send:
-                        self.args.logger.debug(
-                            f"Filtered unrecognized {track_id}: {reason} (quality: {quality_score:.2f})"
-                        )
-                        self.track_manager.delete_track_cache(track_id)
-                        continue
-
-                    # Use the filtered image
-                    image = filtered_image
+                    # Eval mode: no image needed, just recognition_info
+                    image = None
 
             # Store result
             name = recognition_info['name']
