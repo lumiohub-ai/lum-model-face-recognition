@@ -1,0 +1,12 @@
+# Production overrides
+# Usage: docker compose -f compose.yml -f template/compose/compose.prod.yml up -d
+
+services:
+  person-tracking:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
+
+  celery-worker:
+    environment:
+      SO_LOG_LEVEL: INFO

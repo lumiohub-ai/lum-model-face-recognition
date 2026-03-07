@@ -31,21 +31,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: humblebeeai/person-tracking-app
+    image: so.person-tracking-app
     container_name: lumiohub-person-tracking-app
     network_mode: host
     env_file:
       - .env
-    environment:
-      PYTHONWARNINGS: "ignore::FutureWarning"
     volumes:
       - ./.env:/app/.env:ro
-      - ./src:/app/src
-      - ./configs:/app/configs
       - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
       - ./credentials:/app/credentials
-      - ./volumes/models/insightface:/root/.insightface
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/insightface:/home/appuser/.insightface
+      - ./volumes/models/huggingface:/home/appuser/.cache/huggingface
     depends_on:
       ollama:
         condition: service_started
@@ -56,28 +52,21 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    restart: "no"
-    tty: true
-    stdin_open: true
 
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    image: humblebeeai/celery-worker
+    image: so.celery-worker
     container_name: lumiohub-celery-worker
     network_mode: host
     env_file:
       - .env
-    environment:
-      PYTHONWARNINGS: "ignore::FutureWarning"
     volumes:
       - ./.env:/app/.env:ro
-      - ./src:/app/src
-      - ./configs:/app/configs
       - ./credentials:/app/credentials
-      - ./volumes/models/insightface:/root/.insightface
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/insightface:/home/appuser/.insightface
+      - ./volumes/models/huggingface:/home/appuser/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -92,8 +81,8 @@ services:
   flower:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: humblebeeai/celery-flower
+      dockerfile: Dockerfile.flower
+    image: so.celery-flower
     container_name: lumiohub-celery-flower
     network_mode: host
     environment:
