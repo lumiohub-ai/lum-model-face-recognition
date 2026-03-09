@@ -8,12 +8,24 @@ client_slug: "rnd"
 timezone: "UTC"
 debug: true
 eval: true
+visualize: true
 minimum_face_size: 50
 max_track_lifetime_seconds: 30
 fps: 25
+vis_fps: 15
 
 videos:
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S1/P1E_S1_C1/P1E_S1_C1"
+    annotation: "volumes/src/annotation/chokepoint/P1E/P1E_S1/P1E_S1_C1/P1E_S1_C1.json"
+    camera_name: "P1E_S1_C1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S1/P1E_S1_C2/P1E_S1_C2"
+    annotation: "volumes/src/annotation/chokepoint/P1E/P1E_S1/P1E_S1_C2/P1E_S1_C2.json"
+    camera_name: "P1E_S1_C2"
+    cam_type: "IN"
+
   - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S1/P1E_S1_C3/P1E_S1_C3"
-    annotation: "volumes/src/annotation/chokepoint/P1E/P1E_S1_C3.json"
+    annotation: "volumes/src/annotation/chokepoint/P1E/P1E_S1/P1E_S1_C3/P1E_S1_C3.json"
     camera_name: "P1E_S1_C3"
     cam_type: "IN"

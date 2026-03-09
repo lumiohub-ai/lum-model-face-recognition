@@ -49,6 +49,9 @@ class TrackManager:
         # Increase from 5000 to 50000 to prevent premature ID reuse
         self.passed_tracks: deque = deque(maxlen=50000)
 
+        # Last frame the track was active in the tracker (includes ghost/coasting frames)
+        self.track_last_active_frame: Dict[int, int] = {}
+
     def register_track(self, track_id: int) -> None:
         """Register a new track.
 

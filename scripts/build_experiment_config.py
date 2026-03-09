@@ -47,15 +47,14 @@ def find_leaf_frame_dirs(frames_root: str) -> list[Path]:
 def annotation_path(seq_id: str) -> str:
     """Derive the annotation file path from a sequence ID.
 
-    P1 (no dot):  P1E/P1E_S1_C1.json
-    P2 (has dot): P2E/P2E_S1_C1/P2E_S1_C1.1.json
+    Mirrors the frames directory structure:
+      P1: P1E/P1E_S1/P1E_S1_C1/P1E_S1_C1.json
+      P2: P2E/P2E_S1/P2E_S1_C1/P2E_S1_C1.1.json
     """
-    portal_type = seq_id[:3]  # P1E, P1L, P2E, P2L
-    if "." not in seq_id:
-        return f"{ANNOTATION_ROOT}/{portal_type}/{seq_id}.json"
-    else:
-        base_id = seq_id.rsplit(".", 1)[0]  # P2E_S1_C1
-        return f"{ANNOTATION_ROOT}/{portal_type}/{base_id}/{seq_id}.json"
+    portal_type = seq_id[:3]           # P1E, P1L, P2E, P2L
+    session = seq_id[:6]               # P1E_S1, P2E_S3, etc.
+    base_id = seq_id.rsplit(".", 1)[0] if "." in seq_id else seq_id
+    return f"{ANNOTATION_ROOT}/{portal_type}/{session}/{base_id}/{seq_id}.json"
 
 
 def cam_type(seq_id: str) -> str:

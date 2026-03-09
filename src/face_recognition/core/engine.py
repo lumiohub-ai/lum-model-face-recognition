@@ -404,6 +404,13 @@ class FaceEngine:
             # Register track
             self.track_manager.register_track(track_id)
 
+            # Record last frame this track was active (includes ghost/coasting frames)
+            self.track_manager.track_last_active_frame[track_id] = frame_num
+
+            # Skip ghost frames — no real face detection matched this track this frame
+            if track.time_since_update > 0:
+                continue
+
             if track.history_observations and len(track.history_observations) > 2:
                 box = track.history_observations[-1]
                 x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
@@ -800,7 +807,22 @@ class FaceEngine:
         emb_array = np.array(list(track_embeddings.values()))
         track_landmarks = self.track_manager.get_track_landmarks(track_id)
 
-        return self.face_recognition.recognize_face(emb_array, frame_nums, track_landmarks)
+        result = self.face_recognition.recognize_face(emb_array, frame_nums, track_landmarks)
+        if result is not None:
+            result['first_frame_num'] = frame_nums[0]
+            result['last_frame_num'] = frame_nums[-1]
+            result['last_tracked_frame_num'] = self.track_manager.track_last_active_frame.get(
+                track_id, frame_nums[-1]
+            )
+            result['_debug_n_embeddings'] = len(frame_nums)
+            result['_debug_embed_span'] = frame_nums[-1] - frame_nums[0]
+            if self.args.debug:
+                logger.debug(
+                    f"[RECOG] track={track_id} embeddings={len(frame_nums)} "
+                    f"span={frame_nums[-1]-frame_nums[0]} "
+                    f"first={frame_nums[0]} last={frame_nums[-1]}"
+                )
+        return result
 
     def _log_recognition_result(self, track_id: int, recognition_info: Dict[str, Any]) -> None:
         """Log the recognition result with structured logging.
