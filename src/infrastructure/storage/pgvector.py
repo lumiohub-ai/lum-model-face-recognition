@@ -39,7 +39,7 @@ class PgVectorStore:
 
         # Ensure schema exists (init_schema also validates)
         self.db_config.init_schema(self.client_slug)
-        logger.info(f"PgVectorStore initialized for: {self.schema_name}")
+        logger.debug(f"PgVectorStore initialized for: {self.schema_name}")
 
     def add_embedding(
         self,
@@ -234,7 +234,7 @@ class PgVectorStore:
                 norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
                 embeddings = embeddings / np.where(norms == 0, 1, norms)
 
-                logger.info(f"Loaded {len(names)} embeddings from {self.schema_name}")
+                logger.debug(f"Loaded {len(names)} embeddings from {self.schema_name}")
                 return names, embeddings
 
         except Exception as e:

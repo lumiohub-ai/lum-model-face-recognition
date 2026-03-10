@@ -113,7 +113,7 @@ class PersonTracker:
                     with_reid=with_reid,  # Enable/disable ReID
                     custom_features=None  # We'll provide custom features if needed
                 )
-                logger.info(
+                logger.debug(
                     f"BoT-SORT initialized: ReID={'enabled' if with_reid else 'disabled'}, "
                     f"device={device}, conf={confidence_threshold}, iou={iou_threshold}"
                 )
@@ -124,7 +124,7 @@ class PersonTracker:
         else:
             logger.info(f"Using simple IoU tracking (BoT-SORT not available or type={tracker_type})")
 
-        logger.info(
+        logger.debug(
             f"PersonTracker initialized: {tracker_type.upper()} "
             f"(max_age={max_age}, min_hits={min_hits}, iou={iou_threshold}, "
             f"global_ids={'enabled' if global_id_generator else 'disabled'}, "

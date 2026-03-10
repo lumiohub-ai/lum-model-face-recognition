@@ -99,7 +99,7 @@ class FaceDetector:
                 self.model = FaceAnalysis(name=self.model_name)
                 self.model.prepare(ctx_id=self.gpu_id)
 
-        logger.info(f"Initialized InsightFace model '{self.model_name}' on GPU {self.gpu_id}")
+        logger.debug(f"Initialized InsightFace model '{self.model_name}' on GPU {self.gpu_id}")
 
     def _add_padding(self, image: np.ndarray) -> np.ndarray:
         """Add padding around the image to improve face detection.

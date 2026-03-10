@@ -148,11 +148,11 @@ class DatabaseConfig:
             with self.engine.begin() as conn:
                 # Create schema
                 conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
-                logger.info(f"Schema ensured: {schema_name}")
+                logger.debug(f"Schema ensured: {schema_name}")
 
                 # Enable pgvector extension
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-                logger.info("pgvector extension enabled")
+                logger.debug("pgvector extension enabled")
 
                 # Create face_embeddings table
                 conn.execute(text(f"""
@@ -169,7 +169,7 @@ class DatabaseConfig:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """))
-                logger.info(f"Table created: {schema_name}.face_embeddings")
+                logger.debug(f"Table created: {schema_name}.face_embeddings")
 
                 # Add image_url_norm column if it doesn't exist (migration)
                 conn.execute(text(f"""
@@ -199,7 +199,7 @@ class DatabaseConfig:
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_{schema_name}_user_url_unique
                     ON {schema_name}.face_embeddings(user_id, image_url_norm)
                 """))
-                logger.info(f"Unique constraint created on (user_id, image_url_norm)")
+                logger.debug(f"Unique constraint created on (user_id, image_url_norm)")
 
                 # Create vector similarity index (ivfflat)
                 # Note: This requires some data to be inserted first for optimal performance
@@ -209,7 +209,7 @@ class DatabaseConfig:
                     USING ivfflat (embedding vector_cosine_ops)
                     WITH (lists = 100)
                 """))
-                logger.info(f"Indexes created for {schema_name}")
+                logger.debug(f"Indexes created for {schema_name}")
 
                 logger.info(f"✅ Schema initialization complete: {schema_name}")
 

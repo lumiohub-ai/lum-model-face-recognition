@@ -19,7 +19,7 @@ class FaceRecognition:
     def load_embeddings_from_pgvector(self) -> Tuple[List[str], np.ndarray]:
         """Load face embeddings from pgvector database."""
         names, embeddings = self.pgvector_store.get_all_embeddings()
-        self.args.logger.info(f"Loaded {len(names)} embeddings from pgvector")
+        self.args.logger.debug(f"Loaded {len(names)} embeddings from pgvector")
         return names, embeddings
 
     def _rebuild_name_index(self) -> None:

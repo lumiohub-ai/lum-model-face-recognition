@@ -195,7 +195,7 @@ class ImageFetcher:
                 self.gcs_client = storage.Client.from_service_account_json(
                     self.gcs_credentials
                 )
-                logger.info(f"GCS client initialized with bucket: {self.gcs_bucket}")
+                logger.debug(f"GCS client initialized with bucket: {self.gcs_bucket}")
             except Exception as e:
                 logger.error(f"Failed to initialize GCS client: {e}")
                 self.gcs_client = None

@@ -97,7 +97,7 @@ class PersonStateManager:
         # Event queue
         self.event_queue: List[PersonEvent] = []
 
-        logger.info(f"PersonStateManager initialized for camera {camera_id}")
+        logger.debug(f"PersonStateManager initialized for camera {camera_id}")
 
     def update_person(
         self,

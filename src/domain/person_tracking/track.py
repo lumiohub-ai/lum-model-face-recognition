@@ -53,7 +53,7 @@ class PersonTrackManager:
         # Track state
         self.track_identity: Dict[int, Optional[str]] = {}  # Person name if recognized
 
-        logger.info(
+        logger.debug(
             f"PersonTrackManager initialized (max_history={max_history_frames} frames)"
         )
 

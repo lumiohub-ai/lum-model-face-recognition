@@ -23,23 +23,26 @@ class EmbeddingSyncService:
     - Image added/deleted: Update specific embeddings
     """
 
-    def __init__(self, client_slug: str, gpu_id: int = 0, config: Optional[Dict] = None):
+    def __init__(self, client_slug: str, gpu_id: int = 0, config: Optional[Dict] = None,
+                 detector=None, store=None):
         """Initialize embedding sync service.
 
         Args:
             client_slug: Organization slug (e.g., 'humblebee', 'dev')
             gpu_id: GPU device ID for face detection
             config: Optional config dict (from config.yaml)
+            detector: Optional existing FaceDetector to reuse (avoids re-loading model)
+            store: Optional existing PgVectorStore to reuse (avoids re-init schema)
         """
         self.client_slug = client_slug
 
-        # Get face detection padding from config or environment (default: 20%)
-        if config and 'face_detection_padding' in config:
-            padding_percent = float(config.get('face_detection_padding', 20.0))
+        if detector is not None:
+            self.detector = detector
+        else:
+            padding_percent = float(config.get('face_detection_padding', 20.0)) if config else 20.0
+            self.detector = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
 
-        self.detector = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
-
-        self.store = PgVectorStore(client_slug)
+        self.store = store if store is not None else PgVectorStore(client_slug)
         self.image_fetcher = ImageFetcher()
 
         logger.info(f"EmbeddingSyncService initialized for: {client_slug}")
@@ -196,7 +199,6 @@ class EmbeddingSyncService:
 
             # Get existing embeddings from pgvector
             existing_names, existing_embs = self.store.get_all_embeddings()
-            logger.info(f"Existing embeddings in pgvector: {len(existing_embs)}")
 
             # Build index of existing user_id -> normalized image_urls
             from sqlalchemy import text
@@ -213,8 +215,6 @@ class EmbeddingSyncService:
                     user_id = row[0]
                     image_urls_norm = row[1] if row[1] else []
                     existing_images[user_id] = set(image_urls_norm)
-
-            logger.info(f"Existing users in pgvector: {len(existing_images)}")
 
             # === TWO-WAY SYNC: Detect and remove stale embeddings ===
 

@@ -88,7 +88,8 @@ class FrameAnnotator:
         frame: np.ndarray,
         person_states: List[Dict],
         fps: float = 0.0,
-        show_stats: bool = True
+        show_stats: bool = True,
+        roi_active: bool = False,
     ) -> np.ndarray:
         """Annotate frame with all detection results.
 
@@ -102,6 +103,10 @@ class FrameAnnotator:
             Annotated frame
         """
         annotated = frame.copy()
+
+        # Draw ROI border when camera has an active ROI configured
+        if roi_active:
+            self._draw_roi_border(annotated)
 
         # Draw each person
         for state in person_states:
@@ -119,6 +124,14 @@ class FrameAnnotator:
             )
 
         return annotated
+
+    def _draw_roi_border(self, frame: np.ndarray) -> None:
+        """Draw an orange border to indicate the frame is a cropped ROI."""
+        h, w = frame.shape[:2]
+        t = max(3, h // 120)
+        color = (0, 140, 255)  # orange
+        cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, t)
+        cv2.putText(frame, "ROI", (t + 5, t + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
     def draw_person(
         self,
@@ -164,6 +177,19 @@ class FrameAnnotator:
         # Draw bounding box
         self.draw_bbox(frame, bbox, color)
 
+        # Draw face bounding box + detection score if available
+        face_bbox = state.get('face_bbox')
+        if face_bbox is not None:
+            fx1, fy1, fx2, fy2 = map(int, face_bbox)
+            cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (255, 255, 0), 1)
+            face_det_score = state.get('face_det_score')
+            if face_det_score is not None:
+                cv2.putText(
+                    frame, f"{face_det_score:.2f}",
+                    (fx1, max(fy1 - 4, 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 0), 1
+                )
+
         # Draw keypoints and skeleton
         if keypoints is not None and self.draw_skeleton:
             self.draw_keypoints(frame, keypoints)
@@ -183,7 +209,9 @@ class FrameAnnotator:
             identity,
             identity_locked,
             color,
-            action=action
+            action=action,
+            vote_count=state.get('vote_count', 0),
+            required_votes=state.get('required_votes', 0),
         )
 
     def draw_bbox(
@@ -273,7 +301,9 @@ class FrameAnnotator:
         identity: Optional[str],
         identity_locked: bool,
         color: Tuple[int, int, int],
-        action: Optional[str] = None
+        action: Optional[str] = None,
+        vote_count: int = 0,
+        required_votes: int = 0,
     ) -> None:
         """Draw label above person bounding box.
 
@@ -298,9 +328,12 @@ class FrameAnnotator:
         if identity:
             parts.append(identity)
 
-            # Add lock status indicator only if not locked (for debugging)
             if not identity_locked:
-                parts.append("?")
+                # Show vote progress toward lock
+                if required_votes > 0:
+                    parts.append(f"{vote_count}/{required_votes}v")
+                else:
+                    parts.append("?")
 
         if action:
             parts.append(f"[{action}]")

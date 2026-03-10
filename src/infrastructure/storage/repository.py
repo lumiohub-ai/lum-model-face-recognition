@@ -53,7 +53,6 @@ class Repository:
                         'image_urls': image_urls
                     }
                     users.append(user)
-                logger.info(f"Fetched {len(users)} active users from database")
                 return users
         except Exception as e:
             logger.error(f"Failed to fetch users: {e}")

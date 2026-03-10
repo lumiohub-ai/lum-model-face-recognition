@@ -88,7 +88,7 @@ class PersonDetector:
         else:
             model_type = "YOLOv8-Pose" if use_pose else "YOLOv8"
 
-        logger.info(
+        logger.debug(
             f"Initializing PersonDetector with {model_type}{model_size} "
             f"on device: {self.device}"
         )
@@ -101,7 +101,7 @@ class PersonDetector:
 
         try:
             self.model = YOLO(model_name)
-            logger.info(f"{model_type} model loaded: {model_name}")
+            logger.debug(f"{model_type} model loaded: {model_name}")
 
             # Move model to device
             self.model.to(self.device)

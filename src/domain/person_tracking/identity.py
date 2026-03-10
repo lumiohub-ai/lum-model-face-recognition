@@ -55,7 +55,7 @@ class IdentityManager:
         # Format: {track_id: {'name': str, 'confidence': float, 'locked_at': float}}
         self.locked_identities: Dict[int, Dict] = {}
 
-        logger.info(
+        logger.debug(
             f"IdentityManager initialized: M={self.M} frames, "
             f"consensus={self.consensus_threshold:.0%}, "
             f"min_duration={self.min_window_duration_ms}ms"

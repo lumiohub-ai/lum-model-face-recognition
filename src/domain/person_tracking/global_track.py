@@ -205,7 +205,7 @@ class GlobalTrackManager:
 
         if self.enabled:
             logger.info("GlobalTrackManager initialized (PHASE 1 - BODY ReID)")
-            logger.info(f"Config: threshold={self.similarity_threshold}, "
+            logger.debug(f"Config: threshold={self.similarity_threshold}, "
                        f"temporal_window={self.temporal_window_sec}s")
         else:
             logger.debug("GlobalTrackManager disabled (enable_global_tracking=false)")
@@ -443,7 +443,7 @@ class GlobalTrackManager:
                 # Update identity if now locked (and track doesn't have one)
                 if identity_locked and identity and not track.identity:
                     track.set_identity(identity, locked=True)
-                    logger.info(
+                    logger.debug(
                         f"GLOBAL_IDENTITY_UPDATE | global_id={global_id} "
                         f"identity='{identity}' (locked)"
                     )
@@ -478,7 +478,7 @@ class GlobalTrackManager:
                             camera_id, old_local_id, None, 0.0,
                             identity=None, identity_locked=False
                         )
-                        logger.info(
+                        logger.debug(
                             f"ID_SWITCH_REASSIGN | old_track={old_local_id} → new_global={new_global_for_old}"
                         )
 
@@ -491,7 +491,7 @@ class GlobalTrackManager:
                     global_id, camera_id, local_track_id,
                     None, detection_confidence  # No embedding needed for identity match
                 )
-                logger.info(
+                logger.debug(
                     f"GLOBAL_IDENTITY_MATCH | global_id={global_id} camera={camera_id} "
                     f"local_id={local_track_id} identity='{identity}'"
                 )
@@ -595,7 +595,7 @@ class GlobalTrackManager:
             if identity_locked and identity and not best_match.identity:
                 best_match.set_identity(identity, locked=True)
 
-            logger.info(
+            logger.debug(
                 f"GLOBAL_MATCH | global_id={global_id} camera={camera_id} "
                 f"local_id={local_track_id} similarity={best_similarity:.3f}"
             )
@@ -620,7 +620,7 @@ class GlobalTrackManager:
                     (self.metrics.created_new + 1)
                 )
 
-            logger.info(
+            logger.debug(
                 f"GLOBAL_NEW | global_id={global_id} camera={camera_id} "
                 f"local_id={local_track_id} best_sim={best_similarity:.3f}"
             )
@@ -1136,7 +1136,7 @@ class GlobalTrackManager:
             track = self.global_tracks[global_id]
             track.mark_camera_inactive(camera_id)
 
-            logger.info(
+            logger.debug(
                 f"TRACK_INACTIVE | global_id={global_id} camera={camera_id} "
                 f"local_id={local_track_id}"
             )
@@ -1158,7 +1158,7 @@ class GlobalTrackManager:
             duration = (datetime.now() - stats['created_at']).total_seconds()
             face_rate = stats['faces_detected'] / max(stats['total_frames'], 1)
 
-            logger.info(
+            logger.debug(
                 f"TRACK_REMOVED | camera={camera_id} local_id={local_track_id} "
                 f"global_id={global_id} duration={duration:.1f}s "
                 f"face_rate={face_rate:.2%}"
@@ -1652,7 +1652,7 @@ class GlobalTrackManager:
         if track is None:
             return False
         track.set_identity(identity, locked)
-        logger.info(f"GLOBAL_IDENTITY | global_id={global_id} identity='{identity}' locked={locked}")
+        logger.debug(f"GLOBAL_IDENTITY | global_id={global_id} identity='{identity}' locked={locked}")
         return True
 
     def reassign_local_track(
@@ -1706,7 +1706,7 @@ class GlobalTrackManager:
                 self.top_k_size, self.prototype_alpha
             )
 
-        logger.info(
+        logger.debug(
             f"REASSIGN | camera={camera_id} local={local_track_id} "
             f"old_global={old_global_id} -> new_global={new_global_id}"
         )

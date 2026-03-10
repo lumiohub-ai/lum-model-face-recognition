@@ -89,11 +89,11 @@ class MessageDLQ:
             self.redis.expire(f'{dlq_key}:index', DLQ_TTL)
 
             logger.warning(
-                f"[StreamConsumer] Message sent to DLQ: stream={stream} "
+                f"Message sent to DLQ: stream={stream} "
                 f"message_id={message_id} error_type={error_type} error={error}"
             )
         except Exception as e:
-            logger.error(f"[StreamConsumer] Failed to send to DLQ: {e}")
+            logger.error(f"Failed to send to DLQ: {e}")
 
     def get_count(self, stream: str) -> int:
         """Get number of messages in DLQ for a stream.
@@ -138,7 +138,7 @@ class StreamConsumer:
         # Initialize Dead-Letter Queue
         self.dlq = MessageDLQ(self.redis)
 
-        logger.info(f"[StreamConsumer] Initialized: {self.consumer_name}")
+        logger.debug(f"Initialized: {self.consumer_name}")
 
     def set_camera_handler(self, handler: Callable[[str, str, Dict], None]) -> None:
         """
@@ -154,24 +154,24 @@ class StreamConsumer:
         for name, stream in COMMAND_STREAMS.items():
             try:
                 self.redis.xgroup_create(stream, CONSUMER_GROUP, id='0', mkstream=True)
-                logger.info(f"[StreamConsumer] Created consumer group for {stream}")
+                logger.info(f"Created consumer group for {stream}")
             except redis.ResponseError as e:
                 if 'BUSYGROUP' not in str(e):
                     raise
                 # Group already exists, that's fine
-                logger.debug(f"[StreamConsumer] Consumer group already exists for {stream}")
+                logger.debug(f"Consumer group already exists for {stream}")
 
     def start(self) -> None:
         """Start consuming from all streams in a background thread."""
         if self._running:
-            logger.warning("[StreamConsumer] Already running")
+            logger.warning("Already running")
             return
 
         self._ensure_consumer_groups()
         self._running = True
         self._thread = threading.Thread(target=self._consume_loop, daemon=True)
         self._thread.start()
-        logger.info("[StreamConsumer] Started consuming from Redis Streams")
+        logger.debug("Started consuming from Redis Streams")
 
     def _consume_loop(self) -> None:
         """Main consumption loop."""
@@ -195,10 +195,10 @@ class StreamConsumer:
                             self._process_message(stream_name, message_id, data)
 
             except redis.ConnectionError as e:
-                logger.error(f"[StreamConsumer] Redis connection error: {e}")
+                logger.error(f"Redis connection error: {e}")
                 time.sleep(1)
             except Exception as e:
-                logger.error(f"[StreamConsumer] Error in consume loop: {e}")
+                logger.error(f"Error in consume loop: {e}")
                 time.sleep(0.5)
 
     def _process_message(self, stream: str, message_id: str, data: Dict[str, str]) -> None:
@@ -247,12 +247,12 @@ class StreamConsumer:
 
         # Step 3: Idempotency check
         if self._is_duplicate(idempotency_key):
-            logger.debug(f"[StreamConsumer] Duplicate command ignored: {idempotency_key}")
+            logger.debug(f"Duplicate command ignored: {idempotency_key}")
             self._ack(stream, message_id)
             return
 
         logger.info(
-            f"[StreamConsumer] Processing {command_type} "
+            f"Processing {command_type} "
             f"command_id={command_id} stream={stream} message_id={message_id}"
         )
 
@@ -263,7 +263,7 @@ class StreamConsumer:
             elif stream == COMMAND_STREAMS['CAMERA']:
                 self._dispatch_camera_command(command_id, command_type, payload)
             else:
-                logger.warning(f"[StreamConsumer] Unknown stream: {stream}")
+                logger.warning(f"Unknown stream: {stream}")
                 self.dlq.send(
                     stream=stream,
                     message_id=message_id,
@@ -282,7 +282,7 @@ class StreamConsumer:
             # Log error with traceback
             tb_str = traceback.format_exc()
             logger.error(
-                f"[StreamConsumer] Error processing {command_type}: {e}\n{tb_str}"
+                f"Error processing {command_type}: {e}\n{tb_str}"
             )
             # Don't ACK - message will be redelivered by Redis
             # After multiple redeliveries, consider moving to DLQ manually
@@ -304,7 +304,7 @@ class StreamConsumer:
         full_name = payload.get('full_name', 'Unknown')
         image_urls = payload.get('image_urls', [])
 
-        logger.info(f"[StreamConsumer] Dispatching {command_type} for user {user_id}")
+        logger.info(f"Dispatching {command_type} for user {user_id}")
 
         if command_type == 'CreateEmbedding':
             process_add_user.delay(
@@ -333,23 +333,21 @@ class StreamConsumer:
                 {'id': user_id}
             )
         else:
-            logger.warning(f"[StreamConsumer] Unknown embedding command: {command_type}")
+            logger.warning(f"Unknown embedding command: {command_type}")
 
     def _dispatch_camera_command(self, command_id: str, command_type: str, payload: Dict) -> None:
         """Dispatch camera commands to handler."""
-        logger.info(f"[StreamConsumer] Dispatching camera command: {command_type}")
-
         if not self._camera_handler:
-            logger.warning("[StreamConsumer] No camera handler set")
+            logger.warning("No camera handler set")
             return
 
         client_slug = payload.get('client_slug')
 
         try:
             self._camera_handler(command_type, client_slug, payload)
-            logger.debug("[StreamConsumer] Camera handler completed successfully")
+            logger.debug("Camera handler completed successfully")
         except Exception as e:
-            logger.error(f"[StreamConsumer] Camera handler error: {e}")
+            logger.error(f"Camera handler error: {e}")
 
     def _is_duplicate(self, idempotency_key: str) -> bool:
         """Check if command was already processed."""
@@ -369,13 +367,13 @@ class StreamConsumer:
         """Acknowledge a message."""
         try:
             self.redis.xack(stream, CONSUMER_GROUP, message_id)
-            logger.debug(f"[StreamConsumer] ACKed {message_id} on {stream}")
+            logger.debug(f"ACKed {message_id} on {stream}")
         except Exception as e:
-            logger.error(f"[StreamConsumer] Failed to ACK {message_id}: {e}")
+            logger.error(f"Failed to ACK {message_id}: {e}")
 
     def stop(self) -> None:
         """Stop the consumer gracefully."""
-        logger.info("[StreamConsumer] Stopping...")
+        logger.info("Stopping...")
         self._running = False
 
         if self._thread and self._thread.is_alive():
@@ -384,9 +382,9 @@ class StreamConsumer:
         try:
             self.redis.close()
         except Exception as e:
-            logger.error(f"[StreamConsumer] Error closing Redis: {e}")
+            logger.error(f"Error closing Redis: {e}")
 
-        logger.info("[StreamConsumer] Stopped")
+        logger.info("Stopped")
 
     def is_running(self) -> bool:
         """Check if consumer is running."""

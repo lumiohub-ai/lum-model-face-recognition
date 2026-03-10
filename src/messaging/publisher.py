@@ -58,14 +58,14 @@ class MDAPublisher:
             GCS URL or None if upload fails
         """
         if self.gcs_uploader is None:
-            logger.warning("[MDA] No GCS uploader configured, skipping image upload")
+            logger.warning("No GCS uploader configured, skipping image upload")
             return None
 
         try:
             url = await self.gcs_uploader.upload_image(image, prefix)
             return url
         except Exception as e:
-            logger.error(f"[MDA] Failed to upload image to GCS: {e}")
+            logger.error(f"Failed to upload image to GCS: {e}")
             return None
 
     def publish_attendance_recorded(

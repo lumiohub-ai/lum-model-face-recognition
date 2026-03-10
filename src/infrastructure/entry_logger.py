@@ -205,7 +205,7 @@ class EntryLogger:
             from infrastructure.storage import ImageFetcher
             image_url = ImageFetcher().upload_image(face, "unrecognized_faces", self.client_slug)
             if image_url:
-                logger.info(f"Uploaded unrecognized face to GCS: {image_url}")
+                logger.debug(f"Uploaded unrecognized face to GCS: {image_url}")
         except Exception as e:
             logger.error(f"Error uploading unrecognized face: {e}")
 

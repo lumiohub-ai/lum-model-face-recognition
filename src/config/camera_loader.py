@@ -53,10 +53,4 @@ def load_cameras_from_db(
             }
             all_configs.append(config)
 
-            logger.info(
-                f"Camera: {config['camera_name']} | "
-                f"Type: {config['cam_type']} | "
-                f"App: {application}"
-            )
-
     return all_configs

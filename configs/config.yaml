@@ -43,3 +43,9 @@ action_recognition:
     idle:
       backend_type: unknown
       description: "standing still, sitting without doing anything specific, looking around"
+
+# Parallel multi-camera pipeline settings
+pipeline:
+  detection_interval: 1        # run YOLO every N frames (1 = every frame)
+  recognition_interval: 1      # run ArcFace every N detection frames
+  async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200

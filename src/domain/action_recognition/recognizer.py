@@ -151,8 +151,6 @@ class ActionRecognizer:
             worker.start()
             self.workers.append(worker)
 
-        logger.info(f"Started {self.num_workers} action recognition worker threads")
-
     def stop_workers(self) -> None:
         """Stop all worker threads gracefully."""
         if not self.running:
@@ -250,7 +248,7 @@ class ActionRecognizer:
                 # Clean up callback
                 del self.result_callbacks[request_id]
 
-            logger.info(
+            logger.debug(
                 f"Action recognized: {vlm_action} ({activity_type}) | "
                 f"time={inference_time:.3f}s | "
                 f"user_id={metadata.get('user_id')} | "

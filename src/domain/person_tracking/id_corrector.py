@@ -47,7 +47,7 @@ class IDSwitchCorrector:
         # Correction history: {(wrong_id, correct_id): correction_count}
         self.correction_history: Dict[Tuple[int, int], int] = {}
 
-        logger.info(
+        logger.debug(
             f"IDSwitchCorrector initialized: threshold={embedding_distance_threshold}, "
             f"interval={correction_interval_frames} frames"
         )

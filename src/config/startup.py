@@ -135,9 +135,9 @@ def init_smart_office_app(
 
 def log_startup_info(client_slug: str, **extra_info) -> None:
     """Log standard startup information."""
-    logger.info("=" * 60)
+    logger.info("=" * 40)
     logger.info("SmartOfficeEngine Starting")
-    logger.info("=" * 60)
+    logger.info("=" * 40)
     logger.info(f"Client: {client_slug}")
 
     for key, value in extra_info.items():

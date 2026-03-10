@@ -7,6 +7,7 @@ This module manages:
 """
 
 import os
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -36,6 +37,8 @@ class StreamManager:
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
         self.frame_nums: List[int] = []
         self._initialized = False
+        self._last_write_time: List[float] = []
+        self._write_interval: float = 1.0 / 20
 
     def init_streams(self) -> List[StreamHandler]:
         """Initialize stream handlers for all cameras.
@@ -55,7 +58,6 @@ class StreamManager:
             self.frame_nums.append(0)
 
         self._initialized = True
-        logger.info(f"Initialized {len(self.streams)} stream handler(s)")
         return self.streams
 
     def init_video_writers(self, output_dir: str) -> List[Optional[cv2.VideoWriter]]:
@@ -85,21 +87,33 @@ class StreamManager:
             logger.error(f"Output directory not writable: {output_dir} - {e}")
             return self.video_writers
 
+        self._last_write_time = []
+
         for i, config in enumerate(self.camera_configs):
             camera_name = config['camera_name'].replace(' ', '_')
             status = config.get('cam_type', 'IN').upper()
-            filename = f"{output_dir}/{status}_{camera_name}_{date}_{time_str}.avi"
+            filename = f"{output_dir}/{status}_{camera_name}_{date}_{time_str}.mp4"
 
-            # Get frame dimensions from stream
-            w, h = 1920, 1080  # Default
+            # Get frame dimensions and fps from stream
+            w, h, fps = 1920, 1080, 20
             if i < len(self.streams):
                 stream = self.streams[i]
-                if hasattr(stream, 'frame') and stream.frame is not None:
-                    h, w = stream.frame.shape[:2]
+                if stream.cap is not None:
+                    cap_w = int(stream.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    cap_h = int(stream.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    cap_fps = stream.cap.get(cv2.CAP_PROP_FPS)
+                    if cap_w > 0:
+                        w = cap_w
+                    if cap_h > 0:
+                        h = cap_h
+                    if 1 < cap_fps < 120:
+                        fps = int(cap_fps)
 
-            writer = self._create_video_writer(filename, w, h)
+            writer = self._create_video_writer(filename, w, h, fps)
             self.video_writers.append(writer)
+            self._last_write_time.append(0.0)
 
+        self._write_interval = 1.0 / (fps if fps > 0 else 20)
         return self.video_writers
 
     def _create_video_writer(
@@ -121,11 +135,11 @@ class StreamManager:
             VideoWriter object or None if creation failed
         """
         try:
-            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             writer = cv2.VideoWriter(filename, fourcc, fps, (width, height))
 
             if writer.isOpened():
-                logger.info(f"Video writer initialized: {filename} ({width}x{height}) [MJPEG]")
+                logger.info(f"Video writer initialized: {filename} ({width}x{height} @ {fps}fps) [mp4v]")
                 return writer
             else:
                 writer.release()
@@ -169,14 +183,24 @@ class StreamManager:
     def write_frames(self, annotated_frames: List[Tuple[int, np.ndarray]]) -> None:
         """Write annotated frames to video files.
 
+        Throttles writes to match the declared fps so playback duration
+        matches real-world recording time.
+
         Args:
             annotated_frames: List of (camera_idx, frame) tuples
         """
+        now = time.monotonic()
         for camera_idx, frame in annotated_frames:
-            if camera_idx < len(self.video_writers):
-                writer = self.video_writers[camera_idx]
-                if writer is not None:
-                    writer.write(frame)
+            if camera_idx >= len(self.video_writers):
+                continue
+            writer = self.video_writers[camera_idx]
+            if writer is None:
+                continue
+            # Skip if not enough time has passed since last write
+            if now - self._last_write_time[camera_idx] < self._write_interval:
+                continue
+            writer.write(frame)
+            self._last_write_time[camera_idx] = now
 
     def stop_streams(self) -> None:
         """Stop all streams."""

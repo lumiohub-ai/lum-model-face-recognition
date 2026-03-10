@@ -25,7 +25,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from config import init_smart_office_app, log_startup_info
-from engine import SmartOfficeEngine
+from pipeline.engine import SmartOfficeEngine
 from config.settings import settings
 from messaging import RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
@@ -105,32 +105,31 @@ class MDAManager:
     def start(self) -> None:
         """Initialize and start all MDA components."""
         if self._running:
-            logger.warning("[MDA] Already running")
+            logger.warning("Already running")
             return
 
         # Verify Redis connection
         if not RedisClient().is_connected():
-            logger.error("[MDA] Redis not available")
+            logger.error("Redis not available")
             sys.exit(1)
 
         # Start stream consumer for Backend commands
         self.stream_consumer = StreamConsumer()
         self.stream_consumer.set_camera_handler(self._handle_camera_command)
         self.stream_consumer.start()
-        logger.info("[MDA] StreamConsumer started")
+        logger.debug("StreamConsumer started")
 
         # Start internal reload listeners
         self._start_reload_listeners()
         self._running = True
-        logger.info("[MDA] All components started")
 
     def stop(self) -> None:
         """Gracefully shutdown MDA components."""
         if self.stream_consumer:
-            logger.info("[MDA] Stopping stream consumer...")
+            logger.info("Stopping stream consumer...")
             self.stream_consumer.stop()
         self._running = False
-        logger.info("[MDA] Shutdown complete")
+        logger.info("Shutdown complete")
 
     def _start_reload_listeners(self) -> None:
         """Start background listeners for internal reload notifications."""
@@ -139,7 +138,7 @@ class MDAManager:
                 r = redis.Redis(host=settings.redis_host, port=settings.redis_port, decode_responses=True)
                 pubsub = r.pubsub()
                 pubsub.subscribe(channel)
-                logger.info(f"[MDA] Subscribed to {channel}")
+                logger.debug(f"Subscribed to {channel}")
 
                 for message in pubsub.listen():
                     if message['type'] == 'message':
@@ -148,7 +147,7 @@ class MDAManager:
                             # Handle commands for ALL tenants (multi-tenant support)
                             handler(data)
                         except Exception as e:
-                            logger.error(f"[MDA] Error in {channel}: {e}")
+                            logger.error(f"Error in {channel}: {e}")
 
             thread = threading.Thread(target=listener, daemon=True)
             thread.start()
@@ -168,42 +167,41 @@ class MDAManager:
 
     def _handle_embedding_reload(self, data: dict) -> None:
         """Handle embedding reload notification."""
-        logger.info(f"[MDA] Embedding reload: {data}")
+        logger.info(f"Embedding reload: {data}")
         if self.engine:
             self.engine.reload_embeddings()
-            logger.info("[MDA] Embeddings reloaded")
+            logger.info("Embeddings reloaded")
         else:
-            logger.warning("[MDA] Engine not available")
+            logger.warning("Engine not available")
 
     def _handle_status_reload(self, data: dict) -> None:
         """Handle status reload notification."""
-        logger.info(f"[MDA] Status reload: {data}")
+        logger.info(f"Status reload: {data}")
         if self.engine and hasattr(self.engine, 'entry_logger'):
             self.engine.entry_logger.reload_status()
-            logger.info("[MDA] Status reloaded")
         else:
-            logger.warning("[MDA] Engine not available")
+            logger.warning("Engine not available")
 
     def _handle_camera_command(self, command_type: str, client_slug: str, payload: dict) -> None:
         """Handle camera config commands from Backend (multi-tenant)."""
         camera_id = payload.get('camera_id')
-        logger.info(f"[MDA] Camera command: {command_type} for {client_slug} camera_id={camera_id}")
+        logger.info(f"Camera command: {command_type} for {client_slug} camera_id={camera_id}")
 
         # Process commands for ALL tenants (multi-tenant support)
         if command_type in ('ConfigureCamera', 'StartCamera'):
             if self.engine:
                 success = self.engine.reload_camera_configs()
                 if success:
-                    logger.info("[MDA] Camera configs reloaded")
+                    logger.info("Camera configs reloaded")
                 else:
-                    logger.warning("[MDA] Camera reload returned False")
+                    logger.warning("Camera reload returned False")
             else:
                 # Engine not initialized yet — signal main thread to init
-                logger.info("[MDA] Camera command received — signalling engine init")
+                logger.info("Camera command received — signalling engine init")
                 self._camera_ready.set()
 
         elif command_type == 'StopCamera':
-            logger.info(f"[MDA] StopCamera for camera {camera_id}")
+            logger.info(f"StopCamera for camera {camera_id}")
             if self.engine:
                 self.engine.reload_camera_configs()
 
