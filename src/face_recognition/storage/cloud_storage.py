@@ -1,9 +1,14 @@
 """Cloud storage management for Google Cloud Storage."""
 
 import os
-from typing import List, Optional
+import uuid
+from datetime import timedelta
+from typing import Dict, List, Optional
 
+import cv2
 import gcsfs
+import numpy as np
+from google.cloud import storage
 from loguru import logger
 
 
@@ -92,3 +97,129 @@ class CloudStorageManager:
         except Exception as e:
             logger.error(f"Failed to list files in GCS: {gcs_path}. Error: {e}")
             return []
+
+    def upload_frame(
+        self, 
+        frame: np.ndarray, 
+        org_slug: str, 
+        camera_id: int,
+        frame_index: int,
+        quality: int = 85,
+        metadata: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        """Upload a camera frame to GCS for calibration.
+
+        Args:
+            frame: Frame as numpy array (BGR format from OpenCV)
+            org_slug: Organization slug
+            camera_id: Camera ID
+            frame_index: Frame index (1-30)
+            quality: JPEG quality (1-100)
+            metadata: Additional metadata to attach to the file
+
+        Returns:
+            Dictionary with 'gcs_path' and 'signed_url'
+
+        Raises:
+            Exception: If upload fails
+        """
+        try:
+            # Generate unique filename
+            frame_uuid = str(uuid.uuid4())
+            filename = f"{frame_index}_{frame_uuid}.jpg"
+            
+            # Construct GCS path
+            from datetime import datetime
+            year = datetime.now().year
+            bucket_name = os.getenv('GCS_BUCKET', 'hbai-general-data')
+            calibration_path = os.getenv('CALIBRATION_FRAMES_PATH', 'cv.calibration')
+            
+            gcs_path = f"{bucket_name}/{year}/{calibration_path}/{org_slug}/cameras/{camera_id}/frames/{filename}"
+            
+            # Encode frame as JPEG
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+            success, buffer = cv2.imencode('.jpg', frame, encode_params)
+            
+            if not success:
+                raise Exception("Failed to encode frame as JPEG")
+            
+            frame_bytes = buffer.tobytes()
+            
+            # Upload using gcsfs
+            with self.fs.open(gcs_path, 'wb') as f:
+                f.write(frame_bytes)
+            
+            # Set metadata using google-cloud-storage client
+            try:
+                credentials_path = os.getenv('GCS_CREDENTIALS_PATH')
+                storage_client = storage.Client.from_service_account_json(credentials_path)
+                bucket = storage_client.bucket(bucket_name)
+                blob = bucket.blob(f"{year}/{calibration_path}/{org_slug}/cameras/{camera_id}/frames/{filename}")
+                
+                # Set custom metadata
+                if metadata:
+                    blob.metadata = metadata
+                    blob.patch()
+            except Exception as e:
+                logger.warning(f"Failed to set metadata for {gcs_path}: {e}")
+            
+            # Generate signed URL
+            signed_url = self.generate_signed_url(gcs_path)
+            
+            logger.info(f"Uploaded frame to GCS: {gcs_path}")
+            
+            return {
+                'gcs_path': f"gs://{gcs_path}",
+                'signed_url': signed_url,
+                'size_bytes': len(frame_bytes)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to upload frame to GCS: {e}")
+            raise
+
+    def generate_signed_url(
+        self, 
+        gcs_path: str, 
+        expiration_seconds: int = 3600
+    ) -> str:
+        """Generate a signed URL for a GCS file.
+
+        Args:
+            gcs_path: Path to the file in GCS (without gs:// prefix)
+            expiration_seconds: URL expiration time in seconds (default: 1 hour)
+
+        Returns:
+            Signed URL for accessing the file
+
+        Raises:
+            Exception: If signed URL generation fails
+        """
+        try:
+            # Parse bucket and blob path
+            parts = gcs_path.split('/', 1)
+            if len(parts) != 2:
+                raise ValueError(f"Invalid GCS path format: {gcs_path}")
+            
+            bucket_name, blob_path = parts
+            
+            # Initialize storage client
+            credentials_path = os.getenv('GCS_CREDENTIALS_PATH')
+            storage_client = storage.Client.from_service_account_json(credentials_path)
+            
+            # Get bucket and blob
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_path)
+            
+            # Generate signed URL
+            signed_url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(seconds=expiration_seconds),
+                method="GET"
+            )
+            
+            return signed_url
+            
+        except Exception as e:
+            logger.error(f"Failed to generate signed URL for {gcs_path}: {e}")
+            raise

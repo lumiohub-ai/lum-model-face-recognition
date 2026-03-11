@@ -438,6 +438,39 @@ class APIClient:
             logger.error(f"Failed to fetch cameras: {str(e)}")
             return []
 
+    def get_camera_by_id(self, camera_id: int) -> Optional[Dict[str, Any]]:
+        """Get a specific camera by ID from the API.
+
+        Args:
+            camera_id: ID of the camera to fetch
+
+        Returns:
+            Camera configuration dictionary if found, None otherwise
+        """
+        if not self.auth.is_authenticated():
+            logger.error("Not authenticated")
+            return None
+
+        url = f"{self.base_url}/org/{self.client_slug}/cameras/{camera_id}"
+
+        def make_request():
+            return self.session.get(url)
+
+        try:
+            response = make_request()
+            response = self._handle_token_expiry(response, make_request)
+            
+            if response.status_code == 404:
+                logger.warning(f"Camera with ID {camera_id} not found")
+                return None
+                
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch camera {camera_id}: {str(e)}")
+            return None
+
     def get_face_recognition_camera_configs(self) -> Dict[str, List[Any]]:
         """Fetch and parse camera configurations for face recognition.
 

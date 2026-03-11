@@ -15,6 +15,22 @@ from slowapi.errors import RateLimitExceeded
 # Add parent directory to path to import face_recognition modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# Import models (handle both module and script execution)
+try:
+    from .models import (
+        CaptureFrameRequest,
+        CaptureFrameResponse,
+        FrameMetadata,
+        ErrorResponse
+    )
+except ImportError:
+    from models import (
+        CaptureFrameRequest,
+        CaptureFrameResponse,
+        FrameMetadata,
+        ErrorResponse
+    )
+
 from face_recognition.storage import Database
 from face_recognition.core import FaceEngine
 from face_recognition.services.redis_pubsub import RedisPublisher
@@ -311,6 +327,119 @@ async def sync_rebuild(http_request: Request, request: RebuildPgVectorRequest):
 
     except Exception as e:
         logger.error(f"❌ Error in sync_rebuild: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Frame Capture Endpoint for Camera Calibration (NEW)
+# ============================================================================
+
+@app.post("/api/v1/org/{org_slug}/cameras/{camera_id}/capture-for-calibration")
+@limiter.limit("30/minute")  # Limit to 30 captures per minute per IP
+async def capture_frame_for_calibration(
+    request: Request,
+    org_slug: str,
+    camera_id: int,
+    body: CaptureFrameRequest
+):
+    """Capture a frame from a camera for calibration purposes.
+    
+    This endpoint is called by so.stack backend when users need to capture
+    frames for camera calibration. It:
+    1. Fetches camera configuration from backend API
+    2. Captures a frame from the RTSP stream
+    3. Uploads to Google Cloud Storage
+    4. Returns signed URL and metadata
+    
+    Args:
+        org_slug: Organization slug
+        camera_id: Camera ID
+        request: Capture request with frame_index and quality
+        
+    Returns:
+        CaptureFrameResponse with frame URL, signed URL, and metadata
+        
+    Raises:
+        404: Camera not found
+        408: Timeout capturing frame
+        503: Camera stream unavailable
+        500: Upload or other server error
+    """
+    try:
+        logger.info(
+            f"📸 Capture request: org={org_slug}, camera={camera_id}, "
+            f"frame_index={body.frame_index}, quality={body.quality}"
+        )
+        
+        # Import services here to avoid circular dependencies
+        from face_recognition.api.client import APIClient
+        from face_recognition.services.frame_capture_service import FrameCaptureService
+        
+        # Get required environment variables
+        sa_email = os.getenv('SA_EMAIL')
+        sa_password = os.getenv('SA_PASSWORD')
+        
+        if not sa_email or not sa_password:
+            raise HTTPException(
+                status_code=500,
+                detail="SA_EMAIL and SA_PASSWORD must be configured in environment"
+            )
+        
+        # Initialize API client for this organization
+        api_client = APIClient(
+            api_host=os.getenv('SO_BACKEND_API_URL', 'http://localhost:7091'),
+            email=sa_email,
+            password=sa_password,
+            client_slug=org_slug
+        )
+        
+        # Initialize frame capture service
+        capture_service = FrameCaptureService(api_client=api_client)
+        
+        # Capture and upload frame
+        result = capture_service.capture_frame_for_calibration(
+            org_slug=org_slug,
+            camera_id=camera_id,
+            frame_index=body.frame_index,
+            quality=body.quality
+        )
+        
+        logger.info(
+            f"✅ Frame captured successfully: camera={camera_id}, "
+            f"frame_index={body.frame_index}, url={result['frame_url']}"
+        )
+        
+        # Build response using Pydantic model
+        # Wrap in 'data' object as expected by so.stack backend
+        return {
+            "success": result['success'],
+            "data": {
+                "frame_url": result['frame_url'],
+                "signed_url": result['signed_url'],
+                "captured_at": result['captured_at'],
+                "metadata": result['metadata']
+            }
+        }
+        
+    except ValueError as e:
+        # Camera not found or invalid parameters
+        logger.error(f"❌ Invalid request: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+        
+    except TimeoutError as e:
+        # Frame capture timeout
+        logger.error(f"❌ Capture timeout: {e}")
+        raise HTTPException(status_code=408, detail=str(e))
+        
+    except Exception as e:
+        # Check if it's a connection/stream error
+        error_msg = str(e).lower()
+        if 'stream' in error_msg or 'connection' in error_msg or 'rtsp' in error_msg:
+            logger.error(f"❌ Stream unavailable: {e}")
+            raise HTTPException(status_code=503, detail=f"Camera stream unavailable: {str(e)}")
+        
+        # Generic server error
+        logger.error(f"❌ Error capturing frame: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
