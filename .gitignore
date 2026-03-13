@@ -340,3 +340,6 @@ node_modules/
 # Additional files to ignore
 *.legent
 buffalo_l.zip
+
+.claude
+CLAUDE.md
