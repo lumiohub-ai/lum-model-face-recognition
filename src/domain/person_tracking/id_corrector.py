@@ -150,10 +150,6 @@ class IDSwitchCorrector:
         distance = self.cosine_distance(current_embedding, avg_embedding)
 
         if distance > self.embedding_threshold:
-            # logger.warning(
-            #     f"ID SWITCH SUSPECTED: Track {track_id} (identity: {locked_identity}) "
-            #     f"has inconsistent face embedding (distance: {distance:.3f} > {self.embedding_threshold})"
-            # )
             return False
 
         return True
@@ -192,10 +188,6 @@ class IDSwitchCorrector:
 
                     if distance < self.embedding_threshold:
                         duplicates.append((track_id_1, track_id_2, distance))
-                        # logger.warning(
-                        #     f"🔍 DUPLICATE TRACKS DETECTED: Track {track_id_1} and Track {track_id_2} "
-                        #     f"(identity: {identity}, distance: {distance:.3f})"
-                        # )
 
         return duplicates
 

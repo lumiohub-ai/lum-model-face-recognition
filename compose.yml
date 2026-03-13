@@ -41,8 +41,8 @@ services:
       - ./.env:/app/.env:ro
       - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
       - ./credentials:/app/credentials
-      - ./volumes/models/insightface:/home/appuser/.insightface
-      - ./volumes/models/huggingface:/home/appuser/.cache/huggingface
+      - ./volumes/models/insightface:/root/.insightface
+      - ./volumes/models/huggingface:/root/.cache/huggingface
       - ./volumes/models/weights:/app/volumes/models/weights
     depends_on:
       ollama:
@@ -68,8 +68,8 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
-      - ./volumes/models/insightface:/home/appuser/.insightface
-      - ./volumes/models/huggingface:/home/appuser/.cache/huggingface
+      - ./volumes/models/insightface:/root/.insightface
+      - ./volumes/models/huggingface:/root/.cache/huggingface
     deploy:
       resources:
         reservations:

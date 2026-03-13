@@ -17,7 +17,6 @@ import json
 from pathlib import Path
 from typing import Optional, Callable
 
-import redis
 from loguru import logger
 
 # Add project root to path
@@ -29,6 +28,7 @@ from pipeline.engine import SmartOfficeEngine
 from config.settings import settings
 from messaging import RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
+from domain.face_detection import ModelFactory
 
 
 # ============================================================
@@ -109,7 +109,7 @@ class MDAManager:
             return
 
         # Verify Redis connection
-        if not RedisClient().is_connected():
+        if not RedisClient.get_instance().is_connected():
             logger.error("Redis not available")
             sys.exit(1)
 
@@ -135,8 +135,7 @@ class MDAManager:
         """Start background listeners for internal reload notifications."""
         def create_listener(channel: str, handler):
             def listener():
-                r = redis.Redis(host=settings.redis_host, port=settings.redis_port, decode_responses=True)
-                pubsub = r.pubsub()
+                pubsub = RedisClient.get_instance().client.pubsub()
                 pubsub.subscribe(channel)
                 logger.debug(f"Subscribed to {channel}")
 
@@ -259,6 +258,11 @@ def main() -> None:
     atexit.register(lifecycle.shutdown)
     mda_manager.start()
 
+    # Load ML models once — reused across all engine reinitializations
+    models = ModelFactory(config, client_slug)
+    models.initialize_all()
+    lifecycle.register_shutdown_callback(models.cleanup)
+
     # Initialize engine — if no cameras yet, wait for a camera command via MDA
     engine = None
     while lifecycle.is_running and engine is None:
@@ -266,6 +270,7 @@ def main() -> None:
             engine = SmartOfficeEngine(
                 client_slug=client_slug,
                 applications=['attendance'],
+                model_factory=models,
                 **config
             )
         except ValueError:
@@ -301,6 +306,7 @@ def main() -> None:
             engine = SmartOfficeEngine(
                 client_slug=client_slug,
                 applications=['attendance'],
+                model_factory=models,
                 **config
             )
             mda_manager.set_engine(engine)

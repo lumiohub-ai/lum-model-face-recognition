@@ -9,13 +9,11 @@ This module provides action recognition for detecting person activities:
 Uses Ollama API with gemma3:4b model for inference.
 """
 
-import os
 import queue
 import threading
 import time
 from typing import Optional, Dict, List, Callable
 import base64
-import io
 
 import numpy as np
 import cv2
@@ -72,9 +70,8 @@ class ActionRecognizer:
         self.action_mapping = self._build_action_mapping()
         self.prompt_template = self._build_prompt_template()
 
-        # Configure Ollama client with timeout
-        if self.ollama_api_url:
-            ollama.Client(host=self.ollama_api_url, timeout=inference_timeout)
+        # Create Ollama client once (reused across all inference calls)
+        self._ollama_client = ollama.Client(host=self.ollama_api_url, timeout=inference_timeout)
 
         # Async processing queue
         self.inference_queue = queue.Queue(maxsize=max_queue_size)
@@ -274,9 +271,8 @@ class ActionRecognizer:
             _, buffer = cv2.imencode('.jpg', image)
             image_base64 = base64.b64encode(buffer).decode('utf-8')
 
-            # Call Ollama API with timeout using dynamic prompt
-            client = ollama.Client(host=self.ollama_api_url, timeout=self.inference_timeout)
-            response = client.generate(
+            # Call Ollama API using shared client
+            response = self._ollama_client.generate(
                 model=self.model_name,
                 prompt=self.prompt_template,
                 images=[image_base64],

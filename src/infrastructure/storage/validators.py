@@ -5,7 +5,6 @@ and other security vulnerabilities.
 """
 
 import re
-from typing import Optional
 
 
 def validate_client_slug(slug: str) -> str:
@@ -39,6 +38,22 @@ def validate_client_slug(slug: str) -> str:
         raise ValueError(f"client_slug too long: {len(slug)} chars (max 63)")
 
     return slug
+
+
+def schema_name_for(slug: str) -> str:
+    """Return the PostgreSQL schema name for a client slug.
+
+    Args:
+        slug: Client slug to validate and convert
+
+    Returns:
+        Schema name in the format 'org_{slug}'
+
+    Raises:
+        ValueError: If slug contains invalid characters
+    """
+    validated = validate_client_slug(slug)
+    return f"org_{validated}"
 
 
 def validate_schema_name(schema_name: str) -> str:

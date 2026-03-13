@@ -237,6 +237,4 @@ class PersonTrackManager:
         if track_id in self.track_identity:
             del self.track_identity[track_id]
 
-        # Verbose logging disabled to reduce log noise
-        # logger.debug(f"Track {track_id} removed from manager")
         return final_data

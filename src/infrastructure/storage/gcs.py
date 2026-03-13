@@ -238,6 +238,21 @@ class ImageFetcher:
             logger.error(f"Failed to fetch image from {url}: {e}")
             return None
 
+    @staticmethod
+    def _decode_image_bytes(data: bytes) -> np.ndarray:
+        """Decode image bytes to a BGR numpy array (OpenCV format).
+
+        Handles both RGB and RGBA source images.
+        """
+        image = Image.open(BytesIO(data))
+        image_np = np.array(image)
+        if len(image_np.shape) == 3:
+            if image_np.shape[2] == 4:
+                image_np = cv2.cvtColor(image_np, cv2.COLOR_RGBA2BGR)
+            elif image_np.shape[2] == 3:
+                image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+        return image_np
+
     def _fetch_from_gcs(self, gs_url: str) -> Optional[np.ndarray]:
         """Fetch from Google Cloud Storage.
 
@@ -263,15 +278,7 @@ class ImageFetcher:
 
             # Download to memory
             image_bytes = blob.download_as_bytes()
-
-            # Convert to OpenCV format
-            image = Image.open(BytesIO(image_bytes))
-            image_np = np.array(image)
-
-            # Convert RGB to BGR (OpenCV format)
-            if len(image_np.shape) == 3 and image_np.shape[2] == 3:
-                image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-
+            image_np = self._decode_image_bytes(image_bytes)
             logger.info(f"Fetched image from GCS: {gs_url} (shape: {image_np.shape})")
             return image_np
 
@@ -326,17 +333,9 @@ class ImageFetcher:
             return None
 
         try:
-            # Convert to OpenCV format
-            image = Image.open(BytesIO(img_bytes))
-            image_np = np.array(image)
-
-            # Convert RGB to BGR (OpenCV format)
-            if len(image_np.shape) == 3 and image_np.shape[2] == 3:
-                image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-
+            image_np = self._decode_image_bytes(img_bytes)
             logger.info(f"Fetched image from HTTP: {url} (shape: {image_np.shape})")
             return image_np
-
         except Exception as e:
             logger.error(f"Failed to process image from {url}: {e}")
             return None
@@ -400,6 +399,9 @@ class ImageFetcher:
                 blob_path = f"{year}/cv.face-recognition/{prefix}/{filename}"
 
             # Convert BGR to RGB and encode as JPEG
+            if image is None or image.size == 0:
+                logger.warning("Cannot upload empty image to GCS")
+                return None
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(image_rgb)
 

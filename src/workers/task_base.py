@@ -60,7 +60,7 @@ class ModelInferenceError(RetryableError):
 # ============================================================
 
 def send_to_dlq(task_name: str, task_id: str, args: tuple, kwargs: dict,
-                exc: Exception, traceback_str: str, broker_url: str = None) -> None:
+                exc: Exception, traceback_str: str) -> None:
     """Send failed task to Dead-Letter Queue for manual inspection.
 
     Args:
@@ -70,13 +70,7 @@ def send_to_dlq(task_name: str, task_id: str, args: tuple, kwargs: dict,
         kwargs: Task keyword arguments
         exc: Exception that caused the failure
         traceback_str: Traceback string
-        broker_url: Redis broker URL (optional, uses env var if not provided)
     """
-    import redis
-    from config.settings import settings
-
-    if broker_url is None:
-        broker_url = settings.celery_broker_url
 
     dlq_message = {
         'task_name': task_name,
@@ -100,7 +94,8 @@ def send_to_dlq(task_name: str, task_id: str, args: tuple, kwargs: dict,
             dlq_key = 'dlq:unknown'
 
         # Store in Redis list (LPUSH for FIFO when consuming with RPOP)
-        r = redis.Redis.from_url(broker_url)
+        from messaging.redis_client import RedisClient
+        r = RedisClient.get_instance().client
         r.lpush(dlq_key, json.dumps(dlq_message))
 
         # Also store in a hash for quick lookup by task_id

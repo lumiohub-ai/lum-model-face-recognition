@@ -216,9 +216,7 @@ class CameraEngine:
 
                 person_crop = None
                 if bbox is not None:
-                    x1, y1, x2, y2 = map(int, bbox)
-                    x1, y1 = max(0, x1), max(0, y1)
-                    x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                    x1, y1, x2, y2 = self._clip_bbox(frame, bbox)
                     if x2 > x1 and y2 > y1:
                         person_crop = frame[y1:y2, x1:x2].copy()
 
@@ -275,7 +273,7 @@ class CameraEngine:
             frame_num:      Frame number
 
         Returns:
-            List of attendance event dicts (same format as process_frame)
+            List of attendance event dicts.
         """
         recognized_persons: List[Dict] = []
 
@@ -417,9 +415,7 @@ class CameraEngine:
             # Proof image crop for state manager
             proof_image = None
             if bbox is not None:
-                x1, y1, x2, y2 = map(int, bbox)
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                x1, y1, x2, y2 = self._clip_bbox(frame, bbox)
                 proof_image = frame[y1:y2, x1:x2]
 
             self.state_manager.update_person(
@@ -586,79 +582,26 @@ class CameraEngine:
                 "face_image": face_image,
             }
 
-    # ── Backward-compatible wrapper ───────────────────────────────────────────
-
-    def process_frame(
-        self,
-        frame: np.ndarray,
-        frame_num: int
-    ) -> Tuple[List[Dict], np.ndarray]:
-        """Process a single frame (backward-compatible wrapper).
-
-        Calls update_tracking and finalize_identities with locally-run GPU
-        inference so that existing code continues to work unchanged.
-
-        Args:
-            frame: Input video frame
-            frame_num: Frame number
-
-        Returns:
-            Tuple of (recognized_persons, processed_frame)
-        """
-        # Apply ROI if configured
-        if self.roi:
-            x1, y1, x2, y2 = self.roi
-            frame = frame[y1:y2, x1:x2]
-
-        # Step 1: Detect persons (GPU — local)
-        detections = self.person_detector.detect_persons(frame)
-
-        # Step 2: CPU tracking + ROI extraction
-        active_tracks, removed_tracks, person_rois = self.update_tracking(
-            detections, frame, frame_num
+    @staticmethod
+    def _clip_bbox(frame: np.ndarray, bbox) -> Tuple[int, int, int, int]:
+        """Clamp a bbox to frame boundaries."""
+        x1, y1, x2, y2 = map(int, bbox)
+        return (
+            max(0, x1), max(0, y1),
+            min(frame.shape[1], x2), min(frame.shape[0], y2),
         )
 
-        # Step 3: Local face detection + embedding (GPU — local for backward compat)
-        embeddings_map: Dict[int, Dict] = {}
-        for track_id, roi in person_rois:
-            if roi is None or roi.size == 0:
-                embeddings_map[track_id] = {
-                    "face_detected": False,
-                    "embedding": None,
-                    "face_image": None,
-                    "det_score": 0.0,
-                }
-                continue
-            try:
-                faces = self.face_detector.detect(roi)
-            except Exception:
-                faces = []
-            if faces:
-                face = faces[0]
-                x1f, y1f, x2f, y2f = face.bbox.astype(int)
-                face_crop = roi[max(0, y1f):y2f, max(0, x1f):x2f]
-                embeddings_map[track_id] = {
-                    "embedding": face.embedding,
-                    "face_image": face_crop if face_crop.size > 0 else None,
-                    "face_detected": True,
-                    "det_score": (
-                        float(face.det_score) if hasattr(face, "det_score") else 0.0
-                    ),
-                }
-            else:
-                embeddings_map[track_id] = {
-                    "face_detected": False,
-                    "embedding": None,
-                    "face_image": None,
-                    "det_score": 0.0,
-                }
-
-        # Step 4: Identity resolution (CPU)
-        recognized_persons = self.finalize_identities(
-            active_tracks, removed_tracks, embeddings_map, frame, frame_num
-        )
-
-        return recognized_persons, frame
+    @staticmethod
+    def _read_crop_image(crop_data) -> Optional[np.ndarray]:
+        """Extract an image from a crop_data entry (dict or raw array)."""
+        if isinstance(crop_data, dict):
+            f = crop_data.get('frame')
+            b = crop_data.get('bbox')
+            if f is not None and b is not None:
+                x1, y1, x2, y2 = map(int, b)
+                return f[y1:y2, x1:x2]
+            return crop_data.get('face')
+        return crop_data
 
     def _get_best_person_image(self, track_id: int) -> Optional[np.ndarray]:
         """Get the best quality person image from track history."""
@@ -694,29 +637,9 @@ class CameraEngine:
                 best_score = total_score
                 best_frame_num = frame_num
 
-        if best_frame_num is not None:
-            crop_data = crops[best_frame_num]
-            if isinstance(crop_data, dict):
-                frame = crop_data.get('frame')
-                bbox = crop_data.get('bbox')
-                if frame is not None and bbox is not None:
-                    x1, y1, x2, y2 = map(int, bbox)
-                    return frame[y1:y2, x1:x2]
-                return crop_data.get('face')
-            return crop_data
-
-        # Fallback: return most recent frame
-        if crops:
-            latest_frame_num = max(crops.keys())
-            crop_data = crops[latest_frame_num]
-            if isinstance(crop_data, dict):
-                frame = crop_data.get('frame')
-                bbox = crop_data.get('bbox')
-                if frame is not None and bbox is not None:
-                    x1, y1, x2, y2 = map(int, bbox)
-                    return frame[y1:y2, x1:x2]
-                return crop_data.get('face')
-            return crop_data
+        key = best_frame_num if best_frame_num is not None else (max(crops.keys()) if crops else None)
+        if key is not None:
+            return self._read_crop_image(crops[key])
 
         return None
 

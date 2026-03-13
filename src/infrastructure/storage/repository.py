@@ -10,7 +10,7 @@ from sqlalchemy import text
 from loguru import logger
 
 from .db_config import DatabaseConfig
-from .validators import validate_client_slug
+from .validators import validate_client_slug, schema_name_for
 
 
 class Repository:
@@ -21,7 +21,7 @@ class Repository:
 
     def __init__(self, client_slug: str):
         self.client_slug = validate_client_slug(client_slug)
-        self.schema = f"org_{self.client_slug}"
+        self.schema = schema_name_for(self.client_slug)
         # Use singleton database config (shared connection pool)
         self._db = DatabaseConfig.get_instance()
 
@@ -193,13 +193,13 @@ class Repository:
         new_users = []
         for user in db_users:
             if user['name'] not in current_set:
-                if user.get('image_url'):
+                if user.get('image_urls'):
                     new_users.append({
                         'name': user['name'],
-                        'image_path': user['image_url']
+                        'image_urls': user['image_urls']
                     })
                 else:
-                    logger.warning(f"Skipping user '{user['name']}' - no image_url")
+                    logger.warning(f"Skipping user '{user['name']}' - no images")
 
         # Find deleted users (in current but not in DB)
         deleted_users = [name for name in current_users if name not in db_names]

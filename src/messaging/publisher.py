@@ -36,7 +36,7 @@ class MDAPublisher:
         """
         self.client_slug = client_slug
         self.gcs_uploader = gcs_uploader
-        self.redis = RedisClient()
+        self.redis = RedisClient.get_instance()
 
     def _generate_message_id(self) -> str:
         """Generate a unique message ID."""
@@ -113,19 +113,6 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing AttendanceRecorded: user {user_id} {status}")
         return self.redis.publish(EVENT_CHANNELS['ATTENDANCE'], event)
 
-    # Legacy method for backward compatibility
-    def publish_attendance_record(self, user_id, status, camera_id=None, proof_image_url=None, timestamp=None):
-        """DEPRECATED: Use publish_attendance_recorded instead."""
-        return self.publish_attendance_recorded(
-            record_id=0,
-            user_id=user_id,
-            user_name='Unknown',
-            status=status,
-            camera_id=camera_id,
-            proof_image_url=proof_image_url,
-            recorded_at=timestamp,
-        )
-
     def publish_unrecognized_face_saved(
         self,
         record_id: int,
@@ -162,15 +149,6 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing UnrecognizedFaceSaved from camera {camera_id}")
         result = self.redis.publish(EVENT_CHANNELS['UNRECOGNIZED'], event)
         return result
-
-    # Legacy method
-    def publish_unrecognized_face(self, camera_id=None, status='unknown', image_url=None, notes=None):
-        """DEPRECATED: Use publish_unrecognized_face_saved instead."""
-        return self.publish_unrecognized_face_saved(
-            record_id=0,
-            camera_id=camera_id,
-            image_url=image_url,
-        )
 
     def publish_activity_detected(
         self,
@@ -217,20 +195,6 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing ActivityDetected: user {user_id} - {activity_type}")
         return self.redis.publish(EVENT_CHANNELS['ACTIVITY'], event)
 
-    # Legacy method
-    def publish_activity_record(self, user_id=None, activity_type='unknown', camera_id=None, confidence_score=None, proof_image_url=None, timestamp=None):
-        """DEPRECATED: Use publish_activity_detected instead."""
-        return self.publish_activity_detected(
-            record_id=0,
-            user_id=user_id or 0,
-            user_name='Unknown',
-            activity_type=activity_type,
-            camera_id=camera_id,
-            confidence=confidence_score,
-            proof_image_url=proof_image_url,
-            detected_at=timestamp,
-        )
-
     def publish_user_location_updated(
         self,
         user_id: int,
@@ -269,18 +233,6 @@ class MDAPublisher:
 
         logger.info(f"[Events] Publishing UserLocationUpdated: {user_name} at {camera_name}")
         return self.redis.publish(EVENT_CHANNELS['LOCATION'], event)
-
-    # Legacy method
-    def publish_user_location(self, user_name, camera_name, status='in', timestamp=None):
-        """DEPRECATED: Use publish_user_location_updated instead."""
-        return self.publish_user_location_updated(
-            user_id=0,
-            user_name=user_name,
-            camera_id=0,
-            camera_name=camera_name,
-            status=status,
-            updated_at=timestamp,
-        )
 
     def publish_embedding_created(
         self,
@@ -342,10 +294,3 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing EmbeddingFailed: user {user_id}, error={error}")
         return self.redis.publish(EVENT_CHANNELS['EMBEDDING'], event)
 
-    # Legacy method
-    def publish_embedding_result(self, request_id, status, action, user_id, embeddings_created=0, error=None):
-        """DEPRECATED: Use publish_embedding_created or publish_embedding_failed instead."""
-        if status == 'success':
-            return self.publish_embedding_created(request_id, user_id, embeddings_created)
-        else:
-            return self.publish_embedding_failed(request_id, user_id, error or 'Unknown error')

@@ -82,12 +82,4 @@ RUN chmod +x /usr/local/bin/*.sh
 COPY configs ./configs
 COPY src ./src
 
-# Create non-root user, set up cache dirs, transfer ownership
-RUN useradd -m -u 1000 appuser && \
-    mkdir -p /home/appuser/.cache/matplotlib /home/appuser/.cache/huggingface && \
-    chown -R appuser:appuser /app /home/appuser
-
-USER appuser
-ENV HOME=/home/appuser
-
 ENTRYPOINT ["docker-entrypoint.sh"]

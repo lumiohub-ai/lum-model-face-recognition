@@ -6,7 +6,7 @@ import numpy as np
 from sqlalchemy import text
 from loguru import logger
 from .db_config import DatabaseConfig
-from .validators import validate_client_slug, validate_schema_name
+from .validators import validate_client_slug, schema_name_for
 from .url_utils import normalize_image_url
 
 
@@ -26,13 +26,8 @@ class PgVectorStore:
         Raises:
             ValueError: If client_slug contains invalid characters
         """
-        # SECURITY: Validate client_slug to prevent SQL injection
-        validated_slug = validate_client_slug(client_slug)
-        self.client_slug = validated_slug
-        self.schema_name = f"org_{validated_slug}"
-
-        # Double-check the schema name itself
-        validate_schema_name(self.schema_name)
+        self.client_slug = validate_client_slug(client_slug)
+        self.schema_name = schema_name_for(self.client_slug)
 
         # Use singleton database config (shared connection pool)
         self.db_config = DatabaseConfig.get_instance()

@@ -2,70 +2,13 @@
 
 import contextlib
 import os
-import ssl
-import warnings
 from typing import List, Optional
 
 import cv2
 import numpy as np
 from loguru import logger
 
-# SECURITY: Do NOT disable SSL verification globally.
-# Instead, use a temporary context only during model downloads.
-# The global ssl._create_default_https_context override is removed.
-
-
-def _download_model_with_ssl_fallback(model_name: str) -> None:
-    """Download InsightFace model with SSL fallback for legacy servers.
-
-    This function temporarily relaxes SSL verification ONLY during model download,
-    then restores secure defaults. This prevents MITM attacks during runtime.
-
-    Args:
-        model_name: Name of the InsightFace model to download
-    """
-    import urllib.request
-    import tempfile
-
-    # First try with proper SSL verification
-    try:
-        # Check if model already exists in onnx format
-        from insightface.utils import DEFAULT_MP_NAME
-        from insightface.app import FaceAnalysis
-        # Just attempt to load - will use cached if exists
-        return
-    except Exception:
-        pass
-
-    # If download needed, try with SSL first, then fallback
-    logger.warning(
-        f"Downloading InsightFace model '{model_name}'. "
-        "If SSL fails, will retry with verification disabled (less secure)."
-    )
-
-    # Create a temporary SSL context that doesn't verify
-    # This is only used for the download, not for runtime
-    unverified_context = ssl.create_default_context()
-    unverified_context.check_hostname = False
-    unverified_context.verify_mode = ssl.CERT_NONE
-
-    # Store original context creator
-    original_context = ssl._create_default_https_context
-
-    try:
-        # Temporarily use unverified context for download only
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=DeprecationWarning)
-            ssl._create_default_https_context = lambda: unverified_context
-            # Import will trigger download if needed
-            from insightface.app import FaceAnalysis
-            _ = FaceAnalysis(name=model_name, root=os.path.expanduser('~/.insightface'))
-    finally:
-        # CRITICAL: Restore secure SSL context
-        ssl._create_default_https_context = original_context
-
-
-from insightface.app import FaceAnalysis  # type: ignore
+from insightface.app import FaceAnalysis 
 
 
 class FaceDetector:

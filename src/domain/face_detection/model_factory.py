@@ -136,7 +136,7 @@ class ModelFactory:
         _ = self.face_detector
         _ = self.face_recognizer
         _ = self.person_detector
-        _ = self.action_recognizer  # Initialize action recognizer
+        _ = self.action_recognizer
         _ = self.global_track_manager
         _ = self.global_id_generator
         logger.info("All models initialized")
@@ -146,80 +146,6 @@ class ModelFactory:
         if self._face_recognizer is not None:
             self._face_recognizer.reload_embeddings()
             logger.info("Reloaded face embeddings")
-
-    # ── Batch inference helpers (used by GPUInferenceWorker) ─────────────────
-
-    def batch_detect_persons(self, frames: list) -> list:
-        """Run YOLO on a batch of frames.
-
-        Args:
-            frames: List of BGR numpy arrays
-
-        Returns:
-            List of detection lists, one per frame.
-            Each detection list contains dicts with bbox/confidence/keypoints.
-        """
-        if not frames:
-            return []
-        try:
-            detector = self.person_detector
-            results = detector.model(
-                frames,
-                conf=detector.confidence_threshold,
-                iou=detector.iou_threshold,
-                verbose=False,
-                device=detector.device,
-            )
-            output = []
-            for result in results:
-                detections = []
-                boxes = result.boxes
-                if boxes is not None:
-                    for idx in range(len(boxes)):
-                        if int(boxes.cls[idx].cpu().numpy()) != 0:
-                            continue
-                        detections.append(
-                            {
-                                "bbox": boxes.xyxy[idx].cpu().numpy().tolist(),
-                                "confidence": float(boxes.conf[idx].cpu().numpy()),
-                                "keypoints": None,
-                                "person_id": idx,
-                            }
-                        )
-                output.append(detections)
-            return output
-        except Exception as e:
-            logger.error(f"batch_detect_persons failed: {e}")
-            return [[] for _ in frames]
-
-    def batch_get_embeddings(self, face_crops: list) -> list:
-        """Extract ArcFace embeddings from a list of face/person crops.
-
-        Each crop is passed through face_detector.detect() to locate the face
-        and obtain its embedding.  Returns None for crops where no face is found.
-
-        Args:
-            face_crops: List of BGR numpy arrays (person ROIs or face crops)
-
-        Returns:
-            List of numpy arrays (embeddings) or None, same length as face_crops.
-        """
-        embeddings = []
-        detector = self.face_detector
-        for crop in face_crops:
-            if crop is None or crop.size == 0:
-                embeddings.append(None)
-                continue
-            try:
-                faces = detector.detect(crop)
-                if faces:
-                    embeddings.append(faces[0].embedding)
-                else:
-                    embeddings.append(None)
-            except Exception as e:
-                logger.debug(f"batch_get_embeddings: face detection error: {e}")
-                embeddings.append(None)
-        return embeddings
 
     def cleanup(self) -> None:
         """Clean up resources (stop workers, free GPU memory)."""

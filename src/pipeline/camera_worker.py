@@ -173,68 +173,81 @@ class CameraWorker:
 
         # ── Step 9: Annotate + write video (only when save_video=True) ────────
         if self.annotator is not None and self.video_writer is not None:
-            now = time.time()
-            if self._last_frame_time > 0:
-                elapsed = now - self._last_frame_time
-                self._fps = 1.0 / elapsed if elapsed > 0 else self._fps
-            self._last_frame_time = now
+            self._annotate_and_write(frame, active_tracks, embeddings_map, roi_offsets)
 
-            person_states = []
-            state_manager = self.camera_engine.state_manager
-            identity_manager = self.camera_engine.identity_manager
-            active_track_ids = {t["track_id"] for t in active_tracks}
-            # Evict stale tracks from face cache
-            for stale_id in list(self._face_cache.keys()):
-                if stale_id not in active_track_ids:
-                    del self._face_cache[stale_id]
+    def _annotate_and_write(
+        self,
+        frame,
+        active_tracks: List[Dict],
+        embeddings_map: Dict,
+        roi_offsets: Dict,
+    ) -> None:
+        """Build per-person annotation state, annotate the frame, and write to disk."""
+        now = time.time()
+        if self._last_frame_time > 0:
+            elapsed = now - self._last_frame_time
+            self._fps = 1.0 / elapsed if elapsed > 0 else self._fps
+        self._last_frame_time = now
 
-            for track in active_tracks:
-                track_id = track["track_id"]
-                state = state_manager.get_state(track_id)
-                emb_info = embeddings_map.get(track_id, {})
+        state_manager = self.camera_engine.state_manager
+        identity_manager = self.camera_engine.identity_manager
+        active_track_ids = {t["track_id"] for t in active_tracks}
 
-                # Offset face_bbox to full-frame coords using actual ROI origin
-                face_bbox_roi = emb_info.get("face_bbox")
-                if face_bbox_roi is not None and track_id in roi_offsets:
-                    rx, ry = roi_offsets[track_id]
-                    self._face_cache[track_id] = {
-                        "face_bbox": [
-                            rx + face_bbox_roi[0],
-                            ry + face_bbox_roi[1],
-                            rx + face_bbox_roi[2],
-                            ry + face_bbox_roi[3],
-                        ],
-                        "face_det_score": emb_info.get("det_score"),
-                    }
+        # Evict stale tracks from face cache
+        for stale_id in list(self._face_cache.keys()):
+            if stale_id not in active_track_ids:
+                del self._face_cache[stale_id]
 
-                cached = self._face_cache.get(track_id, {})
+        person_states = []
+        for track in active_tracks:
+            track_id = track["track_id"]
+            state = state_manager.get_state(track_id)
+            emb_info = embeddings_map.get(track_id, {})
 
-                vote_status = identity_manager.get_voting_status(track_id)
-                # Use locked identity, or tentative top_identity while voting
-                identity = state.identity if state else None
-                identity_locked = state.identity_locked if state else False
-                if not identity_locked and not identity:
-                    tentative = vote_status.get("top_identity")
-                    if tentative and vote_status.get("votes", 0) > 0:
-                        identity = tentative
+            # Offset face bbox/landmarks from ROI-space to full-frame coords
+            face_bbox_roi = emb_info.get("face_bbox")
+            if face_bbox_roi is not None and track_id in roi_offsets:
+                rx, ry = roi_offsets[track_id]
+                landmarks_roi = emb_info.get("face_landmarks")
+                self._face_cache[track_id] = {
+                    "face_bbox": [
+                        rx + face_bbox_roi[0], ry + face_bbox_roi[1],
+                        rx + face_bbox_roi[2], ry + face_bbox_roi[3],
+                    ],
+                    "face_det_score": emb_info.get("det_score"),
+                    "face_landmarks": (
+                        [[rx + p[0], ry + p[1]] for p in landmarks_roi]
+                        if landmarks_roi is not None else None
+                    ),
+                }
 
-                person_states.append({
-                    "track_id": track_id,
-                    "global_id": track.get("global_track_id"),
-                    "bbox": track["bbox"],
-                    "face_bbox": cached.get("face_bbox"),
-                    "face_det_score": cached.get("face_det_score"),
-                    "vote_count": vote_status.get("votes", 0),
-                    "required_votes": vote_status.get("required_votes", 0),
-                    "keypoints": track.get("keypoints"),
-                    "identity": identity,
-                    "identity_locked": identity_locked,
-                    "track_age": 0,
-                    "in_current_frame": True,
-                    "last_detected_action": state.last_detected_action if state else None,
-                })
+            cached = self._face_cache.get(track_id, {})
+            vote_status = identity_manager.get_voting_status(track_id)
+            identity = state.identity if state else None
+            identity_locked = state.identity_locked if state else False
+            if not identity_locked and not identity:
+                tentative = vote_status.get("top_identity")
+                if tentative and vote_status.get("votes", 0) > 0:
+                    identity = tentative
 
-            annotated = self.annotator.annotate_frame(
-                frame, person_states, fps=self._fps, roi_active=bool(self.roi)
-            )
-            self.video_writer.write(annotated)
+            person_states.append({
+                "track_id": track_id,
+                "global_id": track.get("global_track_id"),
+                "bbox": track["bbox"],
+                "face_bbox": cached.get("face_bbox"),
+                "face_det_score": cached.get("face_det_score"),
+                "face_landmarks": cached.get("face_landmarks"),
+                "vote_count": vote_status.get("votes", 0),
+                "required_votes": vote_status.get("required_votes", 0),
+                "keypoints": track.get("keypoints"),
+                "identity": identity,
+                "identity_locked": identity_locked,
+                "track_age": 0,
+                "in_current_frame": True,
+                "last_detected_action": state.last_detected_action if state else None,
+            })
+
+        annotated = self.annotator.annotate_frame(
+            frame, person_states, fps=self._fps, roi_active=bool(self.roi)
+        )
+        self.video_writer.write(annotated)

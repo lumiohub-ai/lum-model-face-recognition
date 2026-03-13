@@ -5,15 +5,12 @@ Manages comprehensive state for each tracked person and emits events
 when state changes occur (identity locked, person entered/exited, etc.).
 """
 
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
 import numpy as np
 from loguru import logger
-
-if TYPE_CHECKING:
-    from src.face_recognition.api.client import APIClient
 
 
 class EventType(Enum):

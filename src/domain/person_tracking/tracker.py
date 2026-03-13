@@ -313,7 +313,8 @@ class PersonTracker:
                         'bbox': bbox.tolist(),
                         'confidence': conf,
                         'keypoints': keypoints,
-                        'frame_num': self.frame_count
+                        'frame_num': self.frame_count,
+                        'det_idx': det_idx,
                     }
 
                     tracked.append(tracked_det)
@@ -417,9 +418,15 @@ class PersonTracker:
         for det in tracked_detections:
             track_id = det['track_id']
             if track_id in self.active_tracks:
-                self.active_tracks[track_id]['updated'] = True
-                self.active_tracks[track_id]['last_detection'] = det
-                self.active_tracks[track_id]['last_frame'] = self.frame_count
+                det_idx = det.get('det_idx')
+                is_detected = det_idx is not None and det_idx >= 0
+                if is_detected:
+                    # Real YOLO detection — reset age, keep alive
+                    self.active_tracks[track_id]['updated'] = True
+                    self.active_tracks[track_id]['last_detection'] = det
+                    self.active_tracks[track_id]['last_frame'] = self.frame_count
+                # Predicted tracks (det_idx < 0): do NOT set updated=True
+                # so _age_tracks will increment their age and drop them
 
     def _age_tracks(self) -> None:
         """

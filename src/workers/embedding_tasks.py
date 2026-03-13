@@ -17,7 +17,6 @@ IMPORTANT: Tasks use BaseTaskWithRetry for:
 - Automatic DLQ on permanent failures
 """
 
-import os
 from typing import Dict, Any, Optional
 from workers.celery_app import celery
 from celery.exceptions import SoftTimeLimitExceeded
@@ -85,7 +84,7 @@ def notify_embedding_reload(client_slug: str, user_id: int, action: str):
             'user_id': user_id,
             'action': action,
         }
-        RedisClient().client.publish(
+        RedisClient.get_instance().client.publish(
             INTERNAL_CHANNELS['EMBEDDING_RELOAD'],
             json.dumps(message)
         )

@@ -181,14 +181,29 @@ class FrameAnnotator:
         face_bbox = state.get('face_bbox')
         if face_bbox is not None:
             fx1, fy1, fx2, fy2 = map(int, face_bbox)
-            cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (255, 255, 0), 1)
+            cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (0, 255, 255), 2)
             face_det_score = state.get('face_det_score')
             if face_det_score is not None:
                 cv2.putText(
                     frame, f"{face_det_score:.2f}",
                     (fx1, max(fy1 - 4, 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 0), 1
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2
                 )
+
+        # Draw InsightFace 5-point face landmarks (eyes, nose, mouth corners)
+        face_landmarks = state.get('face_landmarks')
+        if face_landmarks is not None:
+            # Colors: left eye, right eye, nose, left mouth, right mouth
+            lm_colors = [
+                (0, 255, 0),    # left eye - green
+                (0, 0, 255),    # right eye - red
+                (0, 255, 255),  # nose - yellow
+                (255, 0, 0),    # left mouth - blue
+                (255, 0, 255),  # right mouth - magenta
+            ]
+            for i, pt in enumerate(face_landmarks):
+                c = lm_colors[i] if i < len(lm_colors) else (255, 255, 255)
+                cv2.circle(frame, (int(pt[0]), int(pt[1])), 4, c, -1)
 
         # Draw keypoints and skeleton
         if keypoints is not None and self.draw_skeleton:

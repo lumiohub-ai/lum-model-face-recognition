@@ -14,11 +14,13 @@ from .embedding_sync import EmbeddingSyncService
 from .url_utils import normalize_image_url
 from .validators import validate_client_slug, validate_schema_name
 from .repository import Repository
+from .detection_repository import DetectionRepository
 
 __all__ = [
     "PgVectorStore",
     "DatabaseConfig",
     "Repository",
+    "DetectionRepository",
     "ImageFetcher",
     "EmbeddingSyncService",
     "normalize_image_url",

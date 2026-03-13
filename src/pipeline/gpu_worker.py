@@ -10,7 +10,7 @@ Camera threads are fully independent — a slow camera never blocks a fast one.
 import queue
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -177,12 +177,12 @@ class GPUInferenceWorker:
 
     # ── Collection helpers ────────────────────────────────────────────────────
 
-    def _collect_frames(self) -> Dict[int, Tuple[np.ndarray, int]]:
-        """Block until at least one frame arrives, then grab any others ready now."""
-        batch: Dict[int, Tuple[np.ndarray, int]] = {}
+    def _collect_batch(self, in_queues: Dict[int, queue.Queue]) -> Dict[int, Any]:
+        """Block until at least one queue has an item, then drain any others ready now."""
+        batch: Dict[int, Any] = {}
 
         while self._running and not batch:
-            for cam_id, q in self._frame_in_queues.items():
+            for cam_id, q in in_queues.items():
                 try:
                     batch[cam_id] = q.get_nowait()
                 except queue.Empty:
@@ -190,7 +190,7 @@ class GPUInferenceWorker:
             if not batch:
                 time.sleep(0.001)
 
-        for cam_id, q in self._frame_in_queues.items():
+        for cam_id, q in in_queues.items():
             if cam_id not in batch:
                 try:
                     batch[cam_id] = q.get_nowait()
@@ -198,28 +198,12 @@ class GPUInferenceWorker:
                     pass
 
         return batch
+
+    def _collect_frames(self) -> Dict[int, Tuple[np.ndarray, int]]:
+        return self._collect_batch(self._frame_in_queues)
 
     def _collect_faces(self) -> Dict[int, Tuple[List, List]]:
-        """Block until at least one camera submits faces, then grab any others ready now."""
-        batch: Dict[int, Tuple[List, List]] = {}
-
-        while self._running and not batch:
-            for cam_id, q in self._face_in_queues.items():
-                try:
-                    batch[cam_id] = q.get_nowait()
-                except queue.Empty:
-                    pass
-            if not batch:
-                time.sleep(0.001)
-
-        for cam_id, q in self._face_in_queues.items():
-            if cam_id not in batch:
-                try:
-                    batch[cam_id] = q.get_nowait()
-                except queue.Empty:
-                    pass
-
-        return batch
+        return self._collect_batch(self._face_in_queues)
 
     # ── Inference helpers ─────────────────────────────────────────────────────
 
@@ -257,8 +241,21 @@ class GPUInferenceWorker:
                 faces = self._face_detector.detect(roi)
                 if faces:
                     face = faces[0]
+                    # face.bbox / face.kps are in padded-image coordinates.
+                    # Subtract the padding offset to get back to ROI space.
+                    roi_h, roi_w = roi.shape[:2]
+                    pad_pct = self._face_detector.padding_percent
+                    pad_w = int(roi_w * pad_pct / 100)
+                    pad_h = int(roi_h * pad_pct / 100)
+
                     x1, y1, x2, y2 = face.bbox.astype(int)
+                    x1 -= pad_w; y1 -= pad_h; x2 -= pad_w; y2 -= pad_h
                     face_crop = roi[max(0, y1):y2, max(0, x1):x2]
+
+                    kps = None
+                    if hasattr(face, "kps") and face.kps is not None:
+                        kps = (face.kps.astype(int) - [pad_w, pad_h]).tolist()
+
                     result = {
                         "embedding": face.embedding,
                         "face_image": face_crop if face_crop.size > 0 else None,
@@ -269,6 +266,7 @@ class GPUInferenceWorker:
                             else 0.0
                         ),
                         "face_bbox": [x1, y1, x2, y2],
+                        "face_landmarks": kps,
                     }
             except Exception as e:
                 logger.debug(f"Face detection error on ROI: {e}")

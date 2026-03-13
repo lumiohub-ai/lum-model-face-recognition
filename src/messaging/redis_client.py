@@ -1,13 +1,15 @@
 """
 Redis Client for MDA
 
-Provides Redis Pub/Sub functionality for message-driven communication.
+Singleton publish-only client shared across all components.
+Backed by redis-py's built-in connection pool, so it is thread-safe.
 """
 
 import json
-import threading
 import logging
-from typing import Callable, Dict, Any, Optional
+import threading
+from typing import Any, Dict
+
 import redis
 
 from config.settings import settings
@@ -16,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 
 class RedisClient:
-    """Redis Pub/Sub client for MDA communication."""
+    """Singleton Redis client for all publish/stream operations."""
+
+    _instance: 'RedisClient | None' = None
+    _lock = threading.Lock()
 
     def __init__(self):
         self.client = redis.Redis(
@@ -25,25 +30,19 @@ class RedisClient:
             db=settings.redis_db,
             decode_responses=True
         )
-        self.pubsub = self.client.pubsub()
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._handlers: Dict[str, Callable] = {}
-        self._lock = threading.Lock()
-
         logger.info(f"Redis client initialized: {settings.redis_host}:{settings.redis_port}")
 
+    @classmethod
+    def get_instance(cls) -> 'RedisClient':
+        """Return the shared singleton instance (thread-safe)."""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
     def publish(self, channel: str, message: Dict[str, Any]) -> bool:
-        """
-        Publish a message to a Redis channel.
-
-        Args:
-            channel: Channel name
-            message: Message dict (will be JSON serialized)
-
-        Returns:
-            True if successful
-        """
+        """Publish a message to a Redis Pub/Sub channel."""
         try:
             message_str = json.dumps(message)
             num_subscribers = self.client.publish(channel, message_str)
@@ -53,74 +52,17 @@ class RedisClient:
             logger.error(f"Failed to publish to {channel}: {e}")
             return False
 
-    def subscribe(self, channel: str, handler: Callable[[Dict[str, Any]], None]) -> None:
-        """
-        Subscribe to a Redis channel with a handler.
-
-        Args:
-            channel: Channel name
-            handler: Callback function that receives parsed message dict
-        """
-        with self._lock:
-            self._handlers[channel] = handler
-            self.pubsub.subscribe(**{channel: self._create_handler(handler)})
-            logger.info(f"Subscribed to {channel}")
-
-    def _create_handler(self, handler: Callable) -> Callable:
-        """Create a message handler wrapper."""
-        def wrapper(message):
-            if message['type'] == 'message':
-                try:
-                    data = json.loads(message['data'])
-                    handler(data)
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON decode error: {e}")
-                except Exception as e:
-                    logger.error(f"Handler error: {e}")
-        return wrapper
-
-    def start(self) -> None:
-        """Start listening for messages in a background thread."""
-        if self._running:
-            logger.warning("Subscriber already running")
-            return
-
-        self._running = True
-        self._thread = threading.Thread(target=self._listen, daemon=True)
-        self._thread.start()
-        logger.info("Redis subscriber started")
-
-    def _listen(self) -> None:
-        """Background listening loop."""
-        while self._running:
-            try:
-                self.pubsub.get_message(timeout=1.0)
-            except Exception as e:
-                if self._running:
-                    logger.error(f"Listen error: {e}")
-
-    def stop(self) -> None:
-        """Stop the subscriber gracefully."""
-        logger.info("Stopping Redis subscriber...")
-        self._running = False
-
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2)
-
-        try:
-            self.pubsub.close()
-            self.client.close()
-        except Exception as e:
-            logger.error(f"Error closing Redis: {e}")
-
-        logger.info("Redis subscriber stopped")
-
     def is_connected(self) -> bool:
-        """Check if Redis is connected."""
+        """Check if Redis is reachable."""
         try:
             self.client.ping()
             return True
         except Exception:
             return False
 
-
+    def stop(self) -> None:
+        """Close the Redis connection."""
+        try:
+            self.client.close()
+        except Exception as e:
+            logger.error(f"Error closing Redis: {e}")

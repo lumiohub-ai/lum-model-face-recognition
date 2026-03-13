@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from loguru import logger
 
 from config.settings import settings
-from .validators import validate_client_slug, validate_schema_name
+from .validators import schema_name_for, validate_schema_name
 
 
 class DatabaseConfig:
@@ -137,11 +137,7 @@ class DatabaseConfig:
         Raises:
             ValueError: If client_slug contains invalid characters
         """
-        # SECURITY: Validate client_slug to prevent SQL injection
-        validated_slug = validate_client_slug(client_slug)
-        schema_name = f"org_{validated_slug}"
-
-        # Double-check the schema name itself
+        schema_name = schema_name_for(client_slug)
         validate_schema_name(schema_name)
 
         try:
@@ -230,11 +226,7 @@ class DatabaseConfig:
         Warning:
             This will delete all data for the client!
         """
-        # SECURITY: Validate client_slug to prevent SQL injection
-        validated_slug = validate_client_slug(client_slug)
-        schema_name = f"org_{validated_slug}"
-
-        # Double-check the schema name itself
+        schema_name = schema_name_for(client_slug)
         validate_schema_name(schema_name)
 
         try:

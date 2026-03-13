@@ -202,15 +202,7 @@ class AsyncLogger:
         if not fields:
             return
         try:
-            from config.settings import settings
-            import redis
-
-            r = redis.Redis(
-                host=settings.redis_host,
-                port=settings.redis_port,
-                db=settings.redis_db,
-                decode_responses=True,
-            )
-            r.xadd(stream, fields)
+            from messaging.redis_client import RedisClient
+            RedisClient.get_instance().client.xadd(stream, fields)
         except Exception as e:
             logger.error(f"Redis xadd failed: {e}")

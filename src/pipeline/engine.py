@@ -45,6 +45,7 @@ class SmartOfficeEngine:
         self,
         client_slug: str,
         applications: Optional[List[str]] = None,
+        model_factory: Optional["ModelFactory"] = None,
         **kwargs
     ):
         self.client_slug = client_slug
@@ -73,9 +74,14 @@ class SmartOfficeEngine:
         if not self.camera_configs:
             raise ValueError("No cameras configured. Check config file or database.")
 
-        # Initialize ML models
-        self.models = ModelFactory(self.config, client_slug)
-        self.models.initialize_all()
+        # Initialize ML models — reuse provided factory to avoid reloading GPU models
+        if model_factory is not None:
+            self.models = model_factory
+            self._owns_models = False
+        else:
+            self.models = ModelFactory(self.config, client_slug)
+            self.models.initialize_all()
+            self._owns_models = True
 
         # Sync missing embeddings on startup
         self._sync_embeddings_on_startup()
@@ -327,8 +333,9 @@ class SmartOfficeEngine:
         if self.models.global_track_manager and self.models.global_track_manager.enabled:
             self._log_final_metrics()
 
-        # Stop action recognizer workers
-        self.models.cleanup()
+        # Stop action recognizer workers (only if this engine owns the models)
+        if self._owns_models:
+            self.models.cleanup()
 
         # Stop streams
         self.stream_manager.cleanup()

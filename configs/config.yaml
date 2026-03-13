@@ -46,6 +46,6 @@ action_recognition:
 
 # Parallel multi-camera pipeline settings
 pipeline:
-  detection_interval: 1        # run YOLO every N frames (1 = every frame)
-  recognition_interval: 1      # run ArcFace every N detection frames
+  detection_interval: 2        # run YOLO every N frames (1 = every frame)
+  recognition_interval: 3      # run ArcFace every N detection frames
   async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200
