@@ -184,6 +184,11 @@ class MDAManager:
     def _handle_camera_command(self, command_type: str, client_slug: str, payload: dict) -> None:
         """Handle camera config commands from Backend (multi-tenant)."""
         camera_id = payload.get('camera_id')
+        if camera_id is not None:
+            try:
+                camera_id = int(camera_id)
+            except (ValueError, TypeError):
+                pass
         logger.info(f"Camera command: {command_type} for {client_slug} camera_id={camera_id}")
 
         # Process commands for ALL tenants (multi-tenant support)
@@ -203,6 +208,14 @@ class MDAManager:
             logger.info(f"StopCamera for camera {camera_id}")
             if self.engine:
                 self.engine.reload_camera_configs()
+
+        elif command_type == 'CaptureFrame':
+            command_id = payload.get('command_id')
+            logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}")
+            if self.engine:
+                self.engine.capture_frame(camera_id, command_id)
+            else:
+                logger.warning("Engine not available for frame capture")
 
 
 # ============================================================

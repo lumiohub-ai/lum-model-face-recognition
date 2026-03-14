@@ -216,6 +216,24 @@ class StreamManager:
         self.video_writers = []
         logger.info("Released all video writers")
 
+    def get_frame(self, camera_id: int) -> Optional[np.ndarray]:
+        """Return the latest frame for a specific camera without blocking the pipeline.
+
+        Reads directly from the StreamHandler's background thread buffer.
+        Does not start a new RTSP connection.
+
+        Args:
+            camera_id: The camera ID to capture from
+
+        Returns:
+            Latest frame as numpy array, or None if camera not found / no frame yet
+        """
+        for i, config in enumerate(self.camera_configs):
+            if config.get('camera_id') == camera_id and i < len(self.streams):
+                _, frame = self.streams[i].read()
+                return frame
+        return None
+
     def cleanup(self) -> None:
         """Clean up all resources."""
         self.stop_streams()

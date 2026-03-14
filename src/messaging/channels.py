@@ -24,6 +24,7 @@ EVENT_CHANNELS = {
     'ACTIVITY': 'events:activity',
     'LOCATION': 'events:location',
     'EMBEDDING': 'events:embedding',
+    'FRAME_CAPTURE': 'events:frame_captured',
 }
 
 # Event types
@@ -34,6 +35,7 @@ EVENT_TYPES = {
     'USER_LOCATION_UPDATED': 'UserLocationUpdated',
     'EMBEDDING_CREATED': 'EmbeddingCreated',
     'EMBEDDING_FAILED': 'EmbeddingFailed',
+    'FRAME_CAPTURED': 'FrameCaptured',
 }
 
 

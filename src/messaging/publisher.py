@@ -294,3 +294,34 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing EmbeddingFailed: user {user_id}, error={error}")
         return self.redis.publish(EVENT_CHANNELS['EMBEDDING'], event)
 
+    def publish_frame_captured(
+        self,
+        command_id: str,
+        camera_id: int,
+        image_url: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Publish FrameCaptured event to Backend.
+
+        Args:
+            command_id: Original command ID (resolves the waiting HTTP request)
+            camera_id: Camera the frame was captured from
+            image_url: GCS URL of the uploaded frame
+            metadata: Frame metadata (width, height, size_bytes, source)
+        """
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['FRAME_CAPTURED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'frame_url': image_url,
+            'signed_url': image_url,
+            'captured_at': self._get_timestamp(),
+            'metadata': metadata or {},
+        }
+
+        logger.info(f"[Events] Publishing FrameCaptured: camera {camera_id}, command {command_id}")
+        return self.redis.publish(EVENT_CHANNELS['FRAME_CAPTURE'], event)
+

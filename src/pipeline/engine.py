@@ -7,6 +7,7 @@ Architecture (parallel multi-camera):
 - StreamManager/StreamHandler: background threads for RTSP read (existing)
 """
 
+import threading
 import time
 from typing import List, Optional
 
@@ -313,6 +314,60 @@ class SmartOfficeEngine:
         except Exception as e:
             logger.error(f"Failed to reload embeddings: {e}")
             return False
+
+    def capture_frame(self, camera_id: int, command_id: str) -> None:
+        """Capture a single frame for camera calibration.
+
+        Non-blocking — spawns a daemon thread so the main pipeline is never paused.
+        Reads the latest frame already buffered by the RTSP background thread (no
+        new RTSP connection), uploads to GCS, then publishes a FrameCaptured event.
+        """
+        threading.Thread(
+            target=self._do_capture_frame,
+            args=(camera_id, command_id),
+            daemon=True,
+            name=f"capture-{camera_id}",
+        ).start()
+
+    def _do_capture_frame(self, camera_id: int, command_id: str) -> None:
+        """Background: grab latest frame → upload to GCS → save to DB → publish event."""
+        try:
+            frame = self.stream_manager.get_frame(camera_id)
+            if frame is None:
+                logger.warning(f"capture_frame: no frame for camera {camera_id}")
+                return
+
+            h, w = frame.shape[:2]
+
+            from infrastructure.storage.gcs import ImageFetcher
+            image_url = ImageFetcher().upload_image(
+                frame,
+                prefix=f"calibration_frames/{self.client_slug}",
+                client_slug=self.client_slug,
+            )
+
+            # Persist to calibration_frames table
+            from infrastructure.storage.detection_repository import DetectionRepository
+            from datetime import datetime
+            record_id = DetectionRepository(self.client_slug).save_calibration_frame(
+                camera_id=camera_id,
+                frame_url=image_url,
+                frame_index=1,
+                captured_at=datetime.utcnow(),
+            )
+            logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}")
+
+            from messaging.publisher import MDAPublisher
+            MDAPublisher(self.client_slug).publish_frame_captured(
+                command_id=command_id,
+                camera_id=camera_id,
+                image_url=image_url,
+                metadata={'width': w, 'height': h, 'source': 'OpenCV'},
+            )
+            logger.info(f"Frame captured: camera={camera_id}, command={command_id}")
+
+        except Exception as e:
+            logger.error(f"capture_frame failed for camera {camera_id}: {e}")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

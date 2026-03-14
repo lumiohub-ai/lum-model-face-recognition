@@ -134,6 +134,53 @@ class DetectionRepository:
             row = result.fetchone()
             return row[0] if row else 0
 
+    def save_calibration_frame(
+        self,
+        camera_id: int,
+        frame_url: str,
+        frame_index: int,
+        captured_at: datetime,
+    ) -> int:
+        """Insert a calibration frame record.
+
+        Looks up organization_id from public.organizations using the schema
+        name so the AI service doesn't need to carry the integer ID around.
+
+        Returns:
+            New record ID, or 0 on failure
+        """
+        now = datetime.utcnow()
+        try:
+            with self._db.get_connection() as conn:
+                # Derive client_slug from schema name (schema = "org_{slug}")
+                slug = self.schema[len("org_"):]
+                org_row = conn.execute(
+                    text("SELECT id FROM public.organizations WHERE slug = :slug"),
+                    {'slug': slug},
+                ).fetchone()
+                organization_id = org_row[0] if org_row else None
+
+                result = conn.execute(text(f"""
+                    INSERT INTO {self.schema}.calibration_frames
+                    (camera_id, organization_id, frame_url, frame_index, captured_at, created_at, updated_at)
+                    VALUES (:camera_id, :organization_id, :frame_url, :frame_index, :captured_at, :created_at, :updated_at)
+                    RETURNING id
+                """), {
+                    'camera_id': camera_id,
+                    'organization_id': organization_id,
+                    'frame_url': frame_url,
+                    'frame_index': frame_index,
+                    'captured_at': captured_at,
+                    'created_at': now,
+                    'updated_at': now,
+                })
+                conn.commit()
+                row = result.fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"Failed to save calibration frame: {e}")
+            return 0
+
     def update_user_location(
         self,
         user_id: Optional[int],
