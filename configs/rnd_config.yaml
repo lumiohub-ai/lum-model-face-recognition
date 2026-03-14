@@ -8,6 +8,7 @@ client_slug: "rnd"
 timezone: "UTC"
 debug: true
 eval: true
+groundtruth_dir: "volumes/src/annotation/chokepoint/groundtruth"
 visualize: true
 minimum_face_size: 50
 max_track_lifetime_seconds: 30

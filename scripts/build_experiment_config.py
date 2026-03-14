@@ -25,6 +25,7 @@ client_slug: "rnd"
 timezone: "UTC"
 debug: false
 eval: true
+groundtruth_dir: "volumes/src/annotation/chokepoint/groundtruth"
 minimum_face_size: 50
 max_track_lifetime_seconds: 30
 fps: 25

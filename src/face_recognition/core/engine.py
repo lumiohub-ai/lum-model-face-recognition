@@ -385,6 +385,26 @@ class FaceEngine:
 
         return visualization_frame
 
+    def get_active_track_sims(self, tracks: List) -> Dict[int, Tuple[str, float]]:
+        """Compute per-frame recognition similarity for active tracks (for visualization).
+
+        Returns:
+            {track_id: (best_match_name, best_similarity)}
+        """
+        result = {}
+        for track in tracks:
+            if track.time_since_update > 0 or track.emb is None:
+                continue
+            emb = np.array([track.emb])
+            sims = self.face_recognition.compute_similarities(emb)
+            if sims.size == 0:
+                continue
+            best_idx = int(np.argmax(sims[0]))
+            best_sim = float(sims[0][best_idx])
+            name = self.face_recognition.db_names[best_idx]
+            result[track.id] = (name, best_sim)
+        return result
+
     def process_active_tracks(
         self,
         tracks: List,
@@ -712,6 +732,29 @@ class FaceEngine:
 
             # Validate track has embeddings
             if not self.track_manager.has_embeddings(track_id):
+                if self.args.eval:
+                    # Eval mode: emit a null probe — this track was seen but face was
+                    # unprocessable (too small / all ghost frames). Score=0.0 ensures
+                    # correct rejection at any threshold > 0 for FPIR computation.
+                    last_frame = self.track_manager.track_last_active_frame.get(track_id, 0)
+                    appear_time = self.track_manager.get_track_appear_time(track_id)
+                    null_info = {
+                        'name': 'UNKNOWN',
+                        'recognized': 'unrecognized',
+                        'similarity': 0.0,
+                        'confidence': 0.0,
+                        'status': 'NO_EMBEDDINGS',
+                        'first_frame_num': last_frame,
+                        'last_frame_num': last_frame,
+                        'last_tracked_frame_num': last_frame,
+                        'matched_frame_num': None,
+                        '_debug_n_embeddings': 0,
+                        '_debug_embed_span': 0,
+                        '_track_boxes': {},
+                    }
+                    persons_logged[str(track_id)] = [
+                        track_id, appear_time, 'unrecognized', None, null_info
+                    ]
                 self.track_manager.delete_track_cache(track_id)
                 continue
 
@@ -778,16 +821,17 @@ class FaceEngine:
             # Store result
             name = recognition_info['name']
             appear_time = self.track_manager.get_track_appear_time(track_id)
-            persons_logged[name] = [
+            # In eval mode key by track_id so multiple tracks with the same
+            # recognized name all survive (spatial filtering handles dedup later).
+            # In production, last-writer-wins per name is the desired behaviour.
+            log_key = str(track_id) if self.args.eval else name
+            persons_logged[log_key] = [
                 track_id,
                 appear_time,
                 recognition_info['recognized'],
                 image,
                 recognition_info
             ]
-
-            if self.args.eval:
-                self._record_evaluation_results(track_id, name)
 
             self.track_manager.delete_track_cache(track_id)
 
@@ -816,11 +860,10 @@ class FaceEngine:
             )
             result['_debug_n_embeddings'] = len(frame_nums)
             result['_debug_embed_span'] = frame_nums[-1] - frame_nums[0]
-            if self.args.debug:
-                logger.debug(
-                    f"[RECOG] track={track_id} embeddings={len(frame_nums)} "
-                    f"span={frame_nums[-1]-frame_nums[0]} "
-                    f"first={frame_nums[0]} last={frame_nums[-1]}"
+            # Snapshot per-frame bboxes for spatial GT matching (eval only)
+            if self.args.eval:
+                result['_track_boxes'] = dict(
+                    self.track_manager.track_boxes_frame.get(track_id, {})
                 )
         return result
 
@@ -946,38 +989,3 @@ class FaceEngine:
 
         return track_line.intersects(counting_line)
 
-    def _record_evaluation_results(self, track_id: int, name: str) -> None:
-        """Record evaluation results for a recognized face.
-
-        Args:
-            track_id: ID of the track
-            name: Recognized name of the person
-        """
-        if not self.args.eval:
-            return
-
-        # Get first appeared frame number
-        track_embeddings = self.track_manager.get_track_embeddings(track_id)
-        frame_num = list(track_embeddings.keys())[0]
-
-        save_path = self.args.txt_path
-
-        if not os.path.exists(save_path):
-            with open(save_path, 'w') as f:
-                f.write("time,name,cam_type\n")
-
-        with open(save_path, 'a') as f:
-            total_seconds = frame_num / self.args.fps
-
-            minutes = int(total_seconds // 60)
-            seconds = int(total_seconds % 60)
-
-            time_str = f"{minutes}:{seconds:02d}"
-            f.write(f"{time_str},{name},{self.args.cam_type}\n")
-
-        appear_time = self.track_manager.get_track_appear_time(track_id)
-        self.mot_results.append({
-            'name': name,
-            'cam_type': self.args.cam_type,
-            'time': appear_time.strftime('%Y-%m-%d %H:%M:%S') if appear_time else 'Unknown',
-        })
