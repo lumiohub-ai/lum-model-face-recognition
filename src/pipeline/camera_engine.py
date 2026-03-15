@@ -170,7 +170,9 @@ class CameraEngine:
         )
 
         # Action recognition timing (track per identity name, not track_id)
+        # Bounded: old entries pruned in _check_and_queue_action_recognition()
         self.last_action_check_per_identity: Dict[str, float] = {}
+        self._max_action_identity_cache = 500
 
         # Frame counter
         self.frame_count = 0
@@ -440,9 +442,12 @@ class CameraEngine:
                 )
 
             if face_image is not None:
-                self.track_manager.track_crop_history.setdefault(track_id, {})[
-                    frame_num
-                ] = {"face": face_image, "bbox": bbox, "frame": frame.copy()}
+                _max_crop_frames = 30
+                crop_history = self.track_manager.track_crop_history.setdefault(track_id, {})
+                crop_history[frame_num] = {"face": face_image, "bbox": bbox, "frame": frame.copy()}
+                if len(crop_history) > _max_crop_frames:
+                    for old_key in sorted(crop_history)[:-_max_crop_frames]:
+                        del crop_history[old_key]
 
         # Removed tracks
         for track in removed_tracks:
@@ -703,6 +708,13 @@ class CameraEngine:
 
         self.last_action_check_per_identity[identity] = current_time
 
+        # Prune stale entries to prevent unbounded growth
+        if len(self.last_action_check_per_identity) > self._max_action_identity_cache:
+            cutoff = current_time - self.action_recognizer.check_interval_seconds * 2
+            stale = [k for k, t in self.last_action_check_per_identity.items() if t < cutoff]
+            for k in stale:
+                del self.last_action_check_per_identity[k]
+
         user_id = self.name_to_id_map.get(identity)
         if user_id is None:
             logger.warning(f"Cannot find user_id for '{identity}', skipping action recognition")
@@ -765,5 +777,6 @@ class CameraEngine:
         self.track_manager.reset()
         self.identity_manager.reset()
         self.state_manager.reset()
+        self.last_action_check_per_identity.clear()
         self.frame_count = 0
 

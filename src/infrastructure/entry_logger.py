@@ -72,6 +72,13 @@ class EntryLogger:
             if old != new_status:
                 logger.info(f"Status updated for {name}: {old} -> {new_status}")
 
+        # Remove stale entries for users no longer in the system
+        removed = [name for name in self.person_last_camera if name not in self.person_status]
+        for name in removed:
+            del self.person_last_camera[name]
+        if removed:
+            logger.debug(f"Cleaned {len(removed)} stale entries from person_last_camera")
+
     def log_person_entry(
         self,
         name: str,

@@ -224,6 +224,12 @@ class ImageFetcher:
                     logger.warning(f"SSRF_BLOCKED: {reason} - URL: {url}")
                     return None
 
+            # Convert https://storage.googleapis.com/{bucket}/... to gs:// so the
+            # authenticated GCS client is used instead of unauthenticated HTTP.
+            if url.startswith('https://storage.googleapis.com/') and self.gcs_client:
+                path = url[len('https://storage.googleapis.com/'):]
+                url = f'gs://{path}'
+
             if url.startswith('gs://'):
                 return self._fetch_from_gcs(url)
             elif url.startswith('http://') or url.startswith('https://'):

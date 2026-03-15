@@ -73,10 +73,10 @@ class StreamHandler:
         self.thread = None  # Store reference to thread
 
     def _reconnect(self) -> bool:
-        """Attempt to reconnect to the video source infinitely until successful.
+        """Attempt to reconnect to the video source until successful or stopped.
 
         Returns:
-            True if reconnection was successful
+            True if reconnection was successful, False if shutdown was requested
         """
         self.logger.warning(f"Reconnecting to stream: {self.src}")
         if self.cap is not None:
@@ -85,10 +85,14 @@ class StreamHandler:
         current_delay = self.reconnect_delay
         attempt_count = 1
 
-        while True:  # Infinite reconnection loop
+        while True:
+            # Exit reconnection loop if shutdown was requested
+            if self.stopped:
+                self.logger.info(f"Reconnection aborted (shutdown requested): {self.src}")
+                return False
+
             # Configure RTSP options for better compatibility
             if isinstance(self.src, str) and self.src.startswith('rtsp://'):
-                # Set same FFmpeg options as initial connection
                 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
                     'rtsp_transport;tcp|'
                     'buffer_size;1024000|'
@@ -100,13 +104,16 @@ class StreamHandler:
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
             else:
                 self.cap = cv2.VideoCapture(self.src)
+
             ret, _ = self.cap.read()
             if ret:
                 self.logger.warning(f"Successfully reconnected to stream: {self.src}")
                 return True
 
+            # Release failed capture before next attempt
+            self.cap.release()
+
             attempt_count += 1
-            # Implement exponential backoff with a maximum delay
             current_delay = min(current_delay * 1.5, self.max_delay)
             time.sleep(current_delay)
 
@@ -148,11 +155,12 @@ class StreamHandler:
             ret, frame = self.cap.read()
             if not ret:
                 consecutive_failures += 1
-                if consecutive_failures >= 3:  # Try to reconnect after 3 consecutive failures
+                if consecutive_failures >= 3:
                     self.logger.warning(f"Stream timeout triggered. Attempting to reconnect...")
-                    self._reconnect()
+                    if self.stopped or not self._reconnect():
+                        break
                     consecutive_failures = 0
-                time.sleep(0.5)  # Short delay before retry
+                time.sleep(0.5)
                 continue
 
             # Reset failure counter on successful read
@@ -202,5 +210,7 @@ class StreamHandler:
             self.stopped = True
 
         if self.thread is not None:
-            self.thread.join()
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                self.logger.warning(f"Stream thread did not exit cleanly within 5s: {self.src}")
         self.cap.release()
