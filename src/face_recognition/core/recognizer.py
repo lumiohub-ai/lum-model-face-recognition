@@ -261,6 +261,7 @@ class FaceRecognition:
             'top3_similarities': top_k_similarities,
             'frontality_score': frontality_score,
             'top_k_frame_nums': top_k_frame_nums,  # Top K frames to save
+            'top_k_candidates': self.get_top_k_candidates(similarities, k=10),
         }
 
         return recognition_info
@@ -308,6 +309,34 @@ class FaceRecognition:
         best_query_idx = np.argmax(np.max(similarities, axis=1))  # input embedding with best match
 
         return frame_nums[best_query_idx]
+
+    def get_top_k_candidates(self, similarities: np.ndarray, k: int = 10) -> List[Dict[str, float]]:
+        """Return top-K unique persons ranked by max similarity across all their gallery embeddings.
+
+        Used for CMC / mAP computation in R&D evaluation.
+
+        Args:
+            similarities: Matrix of shape [n_query_frames, n_gallery_embeddings]
+            k: Number of top candidates to return
+
+        Returns:
+            List of {"name": str, "similarity": float} sorted descending by similarity, length <= k
+        """
+        if similarities.size == 0:
+            return []
+        # Use the frame with the highest overall similarity (same as top-k_similarities logic)
+        best_frame_idx = int(np.argmax(np.max(similarities, axis=1)))
+        frame_sims = similarities[best_frame_idx]  # shape: [n_gallery_embeddings]
+
+        # Aggregate per unique person name: take max similarity across their embeddings
+        person_max: Dict[str, float] = {}
+        for db_idx, sim in enumerate(frame_sims):
+            name = self.db_names[db_idx].split('_')[0]
+            if name not in person_max or sim > person_max[name]:
+                person_max[name] = float(sim)
+
+        ranked = sorted(person_max.items(), key=lambda x: x[1], reverse=True)
+        return [{"name": n, "similarity": round(s, 4)} for n, s in ranked[:k]]
 
     def get_top_k_frames(self, similarities: np.ndarray, frame_nums: List[int], k: int = 5) -> List[int]:
         """Get the top K frame numbers with highest similarity scores.

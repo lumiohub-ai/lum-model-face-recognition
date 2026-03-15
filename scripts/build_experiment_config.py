@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 FRAMES_ROOT = "/mnt/data/humoyun/chokepoint/frames"
-ANNOTATION_ROOT = "volumes/src/annotation/chokepoint"
+GROUNDTRUTH_DIR = "volumes/src/annotation/chokepoint/groundtruth"
 OUTPUT_CONFIG = "configs/rnd_config.yaml"
 
 SHARED_SETTINGS = """\
@@ -23,8 +23,10 @@ db_path: "volumes/src/embeddings/main.pkl"
 output_dir: "volumes/rnd_results"
 client_slug: "rnd"
 timezone: "UTC"
-debug: false
+debug: true
 eval: true
+visualize: true
+vis_fps: 15
 groundtruth_dir: "volumes/src/annotation/chokepoint/groundtruth"
 minimum_face_size: 50
 max_track_lifetime_seconds: 30
@@ -45,35 +47,21 @@ def find_leaf_frame_dirs(frames_root: str) -> list[Path]:
     return sorted(leaf_dirs)
 
 
-def annotation_path(seq_id: str) -> str:
-    """Derive the annotation file path from a sequence ID.
-
-    Mirrors the frames directory structure:
-      P1: P1E/P1E_S1/P1E_S1_C1/P1E_S1_C1.json
-      P2: P2E/P2E_S1/P2E_S1_C1/P2E_S1_C1.1.json
-    """
-    portal_type = seq_id[:3]           # P1E, P1L, P2E, P2L
-    session = seq_id[:6]               # P1E_S1, P2E_S3, etc.
-    base_id = seq_id.rsplit(".", 1)[0] if "." in seq_id else seq_id
-    return f"{ANNOTATION_ROOT}/{portal_type}/{session}/{base_id}/{seq_id}.json"
-
-
 def cam_type(seq_id: str) -> str:
     portal_type = seq_id[:3]
     return "IN" if portal_type[2] == "E" else "OUT"
 
 
 def build_entry(frame_dir: Path) -> dict | None:
-    """Build a config entry for a frame dir, or None if annotation is missing."""
+    """Build a config entry for a frame dir, or None if XML groundtruth is missing."""
     seq_id = frame_dir.name  # e.g. P1E_S1_C1 or P2E_S1_C1.1
-    ann = annotation_path(seq_id)
+    xml_path = os.path.join(GROUNDTRUTH_DIR, f"{seq_id}.xml")
 
-    if not os.path.exists(ann):
+    if not os.path.exists(xml_path):
         return None
 
     return {
         "path": str(frame_dir),
-        "annotation": ann,
         "camera_name": seq_id,
         "cam_type": cam_type(seq_id),
     }
@@ -83,7 +71,6 @@ def write_config(entries: list[dict], output_path: str) -> None:
     lines = [SHARED_SETTINGS, "videos:"]
     for e in entries:
         lines.append(f'  - path: "{e["path"]}"')
-        lines.append(f'    annotation: "{e["annotation"]}"')
         lines.append(f'    camera_name: "{e["camera_name"]}"')
         lines.append(f'    cam_type: "{e["cam_type"]}"')
         lines.append("")

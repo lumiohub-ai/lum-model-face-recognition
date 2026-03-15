@@ -153,7 +153,6 @@ class RnDRunner:
     def _process_source(self, video_entry: Dict[str, Any]) -> Dict[str, Any]:
         """Run the recognition pipeline on a video file or frame directory."""
         src_path = video_entry["path"]
-        annotation_file = video_entry.get("annotation", None)
 
         logger.info(f"Processing: {src_path}")
 
@@ -176,19 +175,25 @@ class RnDRunner:
             else:
                 logger.debug(f"No XML GT found at {xml_path}, using temporal fallback")
 
+        # Derive vis_annotation {pid: {start, end}} from xml_gt for visualization overlays
+        vis_annotation: Dict[str, Any] = {}
+        if xml_gt:
+            for fnum, persons in xml_gt.items():
+                for pid in persons:
+                    if pid not in vis_annotation:
+                        vis_annotation[pid] = {"start": fnum, "end": fnum}
+                    else:
+                        vis_annotation[pid]["end"] = max(vis_annotation[pid]["end"], fnum)
+
         # --- visualization setup ---
         visualize = self.config.get("visualize", False)
         vis_proc = None
-        vis_annotation: Dict[str, Any] = {}
         vis_out_path = ""
         track_registry: Dict[int, Dict[str, int]] = {}
         if visualize:
             vis_dir = os.path.join(self.output_dir, "videos")
             os.makedirs(vis_dir, exist_ok=True)
             vis_out_path = os.path.join(vis_dir, f"{args.camera_name}_tracks.mp4")
-            if annotation_file and os.path.exists(annotation_file):
-                with open(annotation_file) as _f:
-                    vis_annotation = json.load(_f)
 
         while True:
             ret, frame = source.read()
@@ -296,21 +301,30 @@ class RnDRunner:
 
         output: Dict[str, Any] = {
             "source": src_path,
-            "annotation_file": annotation_file,
             "total_frames": total,
             "results": results,
         }
 
-        if annotation_file:
-            evaluation = self._evaluate(results, annotation_file)
-            if xml_gt:
-                evaluation.update(self._compute_frame_metrics(results, xml_gt))
+        if xml_gt:
+            evaluation = self._evaluate(results, xml_gt)
+            evaluation.update(self._compute_frame_metrics(results, xml_gt))
+
+            # PLA(T) / FIR(T) threshold sweep (for figure: PLA degrades more gracefully than FIR)
+            pla_fir_sweep = self._compute_pla_fir_sweep(
+                results, xml_gt, evaluation.get("person_curves", {}), evaluation
+            )
+            if pla_fir_sweep:
+                evaluation["pla_fir_sweep"] = pla_fir_sweep
+
+            # Simplified MOT metrics (MOTA + IDF1, track-level approximation)
+            evaluation.update(self._compute_mot_metrics(results, xml_gt, evaluation))
+
             output["evaluation"] = evaluation
             self._log_evaluation(evaluation)
 
         # Strip internal/redundant fields from result entries before serialization
         _STRIP = {"confidence", "_debug_n_embeddings", "_debug_embed_span",
-                  "_xml_frames_checked", "appear_time"}
+                  "_xml_frames_checked", "appear_time", "_debug_top_k_candidates"}
         for r in output["results"]:
             for f in _STRIP:
                 r.pop(f, None)
@@ -345,21 +359,24 @@ class RnDRunner:
                 "appear_time": appear_time.isoformat() if appear_time else None,
                 "true_gt_id": true_gt_id,
                 "_xml_frames_checked": xml_frames_checked,
-                "_debug_n_embeddings": info.get('_debug_n_embeddings'),
-                "_debug_embed_span":   info.get('_debug_embed_span'),
+                "_debug_n_embeddings":     info.get('_debug_n_embeddings'),
+                "_debug_embed_span":       info.get('_debug_embed_span'),
+                "_debug_top_k_candidates": info.get('top_k_candidates', []),
             }
             results.append(entry)
 
-    def _evaluate(self, results: List[Dict[str, Any]], annotation_file: str) -> Dict[str, Any]:
-        """Compare predicted entry sequence against ground-truth annotation.
+    def _evaluate(self, results: List[Dict[str, Any]], xml_gt: Dict[int, Dict[str, Any]]) -> Dict[str, Any]:
+        """Compare predicted entry sequence against ground-truth annotation derived from XML GT.
 
-        Annotation format: {"person_id": {"start": "frame_num", "end": "frame_num"}} — ordered by appearance.
-        Predicted sequence: first recognition event per person, sorted by frame_num.
+        gt_persons and gt_sequence are derived from xml_gt: all unique person IDs ordered by first appearance frame.
         """
-        with open(annotation_file) as f:
-            annotation: Dict[str, str] = json.load(f)  # preserves insertion order (py3.7+)
-
-        gt_sequence: List[str] = list(annotation.keys())  # already ordered by frame number
+        # Derive gt_sequence ordered by first XML appearance
+        first_seen: Dict[str, int] = {}
+        for fnum in sorted(xml_gt.keys()):
+            for pid in xml_gt[fnum]:
+                if pid not in first_seen:
+                    first_seen[pid] = fnum
+        gt_sequence: List[str] = sorted(first_seen.keys(), key=lambda p: first_seen[p])
 
 
 
@@ -436,7 +453,21 @@ class RnDRunner:
             fnr = len(missed) / n if n else 0.0
             sir = len(misidentified) / n if n else 0.0
 
-        probe_curves = self._compute_biometric_curves(results, annotation)
+        probe_curves = self._compute_biometric_curves(results, xml_gt)
+        person_curves = self._compute_person_curves(results, xml_gt)
+        cmc_map = self._compute_cmc_map(results, xml_gt)
+
+        # DET curve: FNMR(T) = 1 − TPIR(T),  FMR(T) = FPIR(T)
+        det_curve = {}
+        if probe_curves:
+            det_curve = {
+                "thresholds": probe_curves["thresholds"],
+                "fnmr": [round(1.0 - v, 4) for v in probe_curves["tpir"]],
+                "fmr": list(probe_curves["fpir"]),
+            }
+
+        fnr_val = round(fnr, 4) if fnr is not None else None
+        sir_val = round(sir, 4) if sir is not None else None
 
         return {
             "gt_sequence": gt_sequence,
@@ -445,8 +476,11 @@ class RnDRunner:
             "misidentified": sorted(misidentified),
             "total_gt": n,
             "pla": round(pla, 4) if pla is not None else None,
-            "fnr": round(fnr, 4) if fnr is not None else None,
-            "sir": round(sir, 4) if sir is not None else None,
+            "fnr": fnr_val,
+            "sir": sir_val,
+            "pl_frr": fnr_val,       # PL-FRR = Person-Level False Rejection Rate (alias for fnr)
+            "pl_far": sir_val,       # PL-FAR = Person-Level False Acceptance Rate (alias for sir)
+            "swap_rate": sir_val,    # Swap Rate = misidentified/N (alias for sir)
             "n_spatial_false_positives": len(spatially_rejected),
             "spatial_false_positives": [
                 {
@@ -464,12 +498,15 @@ class RnDRunner:
                 for r in spatially_rejected
             ],
             "probe_curves": probe_curves,
+            "person_curves": person_curves,
+            "cmc_map": cmc_map,
+            "det_curve": det_curve,
         }
 
     def _compute_biometric_curves(
         self,
         results: List[Dict[str, Any]],
-        annotation: Dict[str, Dict[str, str]],
+        xml_gt: Dict[int, Dict[str, Any]],
         thresholds: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """Compute TPIR/FPIR curves using track-level probe scoring per NIST FRVT / ISO 19795-1.
@@ -495,7 +532,7 @@ class RnDRunner:
         _MIN_XML_FRAMES_BIO = 3
 
         if has_spatial_gt:
-            gt_persons = set(annotation.keys())
+            gt_persons = {pid for persons in xml_gt.values() for pid in persons}
             for r in results:
                 true_id = r.get("true_gt_id")
                 xml_checked = r.get("_xml_frames_checked", 0)
@@ -516,7 +553,7 @@ class RnDRunner:
 
             # FN injection: enrolled persons with zero tracks → missed probe at score 0.0
             persons_with_results = {r["true_gt_id"] for r in results if r.get("true_gt_id") in gt_persons}
-            for pid in annotation:
+            for pid in gt_persons:
                 if pid not in persons_with_results:
                     genuine_probes.append((0.0, False))
 
@@ -539,6 +576,125 @@ class RnDRunner:
             "n_genuine_accepted": n_correct_tracks,
             "n_genuine": n_genuine,
             "n_impostors": n_impostor,
+        }
+
+    def _compute_cmc_map(
+        self,
+        results: List[Dict[str, Any]],
+        xml_gt: Dict[int, Dict[str, Any]],
+        max_rank: int = 10,
+    ) -> Dict[str, Any]:
+        """Compute CMC curve and mAP for closed-set identification.
+
+        Each genuine probe (track whose true_gt_id belongs to a GT person) contributes:
+          - CMC[k]: 1 if the correct person appears in the top-k ranked candidates
+          - AP: 1/rank if correct person found in candidates, else 0
+
+        mAP = mean(AP) across all genuine probes.
+        """
+        gt_persons = {pid for persons in xml_gt.values() for pid in persons}
+        has_spatial_gt = any(r.get("_xml_frames_checked", 0) > 0 for r in results)
+        if not has_spatial_gt:
+            return {}
+
+        genuine_results = [
+            r for r in results if r.get("true_gt_id") in gt_persons
+        ]
+        if not genuine_results:
+            return {}
+
+        cmc_counts = [0] * max_rank
+        ap_scores: List[float] = []
+
+        for r in genuine_results:
+            true_id = r["true_gt_id"]
+            candidates = r.get("_debug_top_k_candidates", [])
+            names = [c["name"] for c in candidates]
+
+            # CMC: correct person in top-k?
+            found_at = next((i for i, n in enumerate(names) if n == true_id), None)
+            for k in range(max_rank):
+                if found_at is not None and found_at <= k:
+                    cmc_counts[k] += 1
+
+            # AP: 1/rank if found, else 0 (single relevant item per probe)
+            ap_scores.append(1.0 / (found_at + 1) if found_at is not None else 0.0)
+
+        n = len(genuine_results)
+        return {
+            "ranks": list(range(1, max_rank + 1)),
+            "cmc": [round(c / n, 4) for c in cmc_counts],
+            "map": round(sum(ap_scores) / len(ap_scores), 4) if ap_scores else None,
+            "n_probes": n,
+        }
+
+    def _compute_person_curves(
+        self,
+        results: List[Dict[str, Any]],
+        xml_gt: Dict[int, Dict[str, Any]],
+        thresholds: Optional[np.ndarray] = None,
+    ) -> Dict[str, Any]:
+        """Compute person-level TAR/FAR curve (episode-level).
+
+        One episode per GT person: score = max similarity across spatially-matched tracks.
+        One impostor episode per qualifying impostor track (same criterion as probe-level).
+
+        TAR(T) = persons accepted correctly at T / n_genuine_persons
+        FAR(T) = impostor episodes accepted at T / n_impostor_episodes
+        """
+        if thresholds is None:
+            thresholds = np.linspace(0.0, 1.0, 101)
+
+        gt_persons = {pid for persons in xml_gt.values() for pid in persons}
+        _MIN_XML_FRAMES_EP = 3
+
+        has_spatial_gt = any(r.get("_xml_frames_checked", 0) > 0 for r in results)
+        if not has_spatial_gt:
+            return {}
+
+        # Group results by true_gt_id for genuine episodes
+        results_by_true_id: Dict[str, List] = {}
+        for r in results:
+            tid = r.get("true_gt_id")
+            if tid and tid in gt_persons:
+                results_by_true_id.setdefault(tid, []).append(r)
+
+        # Genuine episodes: one per GT person
+        genuine_episodes: List[Tuple[float, bool]] = []
+        for pid in gt_persons:
+            tracks = results_by_true_id.get(pid, [])
+            if tracks:
+                episode_score = max(r["similarity"] for r in tracks)
+                is_correct = any(r["name"] == pid for r in tracks)
+            else:
+                episode_score = 0.0
+                is_correct = False
+            genuine_episodes.append((episode_score, is_correct))
+
+        # Impostor episodes: one per qualifying impostor track
+        impostor_scores: List[float] = [
+            r["similarity"] for r in results
+            if r.get("true_gt_id") is None
+            and (r.get("_xml_frames_checked", 0) >= _MIN_XML_FRAMES_EP
+                 or r.get("_debug_n_embeddings") == 0)
+        ]
+
+        n_genuine = len(genuine_episodes)
+        n_impostor = len(impostor_scores)
+
+        tar_values, far_values = [], []
+        for t in thresholds:
+            ta = sum(1 for score, correct in genuine_episodes if score >= t and correct)
+            fa = sum(1 for score in impostor_scores if score >= t)
+            tar_values.append(ta / n_genuine if n_genuine else 0.0)
+            far_values.append(fa / n_impostor if n_impostor else 0.0)
+
+        return {
+            "thresholds": [round(t, 4) for t in thresholds.tolist()],
+            "tar": [round(v, 4) for v in tar_values],
+            "far": [round(v, 4) for v in far_values],
+            "n_genuine_persons": n_genuine,
+            "n_impostor_episodes": n_impostor,
         }
 
     def _compute_frame_metrics(
@@ -568,6 +724,218 @@ class RnDRunner:
             "n_frames_correct": correct,
             "fir": round(correct / total, 4) if total else None,
             "fnmr": round(1 - correct / total, 4) if total else None,
+        }
+
+    def _compute_pla_fir_sweep(
+        self,
+        results: List[Dict[str, Any]],
+        xml_gt: Dict[int, Dict[str, Any]],
+        person_curves: Dict[str, Any],
+        evaluation: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """Threshold sweep comparing PLA(T), FIR(T), MOTA(T), IDF1(T) across T = 0.0..1.0.
+
+        PLA(T) = person_curves.tar (reused, no recomputation).
+        FIR(T) = frame-level accuracy if threshold T applied post-hoc to similarity scores:
+                 a frame is correct at T if a track covers it with true_gt_id==pid,
+                 name==pid, AND similarity >= T.
+        MOTA(T) = 1 - (FP + FN(T) + IDSW(T)) / GT_total  (track-level approximation)
+        IDF1(T) = 2*IDTP(T) / (2*IDTP(T) + IDFP(T) + IDFN(T))  (track-level approximation)
+
+        At T=0.0, FIR(T) == existing FIR (threshold-free). As T rises, FIR(T) drops
+        faster than PLA(T) — this is the paper's core argument in one figure.
+        """
+        if not person_curves or not xml_gt:
+            return {}
+
+        thresholds = person_curves["thresholds"]   # 101-point sweep, reuse
+        pla_values = person_curves["tar"]          # already computed
+
+        total = sum(len(persons) for persons in xml_gt.values())
+        if total == 0:
+            return {}
+
+        # --- Precompute once for MOTA(T) / IDF1(T) ---
+        _eval = evaluation or {}
+        gt_persons = {pid for persons in xml_gt.values() for pid in persons}
+        gt_total = _eval.get("total_gt", len(gt_persons))
+        n_spatial_fp = _eval.get("n_spatial_false_positives", 0)
+        _MIN_XML = 3
+
+        # GT frame count per person (for IDF1 IDFN)
+        gt_frames: Dict[str, int] = {}
+        for persons_in_frame in xml_gt.values():
+            for pid in persons_in_frame:
+                gt_frames[pid] = gt_frames.get(pid, 0) + 1
+
+        # Group genuine results by their GT person
+        results_by_true_id: Dict[str, List] = {}
+        for r in results:
+            tid = r.get("true_gt_id")
+            if tid and tid in gt_persons:
+                results_by_true_id.setdefault(tid, []).append(r)
+
+        # Impostor tracks (fixed across all T for IDFP)
+        impostor_results = [
+            r for r in results
+            if r.get("true_gt_id") is None
+            and (r.get("_xml_frames_checked", 0) >= _MIN_XML
+                 or r.get("_debug_n_embeddings") == 0)
+        ]
+
+        fir_values = []
+        mota_values = []
+        idf1_values = []
+
+        for t in thresholds:
+            # --- FIR(T) ---
+            correct = 0
+            for frame_num, persons_in_frame in xml_gt.items():
+                for pid in persons_in_frame:
+                    for r in results:
+                        if (r.get("true_gt_id") == pid
+                                and r["name"] == pid
+                                and r["similarity"] >= t
+                                and r["first_frame_num"] <= frame_num <= r["last_frame_num"]):
+                            correct += 1
+                            break
+            fir_values.append(round(correct / total, 4))
+
+            # --- MOTA(T) ---
+            fn_t = 0
+            idsw_t = 0
+            for pid in gt_persons:
+                tracks = results_by_true_id.get(pid, [])
+                accepted = [r for r in tracks if r["similarity"] >= t]
+                if any(r["name"] == pid for r in accepted):
+                    pass  # correctly identified at T
+                elif accepted:
+                    idsw_t += 1  # tracked but wrong identity at T
+                else:
+                    fn_t += 1    # missed at T
+            mota_t = round(1.0 - (n_spatial_fp + fn_t + idsw_t) / gt_total, 4) if gt_total else 0.0
+            mota_values.append(mota_t)
+
+            # --- IDF1(T) ---
+            idtp_t = 0
+            idfn_t = 0
+            for pid in gt_persons:
+                tracks = results_by_true_id.get(pid, [])
+                correct_accepted = [r for r in tracks if r["name"] == pid and r["similarity"] >= t]
+                gt_cov = gt_frames.get(pid, 0)
+                if correct_accepted:
+                    best_dur = max(r["last_frame_num"] - r["first_frame_num"] + 1 for r in correct_accepted)
+                    idtp_t += best_dur
+                    idfn_t += max(0, gt_cov - best_dur)
+                else:
+                    idfn_t += gt_cov
+            idfp_t = sum(
+                r["last_frame_num"] - r["first_frame_num"] + 1
+                for r in impostor_results if r["similarity"] >= t
+            )
+            denom_t = 2 * idtp_t + idfp_t + idfn_t
+            idf1_t = round(2 * idtp_t / denom_t, 4) if denom_t > 0 else 0.0
+            idf1_values.append(idf1_t)
+
+        return {
+            "thresholds": thresholds,
+            "pla": pla_values,
+            "fir": fir_values,
+            "mota": mota_values,
+            "idf1": idf1_values,
+            "n_frames": total,
+        }
+
+    def _compute_mot_metrics(
+        self,
+        results: List[Dict[str, Any]],
+        xml_gt: Dict[int, Dict[str, Any]],
+        evaluation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Simplified track-level MOTA and IDF1 (not standard frame-level MOT metrics).
+
+        Standard MOTA/IDF1 require frame-level detection logs and ID-switch counts.
+        This pipeline operates at track level, so these are defensible approximations:
+
+        MOTA (person-level approx):
+            1 - (FP + FN + IDSW) / GT_total
+            FP   = n_spatial_false_positives (confirmed impostor/bystander tracks)
+            FN   = len(missed) (GT persons with zero tracks)
+            IDSW = len(misidentified) (GT persons tracked with wrong identity)
+
+        IDF1 (track-level approx):
+            2*IDTP / (2*IDTP + IDFP + IDFN)
+            For each GT person p, best_track = longest track with true_gt_id==p.
+            IDTP = sum of durations of correctly-labeled best tracks (name == p)
+            IDFP = sum of durations of confirmed impostor tracks
+            IDFN = GT frame coverage not captured by best tracks
+        """
+        gt_total = evaluation.get("total_gt", 0)
+        if gt_total == 0:
+            return {}
+
+        # MOTA (person-level approximation)
+        fp = evaluation.get("n_spatial_false_positives", 0)
+        fn = len(evaluation.get("missed", []))
+        idsw = len(evaluation.get("misidentified", []))
+        mota = round(1.0 - (fp + fn + idsw) / gt_total, 4)
+
+        # IDF1 (track-level approximation)
+        gt_persons = {pid for persons in xml_gt.values() for pid in persons}
+        _MIN_XML = 3
+
+        # GT frame coverage per person (from XML annotations)
+        gt_frames: Dict[str, int] = {}
+        for persons_in_frame in xml_gt.values():
+            for pid in persons_in_frame:
+                gt_frames[pid] = gt_frames.get(pid, 0) + 1
+
+        # Best track per GT person: longest track with true_gt_id == p
+        best_tracks: Dict[str, Any] = {pid: None for pid in gt_persons}
+        for r in results:
+            tid = r.get("true_gt_id")
+            if tid and tid in gt_persons:
+                dur = r["last_frame_num"] - r["first_frame_num"] + 1
+                prev = best_tracks[tid]
+                if prev is None or dur > (prev["last_frame_num"] - prev["first_frame_num"] + 1):
+                    best_tracks[tid] = r
+
+        idtp = 0
+        idfn = 0
+        for pid in gt_persons:
+            gt_cov = gt_frames.get(pid, 0)
+            bt = best_tracks[pid]
+            if bt is not None and bt["name"] == pid:
+                track_dur = bt["last_frame_num"] - bt["first_frame_num"] + 1
+                idtp += track_dur
+                idfn += max(0, gt_cov - track_dur)
+            else:
+                idfn += gt_cov
+
+        # Impostor track durations (IDFP)
+        idfp = sum(
+            r["last_frame_num"] - r["first_frame_num"] + 1
+            for r in results
+            if r.get("true_gt_id") is None
+            and (r.get("_xml_frames_checked", 0) >= _MIN_XML
+                 or r.get("_debug_n_embeddings") == 0)
+        )
+
+        denom = 2 * idtp + idfp + idfn
+        idf1 = round(2 * idtp / denom, 4) if denom > 0 else 0.0
+
+        return {
+            "mot_metrics": {
+                "mota": mota,
+                "idf1": idf1,
+                "idtp": idtp,
+                "idfp": idfp,
+                "idfn": idfn,
+                "mot_fp": fp,
+                "mot_fn": fn,
+                "mot_idsw": idsw,
+                "approximation": "track-level (not standard frame-level MOTA/IDF1)",
+            }
         }
 
     def _log_evaluation(self, ev: Dict[str, Any]) -> None:
@@ -602,12 +970,43 @@ class RnDRunner:
                 f"@ T=0.50 — TPIR: {curves['tpir'][idx]:.4f}, FPIR: {curves['fpir'][idx]:.4f}"
             )
 
+        pcurves = ev.get("person_curves", {})
+        if pcurves:
+            thresholds_ref = pcurves["thresholds"]
+            idx = min(range(len(thresholds_ref)), key=lambda i: abs(thresholds_ref[i] - 0.5))
+            tar_at_t = pcurves["tar"][idx]
+            far_at_t = pcurves["far"][idx]
+            n_persons = pcurves["n_genuine_persons"]
+            n_correct_ep = round(tar_at_t * n_persons)
+            logger.info(
+                f"  [Person-level]  persons: {n_correct_ep}/{n_persons}  "
+                f"impostor episodes: {pcurves['n_impostor_episodes']}  "
+                f"@ T=0.50 — TAR: {tar_at_t:.4f}, FAR: {far_at_t:.4f}"
+            )
+
+        cm = ev.get("cmc_map", {})
+        if cm:
+            cmc = cm["cmc"]
+            r1 = cmc[0] if len(cmc) > 0 else 0.0
+            r5 = cmc[4] if len(cmc) > 4 else 0.0
+            logger.info(
+                f"  [Rank-based]   Rank-1: {r1:.4f}  Rank-5: {r5:.4f}  "
+                f"mAP: {cm['map']:.4f}  ({cm['n_probes']} probes)"
+            )
+
         fir = ev.get("fir")
         if fir is not None:
             fnmr = ev.get("fnmr", 0.0)
             logger.info(
                 f"  [Frame-level]  FIR: {fir:.4f}  FNMR: {fnmr:.4f}  "
                 f"frames: {ev.get('n_frames_correct', 0)}/{ev.get('n_frames', 0)}"
+            )
+
+        mot = ev.get("mot_metrics", {})
+        if mot:
+            logger.info(
+                f"  [MOT approx]   MOTA: {mot['mota']:.4f}  IDF1: {mot['idf1']:.4f}  "
+                f"(track-level approximation)"
             )
 
 

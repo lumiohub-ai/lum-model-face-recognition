@@ -8,25 +8,298 @@ client_slug: "rnd"
 timezone: "UTC"
 debug: true
 eval: true
-groundtruth_dir: "volumes/src/annotation/chokepoint/groundtruth"
 visualize: true
+vis_fps: 15
+groundtruth_dir: "volumes/src/annotation/chokepoint/groundtruth"
 minimum_face_size: 50
 max_track_lifetime_seconds: 30
 fps: 25
-vis_fps: 15
 
 videos:
   - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S1/P1E_S1_C1/P1E_S1_C1"
-    annotation: "volumes/src/annotation/chokepoint/P1E/P1E_S1/P1E_S1_C1/P1E_S1_C1.json"
     camera_name: "P1E_S1_C1"
     cam_type: "IN"
 
   - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S1/P1E_S1_C2/P1E_S1_C2"
-    annotation: "volumes/src/annotation/chokepoint/P1E/P1E_S1/P1E_S1_C2/P1E_S1_C2.json"
     camera_name: "P1E_S1_C2"
     cam_type: "IN"
 
   - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S1/P1E_S1_C3/P1E_S1_C3"
-    annotation: "volumes/src/annotation/chokepoint/P1E/P1E_S1/P1E_S1_C3/P1E_S1_C3.json"
     camera_name: "P1E_S1_C3"
     cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S2/P1E_S2_C1/P1E_S2_C1"
+    camera_name: "P1E_S2_C1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S2/P1E_S2_C2/P1E_S2_C2"
+    camera_name: "P1E_S2_C2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S2/P1E_S2_C3/P1E_S2_C3"
+    camera_name: "P1E_S2_C3"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S3/P1E_S3_C1/P1E_S3_C1"
+    camera_name: "P1E_S3_C1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S3/P1E_S3_C2/P1E_S3_C2"
+    camera_name: "P1E_S3_C2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S3/P1E_S3_C3/P1E_S3_C3"
+    camera_name: "P1E_S3_C3"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S4/P1E_S4_C1/P1E_S4_C1"
+    camera_name: "P1E_S4_C1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S4/P1E_S4_C2/P1E_S4_C2"
+    camera_name: "P1E_S4_C2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1E_S4/P1E_S4_C3/P1E_S4_C3"
+    camera_name: "P1E_S4_C3"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S1/P1L_S1_C1/P1L_S1_C1"
+    camera_name: "P1L_S1_C1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S1/P1L_S1_C2/P1L_S1_C2"
+    camera_name: "P1L_S1_C2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S1/P1L_S1_C3/P1L_S1_C3"
+    camera_name: "P1L_S1_C3"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S2/P1L_S2_C1/P1L_S2_C1"
+    camera_name: "P1L_S2_C1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S2/P1L_S2_C2/P1L_S2_C2"
+    camera_name: "P1L_S2_C2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S2/P1L_S2_C3/P1L_S2_C3"
+    camera_name: "P1L_S2_C3"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S3/P1L_S3_C1/P1L_S3_C1"
+    camera_name: "P1L_S3_C1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S3/P1L_S3_C2/P1L_S3_C2"
+    camera_name: "P1L_S3_C2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S3/P1L_S3_C3/P1L_S3_C3"
+    camera_name: "P1L_S3_C3"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S4/P1L_S4_C1/P1L_S4_C1"
+    camera_name: "P1L_S4_C1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S4/P1L_S4_C2/P1L_S4_C2"
+    camera_name: "P1L_S4_C2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P1L_S4/P1L_S4_C3/P1L_S4_C3"
+    camera_name: "P1L_S4_C3"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S1/P2E_S1_C1/P2E_S1_C1.1"
+    camera_name: "P2E_S1_C1.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S1/P2E_S1_C1/P2E_S1_C1.2"
+    camera_name: "P2E_S1_C1.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S1/P2E_S1_C2/P2E_S1_C2.1"
+    camera_name: "P2E_S1_C2.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S1/P2E_S1_C2/P2E_S1_C2.2"
+    camera_name: "P2E_S1_C2.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S1/P2E_S1_C3/P2E_S1_C3.1"
+    camera_name: "P2E_S1_C3.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S1/P2E_S1_C3/P2E_S1_C3.2"
+    camera_name: "P2E_S1_C3.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S2/P2E_S2_C1/P2E_S2_C1.1"
+    camera_name: "P2E_S2_C1.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S2/P2E_S2_C1/P2E_S2_C1.2"
+    camera_name: "P2E_S2_C1.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S2/P2E_S2_C2/P2E_S2_C2.1"
+    camera_name: "P2E_S2_C2.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S2/P2E_S2_C2/P2E_S2_C2.2"
+    camera_name: "P2E_S2_C2.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S2/P2E_S2_C3/P2E_S2_C3.1"
+    camera_name: "P2E_S2_C3.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S2/P2E_S2_C3/P2E_S2_C3.2"
+    camera_name: "P2E_S2_C3.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S3/P2E_S3_C1/P2E_S3_C1.1"
+    camera_name: "P2E_S3_C1.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S3/P2E_S3_C1/P2E_S3_C1.2"
+    camera_name: "P2E_S3_C1.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S3/P2E_S3_C2/P2E_S3_C2.1"
+    camera_name: "P2E_S3_C2.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S3/P2E_S3_C2/P2E_S3_C2.2"
+    camera_name: "P2E_S3_C2.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S3/P2E_S3_C3/P2E_S3_C3.1"
+    camera_name: "P2E_S3_C3.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S3/P2E_S3_C3/P2E_S3_C3.2"
+    camera_name: "P2E_S3_C3.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S4/P2E_S4_C1/P2E_S4_C1.1"
+    camera_name: "P2E_S4_C1.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S4/P2E_S4_C1/P2E_S4_C1.2"
+    camera_name: "P2E_S4_C1.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S4/P2E_S4_C2/P2E_S4_C2.1"
+    camera_name: "P2E_S4_C2.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S4/P2E_S4_C2/P2E_S4_C2.2"
+    camera_name: "P2E_S4_C2.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S4/P2E_S4_C3/P2E_S4_C3.1"
+    camera_name: "P2E_S4_C3.1"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2E_S4/P2E_S4_C3/P2E_S4_C3.2"
+    camera_name: "P2E_S4_C3.2"
+    cam_type: "IN"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S1/P2L_S1_C1/P2L_S1_C1.1"
+    camera_name: "P2L_S1_C1.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S1/P2L_S1_C1/P2L_S1_C1.2"
+    camera_name: "P2L_S1_C1.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S1/P2L_S1_C2/P2L_S1_C2.1"
+    camera_name: "P2L_S1_C2.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S1/P2L_S1_C2/P2L_S1_C2.2"
+    camera_name: "P2L_S1_C2.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S1/P2L_S1_C3/P2L_S1_C3.1"
+    camera_name: "P2L_S1_C3.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S1/P2L_S1_C3/P2L_S1_C3.2"
+    camera_name: "P2L_S1_C3.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S2/P2L_S2_C1/P2L_S2_C1.1"
+    camera_name: "P2L_S2_C1.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S2/P2L_S2_C1/P2L_S2_C1.2"
+    camera_name: "P2L_S2_C1.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S2/P2L_S2_C2/P2L_S2_C2.1"
+    camera_name: "P2L_S2_C2.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S2/P2L_S2_C2/P2L_S2_C2.2"
+    camera_name: "P2L_S2_C2.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S2/P2L_S2_C3/P2L_S2_C3.1"
+    camera_name: "P2L_S2_C3.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S2/P2L_S2_C3/P2L_S2_C3.2"
+    camera_name: "P2L_S2_C3.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S3/P2L_S3_C1/P2L_S3_C1.1"
+    camera_name: "P2L_S3_C1.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S3/P2L_S3_C1/P2L_S3_C1.2"
+    camera_name: "P2L_S3_C1.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S3/P2L_S3_C2/P2L_S3_C2.1"
+    camera_name: "P2L_S3_C2.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S3/P2L_S3_C2/P2L_S3_C2.2"
+    camera_name: "P2L_S3_C2.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S3/P2L_S3_C3/P2L_S3_C3.1"
+    camera_name: "P2L_S3_C3.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S3/P2L_S3_C3/P2L_S3_C3.2"
+    camera_name: "P2L_S3_C3.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S4/P2L_S4_C1/P2L_S4_C1.1"
+    camera_name: "P2L_S4_C1.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S4/P2L_S4_C1/P2L_S4_C1.2"
+    camera_name: "P2L_S4_C1.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S4/P2L_S4_C2/P2L_S4_C2.1"
+    camera_name: "P2L_S4_C2.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S4/P2L_S4_C2/P2L_S4_C2.2"
+    camera_name: "P2L_S4_C2.2"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S4/P2L_S4_C3/P2L_S4_C3.1"
+    camera_name: "P2L_S4_C3.1"
+    cam_type: "OUT"
+
+  - path: "/mnt/data/humoyun/chokepoint/frames/P2L_S4/P2L_S4_C3/P2L_S4_C3.2"
+    camera_name: "P2L_S4_C3.2"
+    cam_type: "OUT"

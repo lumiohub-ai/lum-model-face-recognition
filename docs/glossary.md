@@ -1,11 +1,11 @@
 # Evaluation Metrics Glossary
 
-## Three-Layer Hierarchy
+## Four-Layer Hierarchy
 
 ```
-Frame-level       Probe/Track-level     Person-level
-(FIR / FNMR)      (TPIR / FPIR)         (PLA / FNR / SIR)
-per-frame         per-track             per-person appearance
+Frame-level       Probe/Track-level     Person-level          Rank-based
+(FIR / FNMR)      (TPIR / FPIR)         (PLA / FNR / SIR)     (CMC / mAP)
+per-frame         per-track             per-person episode     per-probe ranked list
 ```
 
 ---
@@ -74,6 +74,35 @@ Per XML-annotated frame `f` with person `p`: **correct** if a track covers frame
 
 ---
 
+## Rank-Based Metrics
+
+> Standard closed-set identification metrics. Computed in `_compute_cmc_map()`. Stored as `cmc_map`.
+
+Each genuine probe provides a ranked candidate list of up to 10 unique persons (by max cosine similarity across their gallery embeddings), produced by `recognizer.get_top_k_candidates()`.
+
+| Term | Full Name | Formula |
+|------|-----------|---------|
+| **CMC[k]** | Cumulative Match Characteristic | `fraction of genuine probes where correct person is in top-k` |
+| **mAP** | mean Average Precision | `mean(1/rank)` across genuine probes; 0 if not in top-10 |
+
+> In ChokePoint with one track per person and perfect identification, Rank-1 ≈ 1.0 and mAP ≈ 1.0.
+
+---
+
+## Person-Level TAR/FAR Curve
+
+> Computed in `_compute_person_curves()`. Stored as `person_curves`. Required by paper abstract.
+
+One **episode** per GT person: score = max similarity across their spatially-matched tracks.
+One **impostor episode** per qualifying impostor track (same criterion as probe-level).
+
+| Term | Formula |
+|------|---------|
+| **TAR(T)** | `persons accepted correctly at T / n_genuine_persons` |
+| **FAR(T)** | `impostor episodes accepted at T / n_impostor_episodes` |
+
+---
+
 ## Null Probe
 
 A track that was detected and tracked but had **no processable face embeddings** (e.g. face width < `minimum_face_size = 50 px`). Emitted in `eval` mode as:
@@ -119,10 +148,64 @@ A result entry excluded from PLA evaluation because XML GT confirms the track's 
 | `misidentified` | list | Person IDs tracked but wrongly labelled |
 | `total_gt` | int | Total enrolled persons in sequence |
 | `probe_curves` | object | TPIR/FPIR arrays + counts |
+| `person_curves` | object | TAR/FAR arrays at person level |
+| `cmc_map` | object | CMC curve + mAP |
+| `det_curve` | object | FNMR/FMR arrays (derived from probe_curves) |
+| `pla_fir_sweep` | object | PLA(T) and FIR(T) threshold sweep arrays |
+| `mot_metrics` | object | MOTA + IDF1 (track-level approximation) |
+| `pl_frr` | float | PL-FRR = missed / N (alias for `fnr`) |
+| `pl_far` | float | PL-FAR = misidentified / N (alias for `sir`) |
+| `swap_rate` | float | Swap Rate = misidentified / N (alias for `sir`) |
 | `fir` | float | Frame Identification Rate |
 | `fnmr` | float | False Non-Match Rate |
 | `n_frames` | int | Total XML-annotated frames |
 | `n_frames_correct` | int | Frames covered by a correct track |
+
+---
+
+## Reviewer-Added Metrics
+
+### PL-FRR / PL-FAR / Swap Rate
+
+Person-level error decomposition — aliases of existing fields:
+
+| Term | Full Name | Formula | `evaluation` key |
+|------|-----------|---------|-----------------|
+| **PL-FRR** | Person-Level False Rejection Rate | `missed / N` | `pl_frr` (= `fnr`) |
+| **PL-FAR** | Person-Level False Acceptance Rate | `misidentified / N` | `pl_far` (= `sir`) |
+| **Swap Rate** | Identity Swap Rate | `misidentified / N` | `swap_rate` (= `sir`) |
+
+### DET Curve
+
+Detection Error Tradeoff curve — standard biometric plot on log–log axes.
+
+- `FNMR(T) = 1 − probe_curves.tpir[T]`
+- `FMR(T) = probe_curves.fpir[T]`
+
+Stored as `det_curve = {thresholds, fnmr, fmr}`. Data is a strict derivation of `probe_curves` — no new computation.
+
+### PLA(T) / FIR(T) Threshold Sweep
+
+Stored as `pla_fir_sweep = {thresholds, pla, fir, mota, idf1, n_frames}`.
+
+- `pla[T]` = `person_curves.tar[T]` — reused, no recomputation.
+- `fir[T]` = fraction of XML-annotated frames correctly identified *if* threshold T applied post-hoc to similarity scores (track must have `true_gt_id==pid`, `name==pid`, `similarity >= T`).
+- `mota[T]` = `1 − (FP + FN(T) + IDSW(T)) / GT_total` — person-level MOTA approximation at T. FP = spatial FP (fixed); FN(T) = GT persons with no accepted track at T; IDSW(T) = GT persons with accepted tracks but all wrong identity at T.
+- `idf1[T]` = `2·IDTP(T) / (2·IDTP(T) + IDFP(T) + IDFN(T))` — track-level IDF1 approximation at T. Uses best correctly-accepted track per GT person; IDFP(T) from impostor track durations accepted at T.
+
+At `T=0.0`, `fir[0] == existing fir` (threshold-free). As T rises, FIR(T) degrades faster than PLA(T) — this is the paper's core figure.
+
+### MOTA / IDF1 (track-level approximation)
+
+**Not standard frame-level MOT** — this pipeline lacks frame-level detection logs required for standard MOTA/IDF1 (TrackEval). These are defensible approximations stored as `mot_metrics` with `"approximation": "track-level"`.
+
+| Metric | Formula |
+|--------|---------|
+| **MOTA** | `1 − (FP + FN + IDSW) / GT_total` — FP/FN/IDSW are person-level counts |
+| **IDF1** | `2·IDTP / (2·IDTP + IDFP + IDFN)` — duration-weighted, track-level |
+
+MOTA components: `mot_fp` = `n_spatial_false_positives`, `mot_fn` = `len(missed)`, `mot_idsw` = `len(misidentified)`.
+IDF1 components: `idtp` = duration of correctly-labeled best tracks, `idfp` = impostor track duration, `idfn` = GT frames not covered by best tracks.
 
 ---
 
