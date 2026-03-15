@@ -50,8 +50,9 @@ def load_result(path: Path) -> dict | None:
             "pla": ev.get("pla"),
             "fnr": ev.get("fnr"),
             "sir": ev.get("sir"),
-            "pl_frr": ev.get("pl_frr"),   # PL-FRR = fnr alias
-            "pl_far": ev.get("pl_far"),   # PL-FAR = sir alias
+            "swap_rate": ev.get("swap_rate"),
+            "pl_frr": ev.get("pl_frr"),
+            "pl_far": ev.get("pl_far"),
             "tpir_50": tpir,
             "fpir_50": fpir,
             "tar_50": tar,
@@ -94,6 +95,71 @@ def divergence_flag(row: dict) -> str:
     return " ".join(flags)
 
 
+def export_macro_curves(paths: list, results_dir: Path) -> None:
+    """Macro-average pla_fir_sweep, det_curve, and cmc_map across all sequences and write to JSON."""
+    sweep_accum = None
+    det_accum = None
+    cmc_accum = None
+    n_sweep = 0
+    n_det = 0
+    n_cmc = 0
+
+    for path in paths:
+        ev = json.loads(path.read_text()).get("evaluation", {})
+
+        sweep = ev.get("pla_fir_sweep", {})
+        if sweep and sweep.get("thresholds"):
+            if sweep_accum is None:
+                sweep_accum = {"thresholds": sweep["thresholds"],
+                               "pla": [0.0] * len(sweep["thresholds"]),
+                               "fir": [0.0] * len(sweep["thresholds"]),
+                               "mota": [0.0] * len(sweep["thresholds"]),
+                               "idf1": [0.0] * len(sweep["thresholds"])}
+            for k in ["pla", "fir", "mota", "idf1"]:
+                for i, v in enumerate(sweep.get(k, [])):
+                    sweep_accum[k][i] += v
+            n_sweep += 1
+
+        det = ev.get("det_curve", {})
+        if det and det.get("thresholds"):
+            if det_accum is None:
+                det_accum = {"thresholds": det["thresholds"],
+                             "fnmr": [0.0] * len(det["thresholds"]),
+                             "fmr": [0.0] * len(det["thresholds"])}
+            for k in ["fnmr", "fmr"]:
+                for i, v in enumerate(det.get(k, [])):
+                    det_accum[k][i] += v
+            n_det += 1
+
+        cc = ev.get("cmc_map", {})
+        if cc and cc.get("ranks"):
+            if cmc_accum is None:
+                cmc_accum = {"ranks": cc["ranks"], "cmc": [0.0] * len(cc["ranks"])}
+            for i, v in enumerate(cc.get("cmc", [])):
+                cmc_accum["cmc"][i] += v
+            n_cmc += 1
+
+    if sweep_accum and n_sweep:
+        for k in ["pla", "fir", "mota", "idf1"]:
+            sweep_accum[k] = [round(v / n_sweep, 4) for v in sweep_accum[k]]
+        out = results_dir / "macro_pla_fir_sweep.json"
+        out.write_text(json.dumps(sweep_accum, indent=2))
+        print(f"Written: {out}")
+
+    if det_accum and n_det:
+        for k in ["fnmr", "fmr"]:
+            det_accum[k] = [round(v / n_det, 4) for v in det_accum[k]]
+        out = results_dir / "macro_det_curve.json"
+        out.write_text(json.dumps(det_accum, indent=2))
+        print(f"Written: {out}")
+
+    if cmc_accum and n_cmc:
+        cmc_accum["cmc"] = [round(v / n_cmc, 4) for v in cmc_accum["cmc"]]
+        out = results_dir / "macro_cmc_curve.json"
+        out.write_text(json.dumps(cmc_accum, indent=2))
+        print(f"Written: {out}")
+
+
 def main():
     paths = sorted(RESULTS_DIR.glob("*_results.json"))
     print(f"Found {len(paths)} result files\n")
@@ -113,7 +179,7 @@ def main():
 
     # --- CSV ---
     csv_path = RESULTS_DIR / "summary.csv"
-    fieldnames = ["sequence", "portal", "n", "pla", "fnr", "sir", "pl_frr", "pl_far",
+    fieldnames = ["sequence", "portal", "n", "pla", "fnr", "sir", "swap_rate", "pl_frr", "pl_far",
                   "tpir_50", "fpir_50", "tar_50", "far_50",
                   "fir", "fnmr", "rank1", "map", "idf1", "mota",
                   "n_impostors", "n_probes"]
@@ -125,9 +191,9 @@ def main():
 
     # --- Markdown table ---
     header = (
-        "| Sequence | N | PLA | TPIR@.5 | FPIR@.5 | TAR@.5 | FAR@.5 | FIR | Rank-1 | mAP | MOTA | IDF1 | Impostors | Note |"
+        "| Sequence | N | PLA | SwapRate | PL-FRR | PL-FAR | TPIR@.5 | FPIR@.5 | TAR@.5 | FAR@.5 | FIR | Rank-1 | mAP | MOTA | IDF1 | Impostors | Note |"
     )
-    sep = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+    sep = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 
     lines = [header, sep]
     for r in rows:
@@ -136,6 +202,9 @@ def main():
             f"| {r['sequence']} "
             f"| {r['n'] or '—'} "
             f"| {fmt(r['pla'])} "
+            f"| {fmt(r['swap_rate'])} "
+            f"| {fmt(r['pl_frr'])} "
+            f"| {fmt(r['pl_far'])} "
             f"| {fmt(r['tpir_50'])} "
             f"| {fmt(r['fpir_50'])} "
             f"| {fmt(r['tar_50'])} "
@@ -159,6 +228,9 @@ def main():
             f"| **{label}** "
             f"| {fmt(macro_avg(subset, 'n'), 1)} "
             f"| {fmt(macro_avg(subset, 'pla'))} "
+            f"| {fmt(macro_avg(subset, 'swap_rate'))} "
+            f"| {fmt(macro_avg(subset, 'pl_frr'))} "
+            f"| {fmt(macro_avg(subset, 'pl_far'))} "
             f"| {fmt(macro_avg(subset, 'tpir_50'))} "
             f"| {fmt(macro_avg(subset, 'fpir_50'))} "
             f"| {fmt(macro_avg(subset, 'tar_50'))} "
@@ -172,7 +244,7 @@ def main():
             f"| |"
         )
 
-    lines.append("| | | | | | | | | | | | |")
+    lines.append("| | | | | | | | | | | | | | | | | |")
     for portal in ["P1E", "P1L", "P2E", "P2L"]:
         sub = [r for r in rows if r["portal"] == portal]
         if sub:
@@ -209,6 +281,9 @@ def main():
             f"| {fmt(r['tpir_50'])} "
             f"| {divergence_flag(r)} |"
         )
+
+
+    export_macro_curves(paths, RESULTS_DIR)
 
 
 if __name__ == "__main__":
