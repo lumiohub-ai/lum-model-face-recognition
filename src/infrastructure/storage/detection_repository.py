@@ -181,6 +181,34 @@ class DetectionRepository:
             logger.error(f"Failed to save calibration frame: {e}")
             return 0
 
+    def get_calibration_frames(self, camera_id: int) -> list:
+        """Fetch all calibration frame URLs for a camera, ordered by frame_index.
+
+        Returns:
+            List of dicts with keys: id, frame_url, frame_index, captured_at
+        """
+        try:
+            with self._db.get_connection() as conn:
+                result = conn.execute(text(f"""
+                    SELECT id, frame_url, frame_index, captured_at
+                    FROM {self.schema}.calibration_frames
+                    WHERE camera_id = :camera_id
+                    ORDER BY frame_index ASC
+                """), {'camera_id': camera_id})
+                rows = result.fetchall()
+                return [
+                    {
+                        'id': row[0],
+                        'frame_url': row[1],
+                        'frame_index': row[2],
+                        'captured_at': row[3].isoformat() if row[3] else None,
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error(f"Failed to get calibration frames: {e}")
+            return []
+
     def update_user_location(
         self,
         user_id: Optional[int],

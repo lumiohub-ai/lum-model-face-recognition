@@ -325,3 +325,47 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing FrameCaptured: camera {camera_id}, command {command_id}")
         return self.redis.publish(EVENT_CHANNELS['FRAME_CAPTURE'], event)
 
+    def publish_calibration_complete(self, command_id, camera_id, rms_error, camera_matrix, dist_coeffs, img_size, frames_used, model):
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['CALIBRATION_COMPLETE'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'rms_error': rms_error,
+            'camera_matrix': camera_matrix,
+            'dist_coeffs': dist_coeffs,
+            'img_size': img_size,
+            'frames_used': frames_used,
+            'model': model,
+        }
+        logger.info(f"[Events] Publishing CalibrationComplete: camera {camera_id}, RMS={rms_error:.4f}")
+        return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+
+    def publish_calibration_failed(self, command_id, camera_id, error):
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['CALIBRATION_FAILED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'error': error,
+        }
+        logger.info(f"[Events] Publishing CalibrationFailed: camera {camera_id}")
+        return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+
+    def publish_test_calibration_complete(self, command_id, camera_id, image_url):
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['TEST_CALIBRATION_COMPLETE'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'frame_url': image_url,
+        }
+        logger.info(f"[Events] Publishing TestCalibrationComplete: camera {camera_id}")
+        return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+

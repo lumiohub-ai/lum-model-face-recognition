@@ -25,6 +25,7 @@ EVENT_CHANNELS = {
     'LOCATION': 'events:location',
     'EMBEDDING': 'events:embedding',
     'FRAME_CAPTURE': 'events:frame_captured',
+    'CALIBRATION': 'events:calibration',
 }
 
 # Event types
@@ -36,6 +37,9 @@ EVENT_TYPES = {
     'EMBEDDING_CREATED': 'EmbeddingCreated',
     'EMBEDDING_FAILED': 'EmbeddingFailed',
     'FRAME_CAPTURED': 'FrameCaptured',
+    'CALIBRATION_COMPLETE': 'CalibrationComplete',
+    'CALIBRATION_FAILED': 'CalibrationFailed',
+    'TEST_CALIBRATION_COMPLETE': 'TestCalibrationComplete',
 }
 
 

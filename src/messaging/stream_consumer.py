@@ -251,7 +251,7 @@ class StreamConsumer:
             self._ack(stream, message_id)
             return
 
-        logger.info(
+        logger.debug(
             f"Processing {command_type} "
             f"command_id={command_id} stream={stream} message_id={message_id}"
         )

@@ -189,7 +189,6 @@ class MDAManager:
                 camera_id = int(camera_id)
             except (ValueError, TypeError):
                 pass
-        logger.info(f"Camera command: {command_type} for {client_slug} camera_id={camera_id}")
 
         # Process commands for ALL tenants (multi-tenant support)
         if command_type in ('ConfigureCamera', 'StartCamera'):
@@ -211,11 +210,33 @@ class MDAManager:
 
         elif command_type == 'CaptureFrame':
             command_id = payload.get('command_id')
-            logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}")
+            frame_index = int(payload.get('frame_index', 1))
+            logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}, frame_index={frame_index}")
             if self.engine:
-                self.engine.capture_frame(camera_id, command_id)
+                self.engine.capture_frame(camera_id, command_id, frame_index)
             else:
                 logger.warning("Engine not available for frame capture")
+
+        elif command_type == 'CalibrateCamera':
+            command_id = payload.get('command_id')
+            logger.info(f"CalibrateCamera for camera {camera_id}, command {command_id}")
+            if self.engine:
+                self.engine.calibrate_camera(camera_id, command_id)
+            else:
+                logger.warning("Engine not available for calibration")
+
+        elif command_type == 'TestCalibration':
+            command_id = payload.get('command_id')
+            camera_matrix = payload.get('camera_matrix')
+            dist_coeffs = payload.get('dist_coeffs')
+            model = payload.get('model', 'fisheye')
+            logger.info(f"TestCalibration for camera {camera_id}, command {command_id}")
+            if self.engine:
+                self.engine.test_calibration(
+                    camera_id, command_id, camera_matrix, dist_coeffs, model
+                )
+            else:
+                logger.warning("Engine not available for test calibration")
 
 
 # ============================================================

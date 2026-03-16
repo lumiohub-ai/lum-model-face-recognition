@@ -315,7 +315,7 @@ class SmartOfficeEngine:
             logger.error(f"Failed to reload embeddings: {e}")
             return False
 
-    def capture_frame(self, camera_id: int, command_id: str) -> None:
+    def capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
         """Capture a single frame for camera calibration.
 
         Non-blocking — spawns a daemon thread so the main pipeline is never paused.
@@ -324,12 +324,12 @@ class SmartOfficeEngine:
         """
         threading.Thread(
             target=self._do_capture_frame,
-            args=(camera_id, command_id),
+            args=(camera_id, command_id, frame_index),
             daemon=True,
             name=f"capture-{camera_id}",
         ).start()
 
-    def _do_capture_frame(self, camera_id: int, command_id: str) -> None:
+    def _do_capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
         """Background: grab latest frame → upload to GCS → save to DB → publish event."""
         try:
             frame = self.stream_manager.get_frame(camera_id)
@@ -352,10 +352,10 @@ class SmartOfficeEngine:
             record_id = DetectionRepository(self.client_slug).save_calibration_frame(
                 camera_id=camera_id,
                 frame_url=image_url,
-                frame_index=1,
+                frame_index=frame_index,
                 captured_at=datetime.utcnow(),
             )
-            logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}")
+            logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}, frame_index={frame_index}")
 
             from messaging.publisher import MDAPublisher
             MDAPublisher(self.client_slug).publish_frame_captured(
@@ -368,6 +368,179 @@ class SmartOfficeEngine:
 
         except Exception as e:
             logger.error(f"capture_frame failed for camera {camera_id}: {e}")
+
+    def calibrate_camera(self, camera_id: int, command_id: str) -> None:
+        """Run Charuco calibration on stored frames for a camera.
+
+        Non-blocking — spawns a daemon thread.
+        Fetches calibration_frames from DB, downloads each image, runs
+        CameraCalibrator.calibrate(), then publishes CalibrationComplete or
+        CalibrationFailed.
+        """
+        threading.Thread(
+            target=self._do_calibrate_camera,
+            args=(camera_id, command_id),
+            daemon=True,
+            name=f"calibrate-{camera_id}",
+        ).start()
+
+    def _do_calibrate_camera(self, camera_id: int, command_id: str) -> None:
+        """Background: fetch frames → download → calibrate → publish result."""
+        from infrastructure.storage.detection_repository import DetectionRepository
+        from infrastructure.storage.gcs import ImageFetcher
+        from domain.calibration.camera_calibrator import CameraCalibrator
+        from messaging.publisher import MDAPublisher
+
+        publisher = MDAPublisher(self.client_slug)
+
+        try:
+            repo = DetectionRepository(self.client_slug)
+            frame_records = repo.get_calibration_frames(camera_id)
+
+            if not frame_records:
+                publisher.publish_calibration_failed(
+                    command_id=command_id,
+                    camera_id=camera_id,
+                    error="No calibration frames found in database",
+                )
+                return
+
+            logger.info(
+                f"Calibrating camera {camera_id} with {len(frame_records)} frames"
+            )
+
+            fetcher = ImageFetcher()
+            frames = []
+            for record in frame_records:
+                url = record['frame_url']
+                try:
+                    # Strip https://storage.googleapis.com/{bucket}/ prefix → blob path
+                    # then use the authenticated GCS client to download
+                    gcs_prefix = f"https://storage.googleapis.com/{fetcher.gcs_bucket}/"
+                    if url.startswith(gcs_prefix):
+                        blob_path = url[len(gcs_prefix):].split('?')[0]
+                        bucket = fetcher.gcs_client.bucket(fetcher.gcs_bucket)
+                        image_bytes = bucket.blob(blob_path).download_as_bytes()
+                        import numpy as np
+                        import cv2
+                        img_array = np.frombuffer(image_bytes, dtype=np.uint8)
+                        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    else:
+                        frame = fetcher._fetch_from_gcs(url) if url.startswith('gs://') else None
+                    if frame is not None:
+                        frames.append(frame)
+                    else:
+                        logger.warning(f"Could not decode frame {url}")
+                except Exception as e:
+                    logger.warning(f"Could not download frame {url}: {e}")
+
+            if not frames:
+                publisher.publish_calibration_failed(
+                    command_id=command_id,
+                    camera_id=camera_id,
+                    error="Could not download any calibration frames",
+                )
+                return
+
+            calibrator = CameraCalibrator(fisheye=True)
+            result = calibrator.calibrate(frames)
+
+            if result.get('success'):
+                publisher.publish_calibration_complete(
+                    command_id=command_id,
+                    camera_id=camera_id,
+                    rms_error=result['rms_error'],
+                    camera_matrix=result['camera_matrix'],
+                    dist_coeffs=result['dist_coeffs'],
+                    img_size=result['img_size'],
+                    frames_used=result['frames_used'],
+                    model=result['model'],
+                )
+            else:
+                publisher.publish_calibration_failed(
+                    command_id=command_id,
+                    camera_id=camera_id,
+                    error=result.get('error', 'Calibration failed'),
+                )
+
+        except Exception as e:
+            logger.error(f"calibrate_camera failed for camera {camera_id}: {e}")
+            publisher.publish_calibration_failed(
+                command_id=command_id,
+                camera_id=camera_id,
+                error=str(e),
+            )
+
+    def test_calibration(
+        self,
+        camera_id: int,
+        command_id: str,
+        camera_matrix: list,
+        dist_coeffs: list,
+        model: str = 'fisheye',
+    ) -> None:
+        """Capture a live frame and apply undistortion to test calibration.
+
+        Non-blocking — spawns a daemon thread.
+        """
+        threading.Thread(
+            target=self._do_test_calibration,
+            args=(camera_id, command_id, camera_matrix, dist_coeffs, model),
+            daemon=True,
+            name=f"test-calib-{camera_id}",
+        ).start()
+
+    def _do_test_calibration(
+        self,
+        camera_id: int,
+        command_id: str,
+        camera_matrix: list,
+        dist_coeffs: list,
+        model: str,
+    ) -> None:
+        """Background: grab live frame → undistort → upload to GCS → publish event."""
+        from domain.calibration.camera_calibrator import CameraCalibrator
+        from infrastructure.storage.gcs import ImageFetcher
+        from messaging.publisher import MDAPublisher
+
+        publisher = MDAPublisher(self.client_slug)
+
+        try:
+            frame = self.stream_manager.get_frame(camera_id)
+            if frame is None:
+                logger.warning(f"test_calibration: no frame for camera {camera_id}")
+                publisher.publish_calibration_failed(
+                    command_id=command_id,
+                    camera_id=camera_id,
+                    error="Could not capture live frame for testing",
+                )
+                return
+
+            calibrator = CameraCalibrator(fisheye=(model == 'fisheye'))
+            undistorted = calibrator.undistort(frame, camera_matrix, dist_coeffs, model)
+
+            image_url = ImageFetcher().upload_image(
+                undistorted,
+                prefix=f"calibration_test/{self.client_slug}",
+                client_slug=self.client_slug,
+            )
+
+            publisher.publish_test_calibration_complete(
+                command_id=command_id,
+                camera_id=camera_id,
+                image_url=image_url,
+            )
+            logger.info(
+                f"TestCalibration complete: camera={camera_id}, command={command_id}"
+            )
+
+        except Exception as e:
+            logger.error(f"test_calibration failed for camera {camera_id}: {e}")
+            publisher.publish_calibration_failed(
+                command_id=command_id,
+                camera_id=camera_id,
+                error=str(e),
+            )
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
