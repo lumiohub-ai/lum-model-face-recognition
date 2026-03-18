@@ -1,0 +1,17 @@
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    celery~=5.4.0 \
+    flower~=2.0.1 \
+    loguru~=0.7.3 \
+    redis~=5.0.1 \
+    PyYAML~=6.0.2
+
+RUN useradd -m -u 1000 appuser
+USER appuser
+ENV HOME=/home/appuser

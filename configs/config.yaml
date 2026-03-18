@@ -6,10 +6,6 @@ show: false  # Display video output (disable for Docker/headless)
 save_video: false  # Save annotated video output to disk
 output_dir: "volumes/storage/person-tracking"  # Directory for outputs
 
-# Performance settings
-target_fps: 20  # Target frames per second for processing
-resize_width: 1280  # Resize frame width for processing (null = no resize)
-
 # Recognition settings
 match_threshold: 0.3  # Face similarity threshold for matching
 person_detection_threshold: 0.45  # Person detection confidence threshold (0.0-1.0)
@@ -17,39 +13,39 @@ person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) o
 
 # Feature flags
 enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)
-enable_attendance_logging: true  # Log attendance events to backend API
-use_pgvector: true  # Use pgvector for face embedding storage
-use_api_for_cameras: true  # Fetch camera config from API instead of local file
 face_detection_padding: 20.0  # Padding % around detected faces for better recognition (0-100)
 
 # Action Recognition settings (Activity tracking via Ollama)
-# Note: VLM is enabled per-camera based on 'activity' in camera's applications list from dashboard
 action_recognition:
-  ollama_api_url: null  # Ollama API URL (null = use OLLAMA_API_URL env var, default: http://localhost:11435)
-  model_name: null  # Ollama model name (null = use OLLAMA_MODEL env var, default: llava:7b)
+  enabled: true  # Enable action recognition
+  ollama_api_url: 'http://localhost:11434'  # Ollama API URL (default: http://localhost:11434)
   check_interval_seconds: 60  # Check each person every N seconds
-  image_padding: 20.0  # Padding % around person bbox for VLM (0-100), adds context for better action recognition
-  async_workers: 1  # Number of background worker threads for inference
   max_queue_size: 50  # Maximum queued inference requests
-  actions:  # Supported action types (mapped to backend activity types)
-    - sleeping            # -> sleeping
-    - using phone         # -> phone_usage
-    - working             # -> working (includes: computer, mouse, writing, reading)
-    - talking with someone   # -> talking
-    - idle                # -> not_focusing
+  async_workers: 1  # Number of background worker threads for inference
+  inference_timeout: 30  # Timeout for Ollama API calls in seconds (prevents blocking on slow/hung inference)
+  # Supported actions with backend mapping and descriptions for VLM prompt
+  actions:
+    sleeping:
+      backend_type: sleeping
+      description: "head resting on desk, leaning back with eyes closed, or slumped over"
+    using phone:
+      backend_type: phone_usage
+      description: "holding a phone, looking down at a device in hand"
+    working with computer:
+      backend_type: working
+      description: "sitting at a desk facing a screen or typing"
+    talking with someone:
+      backend_type: talking
+      description: "facing another person, gesturing, or in conversation"
+    not_focusing:
+      backend_type: not_focusing
+      description: "distracted, looking away from work, wandering attention"
+    idle:
+      backend_type: unknown
+      description: "standing still, sitting without doing anything specific, looking around"
 
-# Unrecognized face settings (image quality filters)
-unrecognized:
-  min_face_size: 150  # Minimum face size in pixels (smaller faces are skipped)
-  blur_threshold: 50  # Laplacian variance threshold (lower = more lenient, default was 100)
-  send_best_effort: true  # If all frames fail quality, send best available anyway
-
-# System monitoring (performance CSV logs)
-system_monitoring:
-  enabled: true                    # Enable/disable system monitoring
-  flush_interval_seconds: 3600     # Flush buffer to CSV every N seconds (default: 1 hour)
-  sample_interval_seconds: 60      # Sample FPS/memory every N seconds (default: 60s)
-
-# System settings
-max_track_lifetime_seconds: 30  # Maximum time to keep inactive tracks
-debug: false  # Enable debug logging
+# Parallel multi-camera pipeline settings
+pipeline:
+  detection_interval: 2        # run YOLO every N frames (1 = every frame)
+  recognition_interval: 3      # run ArcFace every N detection frames
+  async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200

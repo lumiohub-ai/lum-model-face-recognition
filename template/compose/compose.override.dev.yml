@@ -1,0 +1,22 @@
+# Development overrides
+# Usage: docker compose -f compose.yml -f template/compose/compose.dev.yml up
+
+services:
+  person-tracking:
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+    restart: "no"
+    tty: true
+    stdin_open: true
+
+  celery-worker:
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
