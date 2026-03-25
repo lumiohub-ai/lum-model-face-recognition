@@ -1,10 +1,9 @@
 services:
   ollama:
     image: ollama/ollama:latest
-    container_name: lumiohub-person-tracking-ollama
     attach: false
     ports:
-      - "11434:11434"
+      - "11432:11434"
     volumes:
       - ollama_data:/root/.ollama
     deploy:
@@ -33,7 +32,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: so.person-tracking-app
-    container_name: lumiohub-person-tracking-app
     network_mode: host
     env_file:
       - .env
@@ -60,7 +58,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: so.celery-worker
-    container_name: lumiohub-celery-worker
     attach: false
     network_mode: host
     env_file:
@@ -86,7 +83,6 @@ services:
       context: .
       dockerfile: Dockerfile.flower
     image: so.celery-flower
-    container_name: lumiohub-celery-flower
     attach: false
     network_mode: host
     environment:
