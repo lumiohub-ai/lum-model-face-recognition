@@ -20,3 +20,22 @@ services:
     volumes:
       - ./src:/app/src
       - ./configs:/app/configs
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile.flower
+    image: so.celery-flower
+    container_name: lumiohub-celery-flower
+    attach: false
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+      PYTHONPATH: /app/src:/app
+    depends_on:
+      - celery-worker
+    command: celery -A workers.celery_app.celery flower --port=${SO_FLOWER_PORT:-5555}
+    working_dir: /app/src
+    restart: "no"

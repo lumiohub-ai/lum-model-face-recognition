@@ -1,11 +1,14 @@
 services:
   ollama:
     image: ollama/ollama:latest
+    container_name: lumiohub-person-tracking-ollama
     attach: false
     ports:
-      - "11432:11434"
+      - "${SO_OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      SO_OLLAMA_MODEL: ${SO_OLLAMA_MODEL:-gemma3:4b}
     deploy:
       resources:
         reservations:
@@ -24,15 +27,17 @@ services:
       - |
         /bin/ollama serve &
         sleep 5
-        ollama pull gemma3:4b
+        ollama pull ${SO_OLLAMA_MODEL:-gemma3:4b}
         wait
+    networks:
+      - person-tracking-network
 
   person-tracking:
     build:
       context: .
       dockerfile: Dockerfile
     image: so.person-tracking-app
-    network_mode: host
+    container_name: lumiohub-person-tracking-app
     env_file:
       - .env
     volumes:
@@ -44,7 +49,7 @@ services:
       - ./volumes/models/weights:/app/volumes/models/weights
     depends_on:
       ollama:
-        condition: service_started
+        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -52,14 +57,18 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - person-tracking-network
 
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile
     image: so.celery-worker
+    container_name: lumiohub-celery-worker
     attach: false
-    network_mode: host
     env_file:
       - .env
     volumes:
@@ -77,27 +86,15 @@ services:
     command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
     working_dir: /app/src
     restart: unless-stopped
-
-  flower:
-    build:
-      context: .
-      dockerfile: Dockerfile.flower
-    image: so.celery-flower
-    attach: false
-    network_mode: host
-    environment:
-      CELERY_BROKER_URL: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/0
-      CELERY_RESULT_BACKEND: redis://${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}/1
-      PYTHONUNBUFFERED: 1
-      PYTHONPATH: /app/src:/app
-    volumes:
-      - ./src:/app/src
-    depends_on:
-      - celery-worker
-    command: celery -A workers.celery_app.celery flower --port=5555
-    working_dir: /app/src
-    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - person-tracking-network
 
 volumes:
   ollama_data:
     driver: local
+
+networks:
+  person-tracking-network:
+    driver: bridge

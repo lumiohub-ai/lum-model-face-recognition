@@ -18,7 +18,6 @@ face_detection_padding: 20.0  # Padding % around detected faces for better recog
 # Action Recognition settings (Activity tracking via Ollama)
 action_recognition:
   enabled: true  # Enable action recognition
-  ollama_api_url: 'http://localhost:11434'  # Ollama API URL (default: http://localhost:11434)
   check_interval_seconds: 60  # Check each person every N seconds
   max_queue_size: 50  # Maximum queued inference requests
   async_workers: 1  # Number of background worker threads for inference

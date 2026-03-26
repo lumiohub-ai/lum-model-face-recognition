@@ -79,7 +79,7 @@ class ModelFactory:
         if self._action_recognizer is None:
             action_config = self.config.get('action_recognition', {})
             enabled = action_config.get('enabled', False)
-            ollama_api_url = action_config.get('ollama_api_url')
+            ollama_api_url = settings.ollama_api_url
             model_name = settings.ollama_model
 
             actions = action_config.get('actions')

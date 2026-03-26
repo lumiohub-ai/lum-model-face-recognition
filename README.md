@@ -102,34 +102,42 @@ nano .env
 
 ```bash
 # Client/Tenant Configuration
-SO_CLIENT_SLUG=your_organization_slug    # Unique organization identifier
+SO_CLIENT_SLUG=your_organization_slug       # Unique organization identifier
 
 # PostgreSQL (pgvector database)
-SO_POSTGRES_HOST=localhost                  # Database host
-SO_POSTGRES_PORT=5432                       # Database port
-SO_POSTGRES_USER=postgres                   # Database user
+# Same machine as so.stack: host.docker.internal
+# Different machine (Tailscale):  100.x.x.x
+SO_POSTGRES_HOST=host.docker.internal
+SO_POSTGRES_PORT=5432                       # Host-exposed port of so.stack's Postgres
+SO_POSTGRES_USER=postgres
 SO_POSTGRES_PASSWORD=your_secure_password   # REQUIRED: No default for security
-SO_POSTGRES_DB=smart_office                 # Database name
+SO_POSTGRES_DB=smart_office
 
 # Redis (Message-Driven Architecture)
-SO_REDIS_HOST=localhost                     # Redis host
-SO_REDIS_PORT=6379                          # Redis port
+# Same machine as so.stack: host.docker.internal
+# Different machine (Tailscale): 100.x.x.x
+SO_REDIS_HOST=host.docker.internal
+SO_REDIS_PORT=6379                          # Host-exposed port of so.stack's Redis
+SO_REDIS_URL=redis://host.docker.internal:6379
 
-# Celery (Task Queue)
-SO_CELERY_BROKER_URL=redis://${SO_REDIS_HOST}:${SO_REDIS_PORT}/0
-SO_CELERY_RESULT_BACKEND=redis://${SO_REDIS_HOST}:${SO_REDIS_PORT}/1
+# Celery (Task Queue) — must match SO_REDIS_* above, hardcode the URL (no variable interpolation in .env)
+SO_CELERY_BROKER_URL=redis://host.docker.internal:6379/0
+SO_CELERY_RESULT_BACKEND=redis://host.docker.internal:6379/1
 
 # Google Cloud Storage
 SO_GCS_CREDENTIALS_PATH=/app/credentials/gcs-service-account.json
 SO_GCS_BUCKET=your-gcs-bucket
 
-# Action Recognition (Ollama)
-SO_OLLAMA_API_URL=http://localhost:11434
+# Action Recognition (Ollama) — uses Docker service name, always port 11434 internally
+SO_OLLAMA_API_URL=http://ollama:11434
 SO_OLLAMA_MODEL=gemma3:4b
+SO_OLLAMA_PORT=11434                        # Host-exposed port (change if 11434 is taken)
 
 # Application Settings
 SO_LOG_LEVEL=INFO
 ```
+
+> **Note:** Variable interpolation (`${VAR}`) does not work within `.env` files. Always hardcode full URLs in `SO_REDIS_URL`, `SO_CELERY_BROKER_URL`, and `SO_CELERY_RESULT_BACKEND`.
 
 ### Step 3: Build and Start
 
@@ -179,6 +187,42 @@ HB_OUT=rtsp://user:pass@camera2/stream
 ---
 
 ## Deployment
+
+### Compose Override Files
+
+The project ships with environment-specific override files in `template/compose/`:
+
+| File | Purpose |
+|------|---------|
+| `compose.override.dev.yml` | Development extras: live source mounts, debug log level, Flower monitoring UI |
+| `compose.override.prod.yml` | Production tweaks (if any) |
+
+**Production (default):**
+```bash
+./compose.sh start
+# equivalent to: docker compose -f compose.yml up
+```
+
+**Development (with Flower + live reload):**
+```bash
+docker compose -f compose.yml -f template/compose/compose.override.dev.yml up
+```
+
+> Flower (Celery monitoring UI) only runs in dev mode. Access it at `http://localhost:5555` (or `SO_FLOWER_PORT`).
+
+---
+
+### Networking
+
+All services run on a dedicated Docker bridge network (`person-tracking-network`). Containers communicate with each other via service names:
+
+- `ollama:11434` — Ollama API (used by `SO_OLLAMA_API_URL`)
+
+External services (PostgreSQL, Redis from `so.stack`) are reached via:
+- **Same machine**: `host.docker.internal` — Docker resolves this to the host machine IP
+- **Different machine**: Tailscale IP (e.g. `100.100.1.20`) — set directly in `.env`
+
+---
 
 ### Scaling Workers
 
