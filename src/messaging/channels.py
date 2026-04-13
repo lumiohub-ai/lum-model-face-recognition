@@ -26,6 +26,7 @@ EVENT_CHANNELS = {
     'EMBEDDING': 'events:embedding',
     'FRAME_CAPTURE': 'events:frame_captured',
     'CALIBRATION': 'events:calibration',
+    'METRICS': 'events:metrics',
 }
 
 # Event types
@@ -40,6 +41,8 @@ EVENT_TYPES = {
     'CALIBRATION_COMPLETE': 'CalibrationComplete',
     'CALIBRATION_FAILED': 'CalibrationFailed',
     'TEST_CALIBRATION_COMPLETE': 'TestCalibrationComplete',
+    'SYSTEM_METRICS': 'SystemMetrics',
+    'SYSTEM_ALERT': 'SystemAlert',
 }
 
 

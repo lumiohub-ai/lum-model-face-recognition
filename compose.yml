@@ -1,27 +1,15 @@
 services:
   ollama:
-    image: ollama/ollama:latest
-    container_name: lumiohub-person-tracking-ollama
+    image: ollama/ollama:0.18.3
     attach: false
-    ports:
-      - "${SO_OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama_data:/root/.ollama
     environment:
       SO_OLLAMA_MODEL: ${SO_OLLAMA_MODEL:-gemma3:4b}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - person-tracking-network
+    ports:
+      - "${SO_OLLAMA_PORT:-11434}:11434"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -29,17 +17,32 @@ services:
         sleep 5
         ollama pull ${SO_OLLAMA_MODEL:-gemma3:4b}
         wait
-    networks:
-      - person-tracking-network
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
 
   person-tracking:
     build:
       context: .
       dockerfile: Dockerfile
-    image: so.person-tracking-app
-    container_name: lumiohub-person-tracking-app
-    env_file:
-      - .env
+    image: humblebeeai/person-tracking-lumiohub
+    depends_on:
+      ollama:
+        condition: service_healthy
     volumes:
       - ./.env:/app/.env:ro
       - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
@@ -47,9 +50,10 @@ services:
       - ./volumes/models/insightface:/root/.insightface
       - ./volumes/models/huggingface:/root/.cache/huggingface
       - ./volumes/models/weights:/app/volumes/models/weights
-    depends_on:
-      ollama:
-        condition: service_healthy
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
       resources:
         reservations:
@@ -57,25 +61,25 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - person-tracking-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
 
   celery-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: so.celery-worker
-    container_name: lumiohub-celery-worker
+    image: humblebeeai/person-tracking-lumiohub
     attach: false
-    env_file:
-      - .env
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
       - ./volumes/models/insightface:/root/.insightface
       - ./volumes/models/huggingface:/root/.cache/huggingface
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
     deploy:
       resources:
         reservations:
@@ -83,16 +87,14 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
-    working_dir: /app/src
-    restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - person-tracking-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
 
 volumes:
-  ollama_data:
+  ollama-data:
     driver: local
 
 networks:

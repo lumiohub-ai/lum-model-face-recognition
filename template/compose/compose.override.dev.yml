@@ -1,19 +1,20 @@
-# Development overrides
-# Usage: docker compose -f compose.yml -f template/compose/compose.dev.yml up
-
 services:
+  ollama:
+    restart: unless-stopped
+
   person-tracking:
+    restart: "no"
     environment:
       PYTHONWARNINGS: "ignore::FutureWarning"
       SO_LOG_LEVEL: DEBUG
     volumes:
       - ./src:/app/src
       - ./configs:/app/configs
-    restart: "no"
     tty: true
     stdin_open: true
 
   celery-worker:
+    restart: "no"
     environment:
       PYTHONWARNINGS: "ignore::FutureWarning"
       SO_LOG_LEVEL: DEBUG
@@ -25,17 +26,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.flower
-    image: so.celery-flower
-    container_name: lumiohub-celery-flower
+    image: humblebeeai/celery-flower-lumiohub
     attach: false
-    network_mode: host
+    restart: "no"
+    depends_on:
+      - celery-worker
     env_file:
       - .env
     environment:
-      PYTHONUNBUFFERED: 1
       PYTHONPATH: /app/src:/app
-    depends_on:
-      - celery-worker
+      PYTHONUNBUFFERED: 1
+    network_mode: host
     command: celery -A workers.celery_app.celery flower --port=${SO_FLOWER_PORT:-5555}
-    working_dir: /app/src
-    restart: "no"

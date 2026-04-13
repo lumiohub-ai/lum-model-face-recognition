@@ -13,6 +13,9 @@ from typing import List, Optional
 
 from loguru import logger
 
+# Config
+from config.settings import settings
+
 # Infrastructure
 from infrastructure.video import StreamManager
 from infrastructure import EntryLogger
@@ -108,12 +111,44 @@ class SmartOfficeEngine:
         # Entry logger (handles status tracking + Celery dispatch)
         self.entry_logger = self._init_entry_logger()
 
+        # Metrics monitoring (optional — disable via SO_METRICS_ENABLED=false in .env)
+        self._metrics_enabled = settings.metrics_enabled
+
+        if self._metrics_enabled:
+            import os
+            from infrastructure.metrics_collector import MetricsCollector
+            from infrastructure.metrics_server import MetricsDashboardServer
+            from infrastructure.metrics_store import MetricsStore
+            _cam_indices = list(range(len(self.camera_configs)))
+            _db_path = os.path.join(
+                kwargs.get("output_dir", "volumes/storage/person-tracking"),
+                "metrics.db",
+            )
+            self.metrics = MetricsCollector()
+            self._metrics_store = MetricsStore(
+                self.metrics,
+                db_path=_db_path,
+                interval_sec=30.0,
+                camera_indices=_cam_indices,
+            )
+            self._metrics_dashboard = MetricsDashboardServer(
+                self.metrics,
+                store=self._metrics_store,
+                camera_indices=_cam_indices,
+                port=settings.metrics_port,
+            )
+        else:
+            self.metrics = None
+            self._metrics_store = None
+            self._metrics_dashboard = None
+
         # GPU worker (shared across all cameras)
         n_cameras = len(self.camera_configs)
         self.gpu_worker = GPUInferenceWorker(
             detector=self.models.person_detector,
             face_detector=self.models.face_detector,
             num_cameras=n_cameras,
+            metrics_collector=self.metrics,
         )
 
         # Async logger (non-blocking I/O)
@@ -179,6 +214,7 @@ class SmartOfficeEngine:
                 recognition_interval=self._recognition_interval,
                 annotator=self._annotator,
                 video_writer=video_writer,
+                metrics_collector=self.metrics,
             )
             workers.append(worker)
         return workers
@@ -207,21 +243,37 @@ class SmartOfficeEngine:
         for worker in self.camera_workers:
             worker.start()
 
+        # Start monitoring dashboard
+        if self._metrics_enabled:
+            self._metrics_dashboard.start()
+            # Bootstrap psutil's non-blocking cpu_percent (first call returns 0.0)
+            self.metrics.cpu_percent()
+
         logger.info("SmartOfficeEngine started (parallel pipeline)")
+
+        pipeline_cfg = self.config.get("pipeline", {})
+        metrics_interval: float = float(pipeline_cfg.get("metrics_interval", 30))
 
         last_validation_time = time.time()
         validation_interval = 30.0
+        last_metrics_time = time.time()
 
         try:
             while self._running:
                 time.sleep(1.0)
 
-                # Periodic global track validation
                 current_time = time.time()
+
+                # Periodic global track validation
                 if current_time - last_validation_time >= validation_interval:
                     if self.models.global_track_manager:
                         self.models.global_track_manager.periodic_validation()
                     last_validation_time = current_time
+
+                # Periodic metrics reporting
+                if self._metrics_enabled and current_time - last_metrics_time >= metrics_interval:
+                    self._report_metrics()
+                    last_metrics_time = current_time
 
         except Exception as e:
             logger.error(f"SmartOfficeEngine error: {e}")
@@ -542,6 +594,46 @@ class SmartOfficeEngine:
                 error=str(e),
             )
 
+    # ── Metrics reporting ─────────────────────────────────────────────────────
+
+    def _report_metrics(self) -> None:
+        """Log a metrics summary and publish alerts for critical conditions."""
+        cam_indices = list(range(len(self.camera_workers)))
+
+        # Log compact summary line
+        self.metrics.log_summary(cam_indices)
+
+        # Check for and handle critical alerts
+        pipeline_cfg = self.config.get("pipeline", {})
+        fps_threshold = float(pipeline_cfg.get("fps_alert_threshold", 1.0))
+        alerts = self.metrics.check_alerts(
+            camera_indices=cam_indices,
+            fps_threshold=fps_threshold,
+        )
+
+        if alerts:
+            try:
+                from messaging.publisher import MDAPublisher
+                publisher = MDAPublisher(self.client_slug)
+                for alert in alerts:
+                    logger.warning(f"[Metrics] {alert['message']}")
+                    publisher.publish_system_alert(
+                        alert_type=alert["type"],
+                        message=alert["message"],
+                        details=alert,
+                    )
+            except Exception as e:
+                logger.debug(f"Metrics alert publish failed: {e}")
+
+        # Publish full metrics snapshot to Redis
+        try:
+            from messaging.publisher import MDAPublisher
+            MDAPublisher(self.client_slug).publish_system_metrics(
+                self.metrics.snapshot(cam_indices)
+            )
+        except Exception as e:
+            logger.debug(f"Metrics publish failed: {e}")
+
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _cleanup(self) -> None:
@@ -567,6 +659,11 @@ class SmartOfficeEngine:
 
         # Stop streams
         self.stream_manager.cleanup()
+
+        # Stop monitoring dashboard
+        if self._metrics_enabled:
+            self._metrics_dashboard.stop()
+            self.metrics.cleanup()
 
         self._log_final_stats()
         logger.info("SmartOfficeEngine shutdown complete")

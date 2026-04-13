@@ -38,6 +38,7 @@ class CameraWorker:
         recognition_interval: int = 5,
         annotator=None,
         video_writer: Optional[cv2.VideoWriter] = None,
+        metrics_collector=None,
     ):
         """
         Args:
@@ -74,6 +75,9 @@ class CameraWorker:
         # FPS tracking for annotation overlay
         self._fps: float = 0.0
         self._last_frame_time: float = 0.0
+
+        # Metrics collector (optional)
+        self._metrics = metrics_collector
 
         # Cache last known face bbox + score per track (persists between recognition frames)
         self._face_cache: Dict[int, Dict] = {}  # track_id -> {face_bbox, face_det_score}
@@ -136,6 +140,10 @@ class CameraWorker:
 
         self._detection_frame_num += 1
         frame_num = self._frame_num
+
+        # Record this processed detection-frame for FPS monitoring
+        if self._metrics is not None:
+            self._metrics.record_frame(self.camera_idx)
 
         # ── Step 4: Submit frame to GPU worker, wait for detections ───────────
         self.gpu_worker.submit_frame(self.camera_idx, frame, frame_num)

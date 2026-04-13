@@ -176,11 +176,10 @@ class StreamConsumer:
     def _consume_loop(self) -> None:
         """Main consumption loop."""
         streams = {stream: '>' for stream in COMMAND_STREAMS.values()}
+        retry_delay = 1
 
         while self._running:
             try:
-                # XREADGROUP - read new messages from all streams
-                # Block for 1 second, read up to 10 messages
                 results = self.redis.xreadgroup(
                     CONSUMER_GROUP,
                     self.consumer_name,
@@ -188,6 +187,7 @@ class StreamConsumer:
                     count=10,
                     block=1000
                 )
+                retry_delay = 1  # reset on success
 
                 if results:
                     for stream_name, messages in results:
@@ -195,8 +195,9 @@ class StreamConsumer:
                             self._process_message(stream_name, message_id, data)
 
             except redis.ConnectionError as e:
-                logger.error(f"Redis connection error: {e}")
-                time.sleep(1)
+                logger.warning(f"Redis disconnected: {e} — retrying in {retry_delay}s")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30)
             except Exception as e:
                 logger.error(f"Error in consume loop: {e}")
                 time.sleep(0.5)
