@@ -71,7 +71,7 @@ def task_record_attendance(
         return {'status': 'success', 'record_id': record_id, 'user_id': user_id, 'attendance_status': status}
 
     except Exception as e:
-        logger.error(f"[Celery] Attendance recording failed for {user_name}: {e}")
+        logger.exception(f"[Celery] Attendance recording failed for {user_name}: {e}")
         raise self.retry(exc=e, countdown=5)
 
 
@@ -119,7 +119,7 @@ def task_save_unrecognized_face(
         return {'status': 'success', 'record_id': record_id, 'camera_id': camera_id}
 
     except Exception as e:
-        logger.error(f"[Celery] Unrecognized face save failed: {e}")
+        logger.exception(f"[Celery] Unrecognized face save failed: {e}")
         raise self.retry(exc=e, countdown=5)
 
 
@@ -171,7 +171,7 @@ def task_record_activity(
         return {'status': 'success', 'record_id': record_id, 'user_id': user_id, 'activity_type': activity_type}
 
     except Exception as e:
-        logger.error(f"[Celery] Activity recording failed for {user_name}: {e}")
+        logger.exception(f"[Celery] Activity recording failed for {user_name}: {e}")
         raise self.retry(exc=e, countdown=5)
 
 
@@ -218,5 +218,5 @@ def task_update_user_location(
         return {'status': 'success', 'record_id': record_id, 'user_name': user_name, 'camera_name': camera_name}
 
     except Exception as e:
-        logger.error(f"[Celery] User location update failed for {user_name}: {e}")
+        logger.exception(f"[Celery] User location update failed for {user_name}: {e}")
         raise self.retry(exc=e, countdown=5)

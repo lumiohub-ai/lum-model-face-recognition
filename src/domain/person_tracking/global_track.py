@@ -382,7 +382,7 @@ class GlobalTrackManager:
             logger.info(f"Body ReID model loaded: {self.reid_model_name} on {self._device}")
 
         except Exception as e:
-            logger.error(f"Failed to initialize body ReID model: {e}")
+            logger.exception(f"Failed to initialize body ReID model: {e}")
             self._body_reid_model = None
             raise
 
@@ -824,7 +824,7 @@ class GlobalTrackManager:
             return embedding
 
         except Exception as e:
-            logger.error(f"Failed to extract body embedding: {e}")
+            logger.exception(f"Failed to extract body embedding: {e}")
             return None
 
     def _batch_extract_embeddings(
@@ -929,7 +929,7 @@ class GlobalTrackManager:
             return results
 
         except Exception as e:
-            logger.error(f"Failed to batch extract embeddings: {e}")
+            logger.exception(f"Failed to batch extract embeddings: {e}")
             return [None] * len(crops)
 
     def batch_assign_global_ids(

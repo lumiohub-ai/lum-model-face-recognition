@@ -1,12 +1,13 @@
-# Production overrides
-# Usage: docker compose -f compose.yml -f template/compose/compose.prod.yml up -d
-
 services:
+  ollama:
+    restart: unless-stopped
+
   person-tracking:
     restart: unless-stopped
     environment:
       SO_LOG_LEVEL: INFO
 
   celery-worker:
+    restart: unless-stopped
     environment:
       SO_LOG_LEVEL: INFO

@@ -169,7 +169,7 @@ class EntryLogger:
             )
             logger.debug(f"[Celery] Queued attendance: {name} {status}")
         except Exception as e:
-            logger.error(f"[Celery] Failed to queue attendance: {e}")
+            logger.exception(f"[Celery] Failed to queue attendance: {e}")
 
     def _send_location_data(
         self,
@@ -196,7 +196,7 @@ class EntryLogger:
             )
             logger.debug(f"[Celery] Queued location: {name} at {camera_name}")
         except Exception as e:
-            logger.error(f"[Celery] Failed to queue location: {e}")
+            logger.exception(f"[Celery] Failed to queue location: {e}")
 
     def send_unrecognized_face(
         self,
@@ -214,7 +214,7 @@ class EntryLogger:
             if image_url:
                 logger.debug(f"Uploaded unrecognized face to GCS: {image_url}")
         except Exception as e:
-            logger.error(f"Error uploading unrecognized face: {e}")
+            logger.exception(f"Error uploading unrecognized face: {e}")
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
@@ -231,6 +231,6 @@ class EntryLogger:
             logger.debug(f"[Celery] Queued unrecognized face from camera {camera_id}")
             return True
         except Exception as e:
-            logger.error(f"[Celery] Failed to queue unrecognized face: {e}")
+            logger.exception(f"[Celery] Failed to queue unrecognized face: {e}")
             return False
 

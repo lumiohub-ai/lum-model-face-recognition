@@ -102,7 +102,7 @@ class PgVectorStore:
                     return None
 
         except Exception as e:
-            logger.error(f"Failed to add embedding for user {user_id}: {e}")
+            logger.exception(f"Failed to add embedding for user {user_id}: {e}")
             raise
 
     def delete_all_for_user(self, user_id: str) -> int:
@@ -127,7 +127,7 @@ class PgVectorStore:
                 return count
 
         except Exception as e:
-            logger.error(f"Failed to delete embeddings for user {user_id}: {e}")
+            logger.exception(f"Failed to delete embeddings for user {user_id}: {e}")
             raise
 
     def delete_by_image_url(self, user_id: str, image_url: str) -> int:
@@ -153,7 +153,7 @@ class PgVectorStore:
                 return count
 
         except Exception as e:
-            logger.error(f"Failed to delete embedding for {image_url}: {e}")
+            logger.exception(f"Failed to delete embedding for {image_url}: {e}")
             raise
 
     def delete_by_image_url_norm(self, user_id: str, image_url_norm: str) -> int:
@@ -180,7 +180,7 @@ class PgVectorStore:
                 return count
 
         except Exception as e:
-            logger.error(f"Failed to delete embedding for normalized URL {image_url_norm}: {e}")
+            logger.exception(f"Failed to delete embedding for normalized URL {image_url_norm}: {e}")
             raise
 
     def get_all_embeddings(self) -> Tuple[List[str], np.ndarray]:
@@ -233,7 +233,7 @@ class PgVectorStore:
                 return names, embeddings
 
         except Exception as e:
-            logger.error(f"Failed to load embeddings: {e}")
+            logger.exception(f"Failed to load embeddings: {e}")
             raise
 
     def clear_all_embeddings(self) -> int:
@@ -257,5 +257,5 @@ class PgVectorStore:
                 return count
 
         except Exception as e:
-            logger.error(f"Failed to clear embeddings: {e}")
+            logger.exception(f"Failed to clear embeddings: {e}")
             raise

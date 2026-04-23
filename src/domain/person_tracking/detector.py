@@ -107,7 +107,7 @@ class PersonDetector:
             self.model.to(self.device)
 
         except Exception as e:
-            logger.error(f"Failed to load {model_type}{model_size} model: {e}")
+            logger.exception(f"Failed to load {model_type}{model_size} model: {e}")
             raise RuntimeError(f"Failed to load model {model_name}: {e}")
 
         # Model info
@@ -203,5 +203,5 @@ class PersonDetector:
             return detections
 
         except Exception as e:
-            logger.error(f"Error during person detection: {e}")
+            logger.exception(f"Error during person detection: {e}")
             return []

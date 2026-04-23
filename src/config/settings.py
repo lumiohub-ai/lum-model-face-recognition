@@ -6,7 +6,6 @@ Loads .env file automatically on import.
 Usage:
     from config.settings import settings
 
-    print(settings.postgres_host)
 """
 
 import os
@@ -57,6 +56,10 @@ class Settings:
     # Ollama (action recognition)
     ollama_api_url = os.getenv("SO_OLLAMA_API_URL", "http://localhost:11434")
     ollama_model = os.getenv("SO_OLLAMA_MODEL", "gemma3:4b")
+
+    # Metrics monitoring
+    metrics_enabled = os.getenv("SO_METRICS_ENABLED", "true").lower() not in ("false", "0", "no")
+    metrics_port = int(os.getenv("SO_METRICS_PORT", 8765))
 
 
 # Module-level singleton — created once at import time after .env is loaded

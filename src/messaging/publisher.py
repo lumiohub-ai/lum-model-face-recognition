@@ -65,7 +65,7 @@ class MDAPublisher:
             url = await self.gcs_uploader.upload_image(image, prefix)
             return url
         except Exception as e:
-            logger.error(f"Failed to upload image to GCS: {e}")
+            logger.exception(f"Failed to upload image to GCS: {e}")
             return None
 
     def publish_attendance_recorded(
@@ -368,4 +368,29 @@ class MDAPublisher:
         }
         logger.info(f"[Events] Publishing TestCalibrationComplete: camera {camera_id}")
         return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+
+    def publish_system_metrics(self, metrics: Dict[str, Any]) -> None:
+        """Publish a periodic system metrics snapshot (CPU/GPU/RAM/FPS)."""
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['SYSTEM_METRICS'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'metrics': metrics,
+        }
+        self.redis.publish(EVENT_CHANNELS['METRICS'], event)
+
+    def publish_system_alert(self, alert_type: str, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        """Publish a critical system alert (low FPS, GPU OOM risk, high RAM)."""
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['SYSTEM_ALERT'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'alert_type': alert_type,
+            'message': message,
+            'details': details or {},
+        }
+        logger.warning(f"[Events] SystemAlert: {alert_type} — {message}")
+        self.redis.publish(EVENT_CHANNELS['METRICS'], event)
 

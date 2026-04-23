@@ -116,7 +116,7 @@ class AsyncLogger:
             try:
                 self._process_db_entry(entry)
             except Exception as e:
-                logger.error(f"AsyncLogger db_worker error: {e}")
+                logger.exception(f"AsyncLogger db_worker error: {e}")
 
     def _gcs_worker(self) -> None:
         while self._running:
@@ -127,7 +127,7 @@ class AsyncLogger:
             try:
                 self._process_gcs_upload(data)
             except Exception as e:
-                logger.error(f"AsyncLogger gcs_worker error: {e}")
+                logger.exception(f"AsyncLogger gcs_worker error: {e}")
 
     def _redis_worker(self) -> None:
         while self._running:
@@ -138,7 +138,7 @@ class AsyncLogger:
             try:
                 self._process_redis_event(event)
             except Exception as e:
-                logger.error(f"AsyncLogger redis_worker error: {e}")
+                logger.exception(f"AsyncLogger redis_worker error: {e}")
 
     # ── Internal processing ───────────────────────────────────────────────────
 
@@ -194,7 +194,7 @@ class AsyncLogger:
             if callback:
                 callback(url)
         except Exception as e:
-            logger.error(f"GCS upload failed: {e}")
+            logger.exception(f"GCS upload failed: {e}")
 
     def _process_redis_event(self, event: dict) -> None:
         stream = event.get("stream", "ai:events")
@@ -205,4 +205,4 @@ class AsyncLogger:
             from messaging.redis_client import RedisClient
             RedisClient.get_instance().client.xadd(stream, fields)
         except Exception as e:
-            logger.error(f"Redis xadd failed: {e}")
+            logger.exception(f"Redis xadd failed: {e}")

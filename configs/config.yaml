@@ -18,7 +18,6 @@ face_detection_padding: 20.0  # Padding % around detected faces for better recog
 # Action Recognition settings (Activity tracking via Ollama)
 action_recognition:
   enabled: true  # Enable action recognition
-  ollama_api_url: 'http://localhost:11434'  # Ollama API URL (default: http://localhost:11434)
   check_interval_seconds: 60  # Check each person every N seconds
   max_queue_size: 50  # Maximum queued inference requests
   async_workers: 1  # Number of background worker threads for inference
@@ -49,3 +48,9 @@ pipeline:
   detection_interval: 2        # run YOLO every N frames (1 = every frame)
   recognition_interval: 3      # run ArcFace every N detection frames
   async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200
+
+# Monitoring & alerting thresholds
+monitoring:
+  fps_alert_threshold: 15.0    # alert if any camera FPS drops below this
+  gpu_mem_threshold: 90.0      # alert if GPU VRAM usage exceeds this %
+  ram_threshold: 90.0          # alert if system RAM usage exceeds this %

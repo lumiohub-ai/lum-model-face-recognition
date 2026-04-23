@@ -1,0 +1,40 @@
+services:
+  ollama:
+    restart: unless-stopped
+
+  person-tracking:
+    restart: "no"
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+    tty: true
+    stdin_open: true
+
+  celery-worker:
+    restart: "no"
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile.flower
+    image: humblebeeai/celery-flower-lumiohub
+    attach: false
+    restart: "no"
+    depends_on:
+      - celery-worker
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src:/app
+      PYTHONUNBUFFERED: 1
+    network_mode: host
+    command: celery -A workers.celery_app.celery flower --port=${SO_FLOWER_PORT:-5555}

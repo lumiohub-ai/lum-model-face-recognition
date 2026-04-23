@@ -161,13 +161,13 @@ def process_add_user(self, command_id: str, client_slug: str, user_data: Dict[st
 
     except ValidationError:
         # Non-retryable: Don't retry validation errors
-        logger.error(f"[Celery] CreateEmbedding validation failed for {user_id}: validation error")
+        logger.exception(f"[Celery] CreateEmbedding validation failed for {user_id}: validation error")
         _publish_failure_event(client_slug, command_id, user_id, "Validation failed")
         raise  # Let BaseTaskWithRetry handle DLQ
 
     except SoftTimeLimitExceeded:
         # Task timed out - log and fail
-        logger.error(f"[Celery] CreateEmbedding timed out for {user_id} task_id={task_id}")
+        logger.exception(f"[Celery] CreateEmbedding timed out for {user_id} task_id={task_id}")
         _publish_failure_event(client_slug, command_id, user_id, "Task timed out")
         raise RetryableError(f"Task timed out for user {user_id}")
 
@@ -178,7 +178,7 @@ def process_add_user(self, command_id: str, client_slug: str, user_data: Dict[st
 
     except Exception as e:
         # Unknown errors - wrap as retryable and let BaseTaskWithRetry decide
-        logger.error(f"[Celery] CreateEmbedding failed for {user_id}: {e}")
+        logger.exception(f"[Celery] CreateEmbedding failed for {user_id}: {e}")
         _publish_failure_event(client_slug, command_id, user_id, str(e))
         raise RetryableError(str(e))
 
@@ -193,7 +193,7 @@ def _publish_failure_event(client_slug: str, command_id: str, user_id: Any, erro
             error=error
         )
     except Exception as pub_error:
-        logger.error(f"[Celery] Failed to publish error event: {pub_error}")
+        logger.exception(f"[Celery] Failed to publish error event: {pub_error}")
 
 
 @celery.task(
@@ -262,17 +262,17 @@ def process_update_user(self, command_id: str, client_slug: str, user_data: Dict
         }
 
     except ValidationError:
-        logger.error(f"[Celery] UpdateEmbedding validation failed for {user_id}")
+        logger.exception(f"[Celery] UpdateEmbedding validation failed for {user_id}")
         _publish_failure_event(client_slug, command_id, user_id, "Validation failed")
         raise
 
     except SoftTimeLimitExceeded:
-        logger.error(f"[Celery] UpdateEmbedding timed out for {user_id} task_id={task_id}")
+        logger.exception(f"[Celery] UpdateEmbedding timed out for {user_id} task_id={task_id}")
         _publish_failure_event(client_slug, command_id, user_id, "Task timed out")
         raise RetryableError(f"Task timed out for user {user_id}")
 
     except Exception as e:
-        logger.error(f"[Celery] UpdateEmbedding failed for {user_id}: {e}")
+        logger.exception(f"[Celery] UpdateEmbedding failed for {user_id}: {e}")
         _publish_failure_event(client_slug, command_id, user_id, str(e))
         raise RetryableError(str(e))
 
@@ -341,16 +341,16 @@ def process_delete_user(self, command_id: str, client_slug: str, user_data: Dict
         }
 
     except ValidationError:
-        logger.error(f"[Celery] DeleteEmbedding validation failed for {user_id}")
+        logger.exception(f"[Celery] DeleteEmbedding validation failed for {user_id}")
         _publish_failure_event(client_slug, command_id, user_id, "Validation failed")
         raise
 
     except SoftTimeLimitExceeded:
-        logger.error(f"[Celery] DeleteEmbedding timed out for {user_id} task_id={task_id}")
+        logger.exception(f"[Celery] DeleteEmbedding timed out for {user_id} task_id={task_id}")
         _publish_failure_event(client_slug, command_id, user_id, "Task timed out")
         raise RetryableError(f"Task timed out for user {user_id}")
 
     except Exception as e:
-        logger.error(f"[Celery] DeleteEmbedding failed for {user_id}: {e}")
+        logger.exception(f"[Celery] DeleteEmbedding failed for {user_id}: {e}")
         _publish_failure_event(client_slug, command_id, user_id, str(e))
         raise RetryableError(str(e))

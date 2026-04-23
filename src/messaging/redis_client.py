@@ -49,7 +49,7 @@ class RedisClient:
             logger.info(f"Published to {channel}: event_id={message.get('event_id', 'N/A')}, subscribers={num_subscribers}")
             return True
         except Exception as e:
-            logger.error(f"Failed to publish to {channel}: {e}")
+            logger.exception(f"Failed to publish to {channel}: {e}")
             return False
 
     def is_connected(self) -> bool:
@@ -65,4 +65,4 @@ class RedisClient:
         try:
             self.client.close()
         except Exception as e:
-            logger.error(f"Error closing Redis: {e}")
+            logger.exception(f"Error closing Redis: {e}")

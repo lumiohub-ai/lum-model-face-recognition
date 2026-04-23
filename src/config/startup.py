@@ -56,10 +56,10 @@ def load_config(config_path: Optional[str] = None, default_config: Optional[Dict
         logger.info(f"Loaded configuration from {config_path}")
         return {**default_config, **config}
     except yaml.YAMLError as e:
-        logger.error(f"Failed to parse config file {config_path}: {e}")
+        logger.exception(f"Failed to parse config file {config_path}: {e}")
         return default_config
     except Exception as e:
-        logger.error(f"Failed to load config file {config_path}: {e}")
+        logger.exception(f"Failed to load config file {config_path}: {e}")
         return default_config
 
 
@@ -80,10 +80,13 @@ def setup_logging(
         from config.settings import settings
         log_level = settings.log_level
 
+    # Bind service name to all log records
+    logger.configure(extra={"service": app_name})
+
     # Remove default loguru handler
     logger.remove()
 
-    # Console logging with colors
+    # Console — human-readable with colors (mandatory)
     console_format = (
         "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
         "<level>{level: <8}</level> | "
@@ -97,14 +100,26 @@ def setup_logging(
         colorize=True,
     )
 
-    # File logging with rotation
-    log_file = f"{log_dir}/{app_name}_{{time:YYYY-MM-DD}}.log"
+    # app.log — INFO and DEBUG, JSON, 7-day retention
     logger.add(
-        log_file,
-        rotation="1 day",
-        retention="7 days",
+        f"{log_dir}/app_{{time:YYYY-MM-DD}}.log",
         level=log_level,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+        filter=lambda record: record["level"].no < 30,  # below WARNING
+        serialize=True,
+        rotation="50 MB",
+        retention="7 days",
+        compression="gz",
+    )
+
+    # error.log — WARNING, ERROR, CRITICAL, JSON, 90-day retention
+    logger.add(
+        f"{log_dir}/error_{{time:YYYY-MM-DD}}.log",
+        level="WARNING",
+        filter=lambda record: record["level"].no >= 30,  # WARNING and above
+        serialize=True,
+        rotation="50 MB",
+        retention="90 days",
+        compression="gz",
     )
 
     logger.debug(f"Logging initialized: level={log_level}, log_dir={log_dir}")
