@@ -190,7 +190,7 @@ class ActionRecognizer:
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.error(f"Error in action recognition worker: {e}")
+                logger.exception(f"Error in action recognition worker: {e}")
 
     def _process_inference_request(self, item: Dict) -> None:
         """Process a single inference request.
@@ -236,7 +236,7 @@ class ActionRecognizer:
                         metadata=metadata
                     )
                 except Exception as e:
-                    logger.error(f"Failed to post activity to backend: {e}")
+                    logger.exception(f"Failed to post activity to backend: {e}")
 
             # Call callback if registered
             callback = self.result_callbacks.get(request_id)
@@ -253,7 +253,7 @@ class ActionRecognizer:
             )
 
         except Exception as e:
-            logger.error(f"Failed to process inference request: {e}")
+            logger.exception(f"Failed to process inference request: {e}")
             self.total_api_errors += 1
 
     def recognize_via_api(self, image: np.ndarray) -> Optional[Dict]:
@@ -297,7 +297,7 @@ class ActionRecognizer:
             logger.warning(f"Ollama API timeout after {self.inference_timeout}s: {e}")
             return None
         except Exception as e:
-            logger.error(f"Ollama API error: {e}")
+            logger.exception(f"Ollama API error: {e}")
             return None
 
     def _parse_action_response(self, raw_output: str) -> Optional[str]:
@@ -374,7 +374,7 @@ class ActionRecognizer:
             logger.info(f"Activity queued to Celery: user_id={user_id}, type={activity_type}")
 
         except Exception as e:
-            logger.error(f"Failed to queue activity: {e}")
+            logger.exception(f"Failed to queue activity: {e}")
             raise
 
     def recognize_async(

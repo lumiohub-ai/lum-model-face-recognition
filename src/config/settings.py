@@ -6,7 +6,6 @@ Loads .env file automatically on import.
 Usage:
     from config.settings import settings
 
-    print(settings.postgres_host)
 """
 
 import os

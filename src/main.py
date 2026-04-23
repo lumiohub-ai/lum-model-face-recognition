@@ -79,7 +79,7 @@ class ApplicationLifecycle:
             try:
                 callback()
             except Exception as e:
-                logger.error(f"[Lifecycle] Shutdown callback error: {e}")
+                logger.exception(f"[Lifecycle] Shutdown callback error: {e}")
 
         logger.info("[Lifecycle] Shutdown complete")
 
@@ -152,7 +152,7 @@ class MDAManager:
                                     data = json.loads(message['data'])
                                     handler(data)
                                 except Exception as e:
-                                    logger.error(f"Error in {channel}: {e}")
+                                    logger.exception(f"Error in {channel}: {e}")
 
                     except Exception as e:
                         if not self._running:
@@ -341,7 +341,7 @@ def main() -> None:
             logger.info("Keyboard interrupt received")
             break
         except Exception as e:
-            logger.error(f"Fatal error: {e}")
+            logger.exception(f"Fatal error: {e}")
             raise
 
         # engine.run() returned — check if it was due to a camera set change
@@ -358,7 +358,7 @@ def main() -> None:
             )
             mda_manager.set_engine(engine)
         except Exception as e:
-            logger.error(f"Failed to reinitialize engine: {e}")
+            logger.exception(f"Failed to reinitialize engine: {e}")
             break
 
     lifecycle.shutdown()

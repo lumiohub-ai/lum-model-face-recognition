@@ -48,3 +48,9 @@ pipeline:
   detection_interval: 2        # run YOLO every N frames (1 = every frame)
   recognition_interval: 3      # run ArcFace every N detection frames
   async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200
+
+# Monitoring & alerting thresholds
+monitoring:
+  fps_alert_threshold: 15.0    # alert if any camera FPS drops below this
+  gpu_mem_threshold: 90.0      # alert if GPU VRAM usage exceeds this %
+  ram_threshold: 90.0          # alert if system RAM usage exceeds this %

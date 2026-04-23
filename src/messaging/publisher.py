@@ -65,7 +65,7 @@ class MDAPublisher:
             url = await self.gcs_uploader.upload_image(image, prefix)
             return url
         except Exception as e:
-            logger.error(f"Failed to upload image to GCS: {e}")
+            logger.exception(f"Failed to upload image to GCS: {e}")
             return None
 
     def publish_attendance_recorded(

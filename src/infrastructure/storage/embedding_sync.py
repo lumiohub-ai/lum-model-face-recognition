@@ -105,7 +105,7 @@ class EmbeddingSyncService:
             }
 
         except Exception as e:
-            logger.error(f"❌ Error processing image {original_url}: {e}")
+            logger.exception(f"❌ Error processing image {original_url}: {e}")
             return None
 
     def handle_user_created(self, user_data: Dict) -> Dict:
@@ -159,7 +159,7 @@ class EmbeddingSyncService:
                     results['embeddings_added'] += 1
 
                 except Exception as e:
-                    logger.error(f"❌ Error saving embedding for {original_url}: {e}")
+                    logger.exception(f"❌ Error saving embedding for {original_url}: {e}")
                     results['failed_images'].append(original_url)
 
         logger.info(
@@ -253,7 +253,7 @@ class EmbeddingSyncService:
                 embeddings_added += result['embeddings_added']
                 logger.info(f"[{idx}/{total}] ✅ {user_name}: {result['embeddings_added']} embeddings added")
             except Exception as e:
-                logger.error(f"Failed to sync user {user_name} ({user_id}): {e}", exc_info=True)
+                logger.exception(f"Failed to sync user {user_name} ({user_id}): {e}")
                 failed_users.append(user_id)
 
         return users_processed, embeddings_added, failed_users
@@ -318,5 +318,5 @@ class EmbeddingSyncService:
             }
 
         except Exception as e:
-            logger.error(f"Failed to sync missing embeddings: {e}")
+            logger.exception(f"Failed to sync missing embeddings: {e}")
             return {'success': False, 'error': str(e)}

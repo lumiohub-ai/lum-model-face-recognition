@@ -2,6 +2,7 @@ services:
   ollama:
     image: ollama/ollama:0.18.3
     attach: false
+    restart: unless-stopped
     environment:
       SO_OLLAMA_MODEL: ${SO_OLLAMA_MODEL:-gemma3:4b}
     volumes:
@@ -22,9 +23,15 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
     deploy:
       resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
         reservations:
+          cpus: '2.0'
+          memory: 4G
           devices:
             - driver: nvidia
               count: 1
@@ -36,10 +43,11 @@ services:
         max-file: "10"
 
   person-tracking:
+    image: humblebeeai/person-tracking-lumiohub:${SO_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
-    image: humblebeeai/person-tracking-lumiohub
+    restart: unless-stopped
     depends_on:
       ollama:
         condition: service_healthy
@@ -52,11 +60,24 @@ services:
       - ./volumes/models/weights:/app/volumes/models/weights
     networks:
       - person-tracking-network
+    ports:
+      - "${SO_METRICS_PORT:-8765}:8765"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python' > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
         reservations:
+          cpus: '2.0'
+          memory: 4G
           devices:
             - driver: nvidia
               count: 1
@@ -68,8 +89,12 @@ services:
         max-file: "10"
 
   celery-worker:
-    image: humblebeeai/person-tracking-lumiohub
+    image: humblebeeai/person-tracking-lumiohub:latest
     attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
@@ -80,9 +105,20 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
         reservations:
+          cpus: '1.0'
+          memory: 2G
           devices:
             - driver: nvidia
               count: 1

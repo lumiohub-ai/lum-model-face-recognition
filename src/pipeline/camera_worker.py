@@ -115,7 +115,7 @@ class CameraWorker:
             try:
                 self._process_one_frame()
             except Exception as e:
-                logger.error(f"CameraWorker[{self.camera_idx}] error: {e}")
+                logger.exception(f"CameraWorker[{self.camera_idx}] error: {e}")
                 time.sleep(0.01)
 
     def _process_one_frame(self) -> None:

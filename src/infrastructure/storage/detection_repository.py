@@ -178,7 +178,7 @@ class DetectionRepository:
                 row = result.fetchone()
                 return row[0] if row else 0
         except Exception as e:
-            logger.error(f"Failed to save calibration frame: {e}")
+            logger.exception(f"Failed to save calibration frame: {e}")
             return 0
 
     def get_calibration_frames(self, camera_id: int) -> list:
@@ -206,7 +206,7 @@ class DetectionRepository:
                     for row in rows
                 ]
         except Exception as e:
-            logger.error(f"Failed to get calibration frames: {e}")
+            logger.exception(f"Failed to get calibration frames: {e}")
             return []
 
     def update_user_location(

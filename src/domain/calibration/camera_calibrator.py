@@ -163,7 +163,7 @@ class CameraCalibrator:
                 "model": "standard",
             }
         except Exception as e:
-            logger.error(f"Standard calibration failed: {e}")
+            logger.exception(f"Standard calibration failed: {e}")
             return {"success": False, "error": str(e), "frames_used": frames_used}
 
     # ── Fisheye calibration ───────────────────────────────────────────────────

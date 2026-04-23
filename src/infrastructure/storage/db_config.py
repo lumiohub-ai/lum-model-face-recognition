@@ -125,7 +125,7 @@ class DatabaseConfig:
             logger.info("Database connection test successful")
             return True
         except Exception as e:
-            logger.error(f"Database connection test failed: {e}")
+            logger.exception(f"Database connection test failed: {e}")
             return False
 
     def init_schema(self, client_slug: str) -> None:
@@ -210,7 +210,7 @@ class DatabaseConfig:
                 logger.info(f"✅ Schema initialization complete: {schema_name}")
 
         except Exception as e:
-            logger.error(f"Failed to initialize schema {schema_name}: {e}")
+            logger.exception(f"Failed to initialize schema {schema_name}: {e}")
             raise
 
     def drop_schema(self, client_slug: str, cascade: bool = True) -> None:
@@ -236,7 +236,7 @@ class DatabaseConfig:
                 logger.warning(f"Schema dropped: {schema_name}")
 
         except Exception as e:
-            logger.error(f"Failed to drop schema {schema_name}: {e}")
+            logger.exception(f"Failed to drop schema {schema_name}: {e}")
             raise
 
     @contextmanager

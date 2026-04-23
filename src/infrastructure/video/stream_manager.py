@@ -84,7 +84,7 @@ class StreamManager:
             os.remove(test_file)
             logger.info(f"Output directory ready: {output_dir}")
         except Exception as e:
-            logger.error(f"Output directory not writable: {output_dir} - {e}")
+            logger.exception(f"Output directory not writable: {output_dir} - {e}")
             return self.video_writers
 
         self._last_write_time = []
@@ -146,7 +146,7 @@ class StreamManager:
                 logger.error(f"Failed to open video writer: {filename}")
                 return None
         except Exception as e:
-            logger.error(f"Exception initializing video writer: {filename} - {e}")
+            logger.exception(f"Exception initializing video writer: {filename} - {e}")
             return None
 
     def start_streams(self) -> None:
