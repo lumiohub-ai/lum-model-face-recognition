@@ -55,7 +55,7 @@ class Repository:
                     users.append(user)
                 return users
         except Exception as e:
-            logger.error(f"Failed to fetch users: {e}")
+            logger.exception(f"Failed to fetch users: {e}")
             return []
 
     def get_users_by_status(self, status: str) -> List[str]:
@@ -92,7 +92,7 @@ class Repository:
                 logger.debug(f"Found {len(names)} users with status '{status}'")
                 return names
         except Exception as e:
-            logger.error(f"Failed to fetch users by status: {e}")
+            logger.exception(f"Failed to fetch users by status: {e}")
             return []
 
     def get_user_name_to_id(self) -> List[Dict[str, Any]]:
@@ -112,7 +112,7 @@ class Repository:
                     for row in result.fetchall()
                 ]
         except Exception as e:
-            logger.error(f"Failed to fetch user name mapping: {e}")
+            logger.exception(f"Failed to fetch user name mapping: {e}")
             return []
 
     def get_cameras(self, application: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -169,7 +169,7 @@ class Repository:
                 logger.info(f"Fetched {len(cameras)} cameras from database")
                 return cameras
         except Exception as e:
-            logger.error(f"Failed to fetch cameras: {e}")
+            logger.exception(f"Failed to fetch cameras: {e}")
             return []
 
     def check_new_and_deleted_users(

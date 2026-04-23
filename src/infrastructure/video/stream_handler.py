@@ -26,6 +26,11 @@ class StreamHandler:
         self.is_video = self.is_video_file(src)
         self.logger = logger
 
+        # Suppress FFmpeg/libav C-level logs — they bypass Python logging and
+        # spam stderr with HEVC ref errors, POC warnings, etc.
+        os.environ['OPENCV_LOG_LEVEL'] = 'ERROR'
+        os.environ['OPENCV_FFMPEG_LOGLEVEL'] = '-8'  # AV_LOG_QUIET
+
         # Configure RTSP options for better compatibility and smooth playback
         if isinstance(src, str) and src.startswith('rtsp://'):
             # Set FFmpeg options BEFORE creating VideoCapture

@@ -17,7 +17,6 @@ Features:
 import json
 import time
 import threading
-import traceback
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 import redis
@@ -93,7 +92,7 @@ class MessageDLQ:
                 f"message_id={message_id} error_type={error_type} error={error}"
             )
         except Exception as e:
-            logger.error(f"Failed to send to DLQ: {e}")
+            logger.exception(f"Failed to send to DLQ: {e}")
 
     def get_count(self, stream: str) -> int:
         """Get number of messages in DLQ for a stream.
@@ -199,7 +198,7 @@ class StreamConsumer:
                 time.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30)
             except Exception as e:
-                logger.error(f"Error in consume loop: {e}")
+                logger.exception(f"Error in consume loop: {e}")
                 time.sleep(0.5)
 
     def _process_message(self, stream: str, message_id: str, data: Dict[str, str]) -> None:
@@ -280,11 +279,7 @@ class StreamConsumer:
             self._ack(stream, message_id)
 
         except Exception as e:
-            # Log error with traceback
-            tb_str = traceback.format_exc()
-            logger.error(
-                f"Error processing {command_type}: {e}\n{tb_str}"
-            )
+            logger.exception(f"Error processing {command_type}: {e}")
             # Don't ACK - message will be redelivered by Redis
             # After multiple redeliveries, consider moving to DLQ manually
 
@@ -348,7 +343,7 @@ class StreamConsumer:
             self._camera_handler(command_type, client_slug, payload)
             logger.debug("Camera handler completed successfully")
         except Exception as e:
-            logger.error(f"Camera handler error: {e}")
+            logger.exception(f"Camera handler error: {e}")
 
     def _is_duplicate(self, idempotency_key: str) -> bool:
         """Check if command was already processed."""
@@ -370,7 +365,7 @@ class StreamConsumer:
             self.redis.xack(stream, CONSUMER_GROUP, message_id)
             logger.debug(f"ACKed {message_id} on {stream}")
         except Exception as e:
-            logger.error(f"Failed to ACK {message_id}: {e}")
+            logger.exception(f"Failed to ACK {message_id}: {e}")
 
     def stop(self) -> None:
         """Stop the consumer gracefully."""
@@ -383,7 +378,7 @@ class StreamConsumer:
         try:
             self.redis.close()
         except Exception as e:
-            logger.error(f"Error closing Redis: {e}")
+            logger.exception(f"Error closing Redis: {e}")
 
         logger.info("Stopped")
 

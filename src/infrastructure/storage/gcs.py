@@ -197,7 +197,7 @@ class ImageFetcher:
                 )
                 logger.debug(f"GCS client initialized with bucket: {self.gcs_bucket}")
             except Exception as e:
-                logger.error(f"Failed to initialize GCS client: {e}")
+                logger.exception(f"Failed to initialize GCS client: {e}")
                 self.gcs_client = None
         else:
             logger.warning(
@@ -241,7 +241,7 @@ class ImageFetcher:
                 return None
 
         except Exception as e:
-            logger.error(f"Failed to fetch image from {url}: {e}")
+            logger.exception(f"Failed to fetch image from {url}: {e}")
             return None
 
     @staticmethod
@@ -289,7 +289,7 @@ class ImageFetcher:
             return image_np
 
         except Exception as e:
-            logger.error(f"Failed to fetch from GCS {gs_url}: {e}")
+            logger.exception(f"Failed to fetch from GCS {gs_url}: {e}")
             return None
 
     def _fetch_from_http(self, url: str) -> Optional[np.ndarray]:
@@ -327,11 +327,11 @@ class ImageFetcher:
                     return None
 
             except requests.exceptions.RequestException as e:
-                logger.error(f"HTTP request failed for {url}: {e}")
+                logger.exception(f"HTTP request failed for {url}: {e}")
                 return None
 
             except Exception as e:
-                logger.error(f"Unexpected error fetching {url}: {e}")
+                logger.exception(f"Unexpected error fetching {url}: {e}")
                 return None
 
         if img_bytes is None:
@@ -343,7 +343,7 @@ class ImageFetcher:
             logger.info(f"Fetched image from HTTP: {url} (shape: {image_np.shape})")
             return image_np
         except Exception as e:
-            logger.error(f"Failed to process image from {url}: {e}")
+            logger.exception(f"Failed to process image from {url}: {e}")
             return None
 
     def _fetch_from_local(self, file_path: str) -> Optional[np.ndarray]:
@@ -367,7 +367,7 @@ class ImageFetcher:
             return image_np
 
         except Exception as e:
-            logger.error(f"Failed to fetch from local {file_path}: {e}")
+            logger.exception(f"Failed to fetch from local {file_path}: {e}")
             return None
 
     def upload_image(
@@ -430,7 +430,7 @@ class ImageFetcher:
             return public_url
 
         except Exception as e:
-            logger.error(f"Failed to upload image to GCS: {e}")
+            logger.exception(f"Failed to upload image to GCS: {e}")
             return None
 
 

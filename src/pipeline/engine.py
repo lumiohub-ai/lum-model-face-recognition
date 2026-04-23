@@ -276,7 +276,7 @@ class SmartOfficeEngine:
                     last_metrics_time = current_time
 
         except Exception as e:
-            logger.error(f"SmartOfficeEngine error: {e}")
+            logger.exception(f"SmartOfficeEngine error: {e}")
             raise
         finally:
             self._cleanup()
@@ -332,7 +332,7 @@ class SmartOfficeEngine:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to reload camera configs: {e}")
+            logger.exception(f"Failed to reload camera configs: {e}")
             return False
 
     def reload_embeddings(self) -> bool:
@@ -364,7 +364,7 @@ class SmartOfficeEngine:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to reload embeddings: {e}")
+            logger.exception(f"Failed to reload embeddings: {e}")
             return False
 
     def capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
@@ -419,7 +419,7 @@ class SmartOfficeEngine:
             logger.info(f"Frame captured: camera={camera_id}, command={command_id}")
 
         except Exception as e:
-            logger.error(f"capture_frame failed for camera {camera_id}: {e}")
+            logger.exception(f"capture_frame failed for camera {camera_id}: {e}")
 
     def calibrate_camera(self, camera_id: int, command_id: str) -> None:
         """Run Charuco calibration on stored frames for a camera.
@@ -516,7 +516,7 @@ class SmartOfficeEngine:
                 )
 
         except Exception as e:
-            logger.error(f"calibrate_camera failed for camera {camera_id}: {e}")
+            logger.exception(f"calibrate_camera failed for camera {camera_id}: {e}")
             publisher.publish_calibration_failed(
                 command_id=command_id,
                 camera_id=camera_id,
@@ -587,7 +587,7 @@ class SmartOfficeEngine:
             )
 
         except Exception as e:
-            logger.error(f"test_calibration failed for camera {camera_id}: {e}")
+            logger.exception(f"test_calibration failed for camera {camera_id}: {e}")
             publisher.publish_calibration_failed(
                 command_id=command_id,
                 camera_id=camera_id,
@@ -604,11 +604,12 @@ class SmartOfficeEngine:
         self.metrics.log_summary(cam_indices)
 
         # Check for and handle critical alerts
-        pipeline_cfg = self.config.get("pipeline", {})
-        fps_threshold = float(pipeline_cfg.get("fps_alert_threshold", 1.0))
+        monitoring_cfg = self.config.get("monitoring", {})
         alerts = self.metrics.check_alerts(
             camera_indices=cam_indices,
-            fps_threshold=fps_threshold,
+            fps_threshold=float(monitoring_cfg.get("fps_alert_threshold", 1.0)),
+            gpu_mem_threshold=float(monitoring_cfg.get("gpu_mem_threshold", 90.0)),
+            ram_threshold=float(monitoring_cfg.get("ram_threshold", 90.0)),
         )
 
         if alerts:
@@ -700,7 +701,7 @@ class SmartOfficeEngine:
                 return False
 
         except Exception as e:
-            logger.error(f"Failed to sync embeddings on startup: {e}")
+            logger.exception(f"Failed to sync embeddings on startup: {e}")
             logger.warning("Continuing with existing embeddings...")
             return False
 

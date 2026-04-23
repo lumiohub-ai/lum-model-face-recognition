@@ -108,7 +108,7 @@ def send_to_dlq(task_name: str, task_id: str, args: tuple, kwargs: dict,
         logger.warning(f"[DLQ] Task {task_id} moved to {dlq_key}: {type(exc).__name__}")
 
     except Exception as e:
-        logger.error(f"[DLQ] Failed to send task to DLQ: {e}")
+        logger.exception(f"[DLQ] Failed to send task to DLQ: {e}")
 
 
 # ============================================================

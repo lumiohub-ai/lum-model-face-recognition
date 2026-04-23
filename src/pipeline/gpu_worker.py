@@ -140,7 +140,7 @@ class GPUInferenceWorker:
                     self._detection_out_queues[cam_id].put(all_detections[i])
 
             except Exception as e:
-                logger.error(f"GPUInferenceWorker YOLO error: {e}")
+                logger.exception(f"GPUInferenceWorker YOLO error: {e}")
 
     # ── ArcFace loop ──────────────────────────────────────────────────────────
 
@@ -177,7 +177,7 @@ class GPUInferenceWorker:
                     self._embedding_out_queues[cam_id].put(results)
 
             except Exception as e:
-                logger.error(f"GPUInferenceWorker ArcFace error: {e}")
+                logger.exception(f"GPUInferenceWorker ArcFace error: {e}")
 
     # ── Collection helpers ────────────────────────────────────────────────────
 
@@ -224,11 +224,12 @@ class GPUInferenceWorker:
                 verbose=False,
                 device=self._detector.device,
             )
+            duration_ms = (time.time() - t0) * 1000
             if self._metrics is not None:
-                self._metrics.record_yolo_ms((time.time() - t0) * 1000)
+                self._metrics.record_yolo_ms(duration_ms)
             return [self._parse_yolo_result(r) for r in results]
         except Exception as e:
-            logger.error(f"YOLO batch inference failed: {e}")
+            logger.exception(f"YOLO batch inference failed: {e}")
             return [[] for _ in frames]
 
     def _run_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
@@ -279,8 +280,9 @@ class GPUInferenceWorker:
             except Exception as e:
                 logger.debug(f"Face detection error on ROI: {e}")
             results.append(result)
+        duration_ms = (time.time() - t0) * 1000
         if self._metrics is not None and results:
-            self._metrics.record_arcface_ms((time.time() - t0) * 1000)
+            self._metrics.record_arcface_ms(duration_ms)
         return results
 
     @staticmethod

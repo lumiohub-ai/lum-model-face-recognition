@@ -118,7 +118,7 @@ class PersonTracker:
                     f"device={device}, conf={confidence_threshold}, iou={iou_threshold}"
                 )
             except Exception as e:
-                logger.error(f"Failed to initialize BoT-SORT: {e}", exc_info=True)
+                logger.exception(f"Failed to initialize BoT-SORT: {e}")
                 logger.warning("Falling back to simple IoU tracking")
                 self.botsort = None
         else:
@@ -343,7 +343,7 @@ class PersonTracker:
             return tracked
 
         except Exception as e:
-            logger.error(f"Error in BoT-SORT tracking: {e}", exc_info=True)
+            logger.exception(f"Error in BoT-SORT tracking: {e}")
             # Fallback to simple IoU tracking on error
             return self._track_detections(detections)
 
