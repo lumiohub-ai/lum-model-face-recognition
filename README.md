@@ -6,11 +6,13 @@
 
 - [Overview](#overview)
 - [Installation & Setup](#installation--setup)
+- [Usage](#usage)
 - [Configuration](#configuration)
 - [Deployment](#deployment)
+- [Development](#development)
 - [Troubleshooting](#troubleshooting)
 - [Architecture](#architecture)
-- [API Reference](#api-reference)
+- [compose.sh CLI](#composesh-cli)
 
 ---
 
@@ -82,11 +84,9 @@ The Smart Office AI Service is a production-ready, multi-tenant face recognition
 ```bash
 git clone --recursive https://github.com/humblebeeai/so.model-face-recognition.git
 cd so.model-face-recognition
-
-# Ensure all submodules are cloned correctly
-git submodule sync --recursive
-git submodule update --init --recursive
 ```
+
+> If you already cloned without `--recursive`, run `git submodule update --init --recursive` to fetch submodules.
 
 ### Step 2: Configure Environment Variables
 
@@ -96,6 +96,17 @@ cp .env.example .env
 
 # Edit configuration (see Configuration section below)
 nano .env
+```
+
+> `.env` is gitignored — it holds secrets (DB password, GCS path) and must never be committed.
+
+**Place GCS credentials:**
+
+```bash
+# Drop the service-account JSON the platform team gave you here:
+mkdir -p credentials
+cp /path/to/gcs-service-account.json credentials/
+# SO_GCS_CREDENTIALS_PATH in .env must match the in-container path: /app/credentials/<filename>.json
 ```
 
 **Minimum required settings:**
@@ -166,23 +177,37 @@ SO_LOG_LEVEL=INFO
 
 ---
 
+## Usage
+
+This service is one component of the Smart Office platform. End-to-end usage — onboarding users, registering cameras, viewing attendance, configuring the Backend & Frontend — is documented in the platform-level repo:
+
+> **[lum-stack/README.md](https://github.com/humblebeeai/lum-stack/blob/main/README.md)**
+
+Once this AI service is running and connected to the same Postgres + Redis as `lum-stack`, it picks up cameras and user embeddings automatically via the MDA channels described in [`docs/SERVICE_ARCHITECTURE.md`](docs/SERVICE_ARCHITECTURE.md#54-redis-mda-contracts).
+
+---
+
 ## Configuration
 
 ### Camera Configuration
 
-Cameras are configured via **Backend API** (recommended):
+Cameras are managed by the Backend (`lum-stack`) and stored in Postgres. The AI service loads them from the database on startup and reloads on `ConfigureCamera` / `StartCamera` / `StopCamera` Redis Stream commands — there is no local camera config to edit. Add or update cameras through the Backend Admin UI.
 
-1. Set `use_api_for_cameras: true` in `config.yaml`
-2. Configure cameras in Backend Admin UI
-3. AI Service auto-reloads when cameras are added/updated
+### Pipeline & Recognition Tuning
 
-**Alternative: Environment Variables**
+Service-level tuning lives in [`configs/config.yaml`](configs/config.yaml). The most useful knobs:
 
-```bash
-# Deprecated: Use Backend API instead
-HB_IN=rtsp://user:pass@camera1/stream
-HB_OUT=rtsp://user:pass@camera2/stream
-```
+| Key | Default | Effect |
+|---|---|---|
+| `match_threshold` | `0.3` | Cosine distance for face match |
+| `person_detection_threshold` | `0.45` | YOLO confidence floor |
+| `person_detection_model` | `yolo26` | `yolo26` (NMS-free) or `yolov8` |
+| `enable_global_tracking` | `true` | Cross-camera ReID (MCMOT) toggle |
+| `pipeline.detection_interval` | `2` | Run YOLO every N frames |
+| `pipeline.recognition_interval` | `3` | Run ArcFace every N detections |
+| `action_recognition.enabled` | `true` | Activity classification via Ollama |
+
+For the full set, see the comments in `configs/config.yaml`.
 
 ---
 
@@ -190,7 +215,7 @@ HB_OUT=rtsp://user:pass@camera2/stream
 
 ### Compose Override Files
 
-The project ships with environment-specific override files in `template/compose/`:
+The project ships with environment-specific override files in `templates/compose/`:
 
 | File | Purpose |
 |------|---------|
@@ -205,7 +230,7 @@ The project ships with environment-specific override files in `template/compose/
 
 **Development (with Flower + live reload):**
 ```bash
-docker compose -f compose.yml -f template/compose/compose.override.dev.yml up
+docker compose -f compose.yml -f templates/compose/compose.override.dev.yml up
 ```
 
 > Flower (Celery monitoring UI) only runs in dev mode. Access it at `http://localhost:5555` (or `SO_FLOWER_PORT`).
@@ -226,102 +251,94 @@ External services (PostgreSQL, Redis from `so.stack`) are reached via:
 
 ### Scaling Workers
 
-The system uses Celery for task processing. Scale workers based on load:
+The Celery service `celery-worker` (in `compose.yml`) consumes both the `embeddings` and `detections` queues by default:
 
-**Embedding Workers** (CPU/GPU intensive):
-```bash
-# In docker-compose.yml or Kubernetes
-celery-embedding-worker:
-  replicas: 2  # Increase for more embedding processing
+```yaml
+command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
 ```
 
-**Detection Workers** (I/O intensive):
+**Scale the existing worker** (simple — both queues benefit equally):
+
 ```bash
-# In docker-compose.yml or Kubernetes
-celery-detection-worker:
-  replicas: 4  # Increase for more cameras/detections
+docker compose up -d --scale celery-worker=3
 ```
+
+**Split queues onto dedicated workers** (when one queue dominates load — e.g. bulk embedding ingest):
+add a second service in your override file with `-Q embeddings` only, and restrict the original to `-Q detections`. Adjust replicas independently per workload.
+
+> The main `person-tracking` container is **not** horizontally scalable as-is — there is one shared GPU inference worker per process. Scale by partitioning cameras across hosts. See [`docs/SERVICE_ARCHITECTURE.md` §3.5](docs/SERVICE_ARCHITECTURE.md#35-scaling-notes).
+
+---
+
+## Development
+
+**Live source reload (dev override):**
+
+```bash
+docker compose -f compose.yml -f templates/compose/compose.override.dev.yml up
+```
+
+The dev override mounts `./src` and `./configs` into the container so code edits are picked up on restart, sets `SO_LOG_LEVEL=DEBUG`, and starts Flower at [`http://localhost:5555`](http://localhost:5555).
+
+**Get a shell inside the running container:**
+
+```bash
+./compose.sh enter
+```
+
+**Logs:**
+
+```bash
+./compose.sh logs -f          # follow all services
+docker compose logs -f person-tracking   # one service
+```
+
+**Submodules:** `modules/insightface` is a git submodule. After pulling changes that touch it, run:
+
+```bash
+git submodule update --init --recursive
+```
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `SmartOfficeEngine` never logs "started" | Cannot reach Postgres / Redis | Check `SO_POSTGRES_HOST` / `SO_REDIS_HOST` are reachable from inside the container; if same machine, ensure `host.docker.internal` resolves (provided by `extra_hosts: host-gateway`) |
+| `ollama` healthcheck failing | Model still pulling on first start | Wait — `gemma3:4b` pulls on first boot (`start_period: 60s`). Watch `docker compose logs ollama` |
+| GPU not available in container | NVIDIA Container Toolkit missing or driver mismatch | Verify `nvidia-smi` works on host; reinstall `nvidia-container-toolkit`; ensure driver ≥ 525 |
+| GCS uploads fail with 403 | Service-account file missing or wrong path | Confirm `credentials/<file>.json` exists on host and `SO_GCS_CREDENTIALS_PATH` matches its in-container path |
+| Celery tasks stuck pending | Worker not consuming the queue | `./compose.sh ps` to confirm `celery-worker` is up; check Flower (dev) at `:5555` |
+| `.env` variables not applied | Variable interpolation `${VAR}` does not work inside `.env` | Hardcode full URLs in `SO_REDIS_URL`, `SO_CELERY_BROKER_URL`, `SO_CELERY_RESULT_BACKEND` |
+| Cameras don't appear | Backend hasn't sent `ConfigureCamera` / `StartCamera` | Add cameras via Backend Admin UI; AI service auto-reloads |
 
 ---
 
 ## Architecture
 
-### Components
+A high-level summary lives below. The full internal architecture — components, deployment topology, data flows, and database schema with diagrams — is in **[`docs/SERVICE_ARCHITECTURE.md`](docs/SERVICE_ARCHITECTURE.md)**. For the cross-repo (Backend / Frontend / AI) view, see **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Smart Office AI Service                  │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────┐      ┌──────────────┐      ┌────────────┐  │
-│  │   Engine    │──────│ Frame        │──────│  Camera    │  │
-│  │ (main.py)   │      │ Processor    │      │  Engines   │  │
-│  └─────────────┘      └──────────────┘      └────────────┘  │
-│         │                     │                     │       │
-│         │                     │                     │       │
-│  ┌─────────────┐      ┌──────────────┐      ┌────────────┐  │
-│  │ MDA Manager │      │   Models     │      │  Tracker   │  │
-│  │             │      │ (YOLO, Face) │      │  (BoT-SORT)│  │
-│  └─────────────┘      └──────────────┘      └────────────┘  │
-│         │                                            │      │
-│         │                                            │      │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              Infrastructure Layer                    │   │
-│  ├──────────────────────────────────────────────────────┤   │
-│  │  pgvector │ Repository │ GCS │ Entry Logger          │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-         │                                           │
-         ▼                                           ▼
-┌─────────────────┐                         ┌────────────────┐
-│  Redis Streams  │                         │  PostgreSQL    │
-│  (Commands)     │                         │  (pgvector)    │
-└─────────────────┘                         └────────────────┘
-         │                                           │
-         ▼                                           ▼
-┌─────────────────┐                         ┌────────────────┐
-│ Celery Workers  │                         │ Embedding      │
-│ (Embeddings,    │                         │ Storage        │
-│  Detections)    │                         │                │
-└─────────────────┘                         └────────────────┘
-```
+### Components (one-liner each)
 
-### Message-Driven Architecture (MDA)
+- **Pipeline** — `SmartOfficeEngine` orchestrates per-camera workers and a shared GPU inference worker.
+- **Domain** — ML models: YOLO (person detection), InsightFace (face detection + ArcFace embeddings), BoT-SORT (tracking), OSNet (cross-camera ReID), Ollama (activity recognition).
+- **Messaging** — Redis Streams for commands (Backend → AI), Pub/Sub for events (AI → Backend).
+- **Workers** — Celery tasks for embedding ingestion and detection persistence.
+- **Infrastructure** — pgvector store, Postgres repositories, GCS uploader, async logger, Prometheus metrics.
 
-**Commands** (Backend → AI Service):
-- `CreateEmbedding`: Add user face embeddings
-- `UpdateEmbedding`: Update user face embeddings
-- `DeleteEmbedding`: Remove user embeddings
-- `ConfigureCamera`: Update camera settings
-- `StartCamera` / `StopCamera`: Control camera processing
+### Communication summary
 
-**Events** (AI Service → Backend):
-- `AttendanceRecorded`: User check-in/out detected
-- `ActivityDetected`: Activity (phone, sleeping) detected
-- `UnrecognizedFaceSaved`: Unknown person detected
-- `UserLocationUpdated`: User location changed
+- **Commands** (Backend → AI): `CreateEmbedding`, `UpdateEmbedding`, `DeleteEmbedding`, `ConfigureCamera`, `StartCamera` / `StopCamera`, `CaptureFrame`, `CalibrateCamera`.
+- **Events** (AI → Backend): `AttendanceRecorded`, `ActivityDetected`, `UnrecognizedFaceSaved`, `UserLocationUpdated`, `EmbeddingCreated` / `EmbeddingFailed`, `FrameCaptured`, `SystemMetrics` / `SystemAlert`.
 
-### Data Flow
-
-1. **Embedding Creation**:
-   ```
-   Backend uploads user images → Redis Stream command →
-   Celery Worker downloads images → InsightFace generates embeddings →
-   Store in pgvector → Publish success event → Backend notified
-   ```
-
-2. **Real-time Detection**:
-   ```
-   Camera stream → Person detection (YOLO) →
-   Face detection (InsightFace) → Face recognition (pgvector similarity) →
-   Attendance logging → Event published to Backend
-   ```
+> Component diagrams, sequence diagrams (per-frame loop, embedding creation, attendance, ReID), database ERD, and deployment topology are in **[`docs/SERVICE_ARCHITECTURE.md`](docs/SERVICE_ARCHITECTURE.md)**.
 
 ---
 
-## API Reference
+## compose.sh CLI
 
-### compose.sh Commands
+A thin wrapper around `docker compose` for common operations:
 
 ```bash
 ./compose.sh build           # Build Docker images
