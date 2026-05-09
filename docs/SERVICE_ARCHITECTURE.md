@@ -21,7 +21,7 @@
 The AI Service is a Python real-time inference system that:
 
 - Pulls RTSP frames from N cameras
-- Detects persons (YOLO), tracks them (ByteTrack), recognizes faces (InsightFace ArcFace)
+- Detects persons (YOLO), tracks them (BoT-SORT, with ByteTrack/OC-SORT as alternates), recognizes faces (InsightFace ArcFace)
 - Re-identifies persons across cameras using body embeddings (OSNet ReID)
 - Optionally classifies activities via a local Ollama LLM (Gemma 3:4b)
 - Persists embeddings/attendance/activity rows to PostgreSQL + pgvector
@@ -66,7 +66,7 @@ graph TB
         mf["ModelFactory<br/>face_detection/model_factory.py"]
         det["PersonDetector (YOLO)"]
         face["FaceRecognition (ArcFace)"]
-        track["ByteTrack tracker"]
+        track["BoT-SORT tracker<br/>(default; ByteTrack/OC-SORT alt)"]
         gtm["GlobalTrackManager<br/>person_tracking/global_track.py"]
         action["ActionRecognizer<br/>(Ollama)"]
     end
@@ -127,7 +127,7 @@ graph TB
 |---|---|---|---|
 | **Entry** | `src/main.py` | Lifecycle, signal handling, wiring | `SmartOfficeApp`, `ApplicationLifecycle` |
 | **Pipeline** | `src/pipeline/` | Real-time per-camera processing, GPU batching | `SmartOfficeEngine`, `CameraWorker`, `GPUInferenceWorker` |
-| **Domain** | `src/domain/` | ML models & tracking logic | `ModelFactory`, `PersonDetector`, `FaceRecognition`, `Tracker`, `GlobalTrackManager`, `ActionRecognizer` |
+| **Domain** | `src/domain/` | ML models & tracking logic | `ModelFactory`, `PersonDetector`, `FaceRecognition`, `Tracker` (BoT-SORT), `GlobalTrackManager`, `ActionRecognizer` |
 | **Messaging** | `src/messaging/` | Redis Streams (commands) & Pub/Sub (events) | `StreamConsumer`, `Publisher`, channel/event types |
 | **Workers** | `src/workers/` | Async Celery tasks (embeddings, detections) | `embedding_tasks`, `detection_tasks` |
 | **Infrastructure** | `src/infrastructure/` | DB, vector store, GCS, logging, metrics | `Repository`, `DetectionRepository`, `pgvector`, `GcsClient`, `EntryLogger`, `AsyncLogger`, `MetricsServer` |
@@ -227,7 +227,7 @@ sequenceDiagram
     participant Cam as RTSP Camera
     participant CW as CameraWorker
     participant GW as GPUInferenceWorker
-    participant Trk as ByteTrack
+    participant Trk as BoT-SORT
     participant GTM as GlobalTrackManager
     participant EL as EntryLogger
     participant AL as AsyncLogger
@@ -515,7 +515,7 @@ sequenceDiagram
 | **Ollama** | `gemma3:4b` | Activity classification |
 | **InsightFace** | `buffalo_l` (RetinaFace + ArcFace) | Face detection & 512-d embeddings |
 | **Ultralytics YOLO** | `yolo26` / `yolov8` | Person detection |
-| **ByteTrack** | bundled | Per-camera tracking |
+| **BoT-SORT** (via `boxmot`) | default | Per-camera tracking; ByteTrack & OC-SORT selectable via `tracker_type` |
 | **OSNet** | `x0_25` | Body ReID for cross-camera matching |
 | **OpenCV** | `opencv-python-headless` | RTSP, image ops |
 | **Prometheus client** | — | `/metrics` on port 8765 |
