@@ -356,6 +356,49 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing CalibrationFailed: camera {camera_id}")
         return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
 
+    def publish_homography_computed(
+        self,
+        command_id,
+        camera_id,
+        homography_matrix,
+        reprojection_error,
+        per_point_errors,
+        method,
+        inlier_mask=None,
+    ):
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['HOMOGRAPHY_COMPUTED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'homography_matrix': homography_matrix,
+            'reprojection_error': reprojection_error,
+            'per_point_errors': per_point_errors,
+            'method': method,
+        }
+        if inlier_mask is not None:
+            event['inlier_mask'] = inlier_mask
+        logger.info(
+            f"[Events] Publishing HomographyComputed: camera {camera_id}, "
+            f"err={reprojection_error:.3f}, method={method}"
+        )
+        return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+
+    def publish_homography_failed(self, command_id, camera_id, error):
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['HOMOGRAPHY_FAILED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'error': error,
+        }
+        logger.info(f"[Events] Publishing HomographyFailed: camera {camera_id}: {error}")
+        return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+
     def publish_test_calibration_complete(self, command_id, camera_id, image_url):
         event = {
             'event_id': self._generate_message_id(),

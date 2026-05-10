@@ -425,6 +425,7 @@ erDiagram
 | `StartCamera` / `StopCamera` | `{camera_id}` |
 | `CaptureFrame` | `{camera_id}` |
 | `CalibrateCamera` / `TestCalibration` | `{camera_id, params}` |
+| `ComputeHomography` | `{camera_id, src_pts[][], dst_pts[][]}` |
 
 #### Events — Pub/Sub (AI → Backend, ephemeral)
 
@@ -438,6 +439,8 @@ erDiagram
 | `UserLocationUpdated` | `{user_id, camera_id, ts}` |
 | `EmbeddingCreated` / `EmbeddingFailed` | `{user_id, error?}` |
 | `FrameCaptured` / `CalibrationComplete` | `{camera_id, image_url|params}` |
+| `HomographyComputed` | `{camera_id, homography_matrix[3][3], reprojection_error, per_point_errors[], method, inlier_mask?[]}` |
+| `HomographyFailed` | `{camera_id, error}` |
 | `SystemMetrics` / `SystemAlert` | `{metric, value}` |
 
 #### Internal channels

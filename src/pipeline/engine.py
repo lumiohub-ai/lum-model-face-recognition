@@ -594,6 +594,58 @@ class SmartOfficeEngine:
                 error=str(e),
             )
 
+    def compute_homography(
+        self,
+        camera_id: int,
+        command_id: str,
+        src_pts: list,
+        dst_pts: list,
+    ) -> None:
+        """Solve a 3x3 image→floor homography from matched point pairs.
+
+        Non-blocking — spawns a daemon thread. Publishes HomographyComputed or
+        HomographyFailed when done.
+        """
+        threading.Thread(
+            target=self._do_compute_homography,
+            args=(camera_id, command_id, src_pts, dst_pts),
+            daemon=True,
+            name=f"homography-{camera_id}",
+        ).start()
+
+    def _do_compute_homography(
+        self,
+        camera_id: int,
+        command_id: str,
+        src_pts: list,
+        dst_pts: list,
+    ) -> None:
+        from domain.calibration.homography import compute_homography
+        from messaging.publisher import MDAPublisher
+
+        publisher = MDAPublisher(self.client_slug)
+
+        try:
+            result = compute_homography(src_pts, dst_pts)
+            publisher.publish_homography_computed(
+                command_id=command_id,
+                camera_id=camera_id,
+                homography_matrix=result["homography_matrix"],
+                reprojection_error=result["reprojection_error"],
+                per_point_errors=result["per_point_errors"],
+                method=result["method"],
+                inlier_mask=result["inlier_mask"],
+            )
+            logger.info(
+                f"ComputeHomography complete: camera={camera_id}, command={command_id}, "
+                f"err={result['reprojection_error']:.3f}, method={result['method']}"
+            )
+        except ValueError as e:
+            publisher.publish_homography_failed(command_id, camera_id, str(e))
+        except Exception as e:
+            logger.exception(f"compute_homography failed for camera {camera_id}: {e}")
+            publisher.publish_homography_failed(command_id, camera_id, str(e))
+
     # ── Metrics reporting ─────────────────────────────────────────────────────
 
     def _report_metrics(self) -> None:
