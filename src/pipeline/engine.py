@@ -105,6 +105,13 @@ class SmartOfficeEngine:
         else:
             self._annotator = None
 
+        # Homography registry + calibration subscriber (Phase 2: floor positions)
+        from domain.calibration.homography_registry import HomographyRegistry
+        from messaging.calibration_subscriber import CalibrationSubscriber
+        self.homography_registry = HomographyRegistry()
+        self._calibration_subscriber = CalibrationSubscriber(self.homography_registry)
+        self._calibration_subscriber.start()
+
         # Initialize per-camera engines (CPU-only components)
         self.camera_engines = self._init_camera_engines()
 
@@ -181,6 +188,7 @@ class SmartOfficeEngine:
                 name_to_id_map=self.name_to_id_map,
                 global_track_manager=self.models.global_track_manager,
                 action_recognizer=self.models.action_recognizer,
+                homography_registry=self.homography_registry,
             )
             engines.append(engine)
         return engines
@@ -627,14 +635,14 @@ class SmartOfficeEngine:
 
         try:
             result = compute_homography(src_pts, dst_pts)
-            publisher.publish_homography_computed(
+            publisher.publish_homography_calibrated(
                 command_id=command_id,
                 camera_id=camera_id,
+                src_pts=src_pts,
+                dst_pts=dst_pts,
                 homography_matrix=result["homography_matrix"],
                 reprojection_error=result["reprojection_error"],
                 per_point_errors=result["per_point_errors"],
-                method=result["method"],
-                inlier_mask=result["inlier_mask"],
             )
             logger.info(
                 f"ComputeHomography complete: camera={camera_id}, command={command_id}, "

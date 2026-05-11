@@ -436,12 +436,17 @@ erDiagram
 | `AttendanceRecorded` | `{user_id, camera_id, status, ts, proof_url}` |
 | `UnrecognizedFaceSaved` | `{camera_id, ts, image_url}` |
 | `ActivityDetected` | `{user_id, camera_id, activity_type, ts}` |
-| `UserLocationUpdated` | `{user_id, camera_id, ts}` |
+| `UserLocationUpdated` (entry/exit) | `{user_id, user_name, camera_id, camera_name, status, updated_at}` |
+| `UserLocationUpdated` (position) | `{camera_id, map_id, track_id, user_id, user_name, position: {x, y}}` — high-rate (~5Hz/track) floor-plan position; consumers distinguish from the entry/exit variant by presence of `position` |
 | `EmbeddingCreated` / `EmbeddingFailed` | `{user_id, error?}` |
 | `FrameCaptured` / `CalibrationComplete` | `{camera_id, image_url|params}` |
-| `HomographyComputed` | `{camera_id, homography_matrix[3][3], reprojection_error, per_point_errors[], method, inlier_mask?[]}` |
+| `HomographyCalibrated` | `{camera_id, src_pts: "JSON", dst_pts: "JSON", homography_matrix: "JSON", calibration_error: "JSON"}` — the four complex fields are JSON-encoded strings (backend does `JSON.parse(event.<field>)`); `calibration_error` decodes to `{per_point: [...], mean: float}` |
 | `HomographyFailed` | `{camera_id, error}` |
 | `SystemMetrics` / `SystemAlert` | `{metric, value}` |
+
+#### Homography cache (Phase 2)
+
+For the real-time position stream, AI keeps a lazy in-memory cache keyed by `(client_slug, camera_id) → (3x3 matrix, map_id)`. On a cache miss it queries `"org_<slug>".camera_map_positions` over the shared Postgres connection (no new env vars; uses the same `SO_POSTGRES_*` as the rest of the service). The cache is invalidated by a small background subscriber on `events:calibration` whenever a `HomographyCalibrated` event arrives — DB is the single source of truth, so the next emit re-queries.
 
 #### Internal channels
 

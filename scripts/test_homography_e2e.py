@@ -82,15 +82,15 @@ def main() -> int:
         f"reprojection_error={result['reprojection_error']:.6f}"
     )
 
-    print(f"[2/3] publishing HomographyComputed to {CHANNEL} ...")
-    publisher.publish_homography_computed(
+    print(f"[2/3] publishing HomographyCalibrated to {CHANNEL} ...")
+    publisher.publish_homography_calibrated(
         command_id=COMMAND_ID,
         camera_id=CAMERA_ID,
+        src_pts=src_pts,
+        dst_pts=dst_pts,
         homography_matrix=result["homography_matrix"],
         reprojection_error=result["reprojection_error"],
         per_point_errors=result["per_point_errors"],
-        method=result["method"],
-        inlier_mask=result["inlier_mask"],
     )
 
     print(f"[3/3] publishing HomographyFailed to {CHANNEL} ...")
@@ -109,24 +109,29 @@ def main() -> int:
         return 1
 
     success_evt = next(
-        (e for e in events if e.get("event_type") == "HomographyComputed"), None
+        (e for e in events if e.get("event_type") == "HomographyCalibrated"), None
     )
     failure_evt = next(
         (e for e in events if e.get("event_type") == "HomographyFailed"), None
     )
 
-    assert success_evt is not None, "missing HomographyComputed"
+    assert success_evt is not None, "missing HomographyCalibrated"
     assert failure_evt is not None, "missing HomographyFailed"
     assert success_evt["camera_id"] == CAMERA_ID
     assert success_evt["command_id"] == COMMAND_ID
-    assert len(success_evt["homography_matrix"]) == 3
-    assert len(success_evt["homography_matrix"][0]) == 3
-    assert success_evt["reprojection_error"] < 1e-3
-    assert success_evt["method"] == "DLT"
-    assert "inlier_mask" not in success_evt  # DLT path
+    # Contract: the four complex fields are JSON-encoded strings
+    H_decoded = json.loads(success_evt["homography_matrix"])
+    err_decoded = json.loads(success_evt["calibration_error"])
+    src_echoed = json.loads(success_evt["src_pts"])
+    dst_echoed = json.loads(success_evt["dst_pts"])
+    assert len(H_decoded) == 3 and len(H_decoded[0]) == 3
+    assert err_decoded["mean"] < 1e-3
+    assert len(err_decoded["per_point"]) == len(src_pts)
+    assert src_echoed == src_pts
+    assert dst_echoed == dst_pts
     assert failure_evt["error"] == "synthetic failure for smoke test"
 
-    H_recovered = np.array(success_evt["homography_matrix"])
+    H_recovered = np.array(H_decoded)
     H_recovered_norm = H_recovered / H_recovered[2, 2]
     H_true_norm = H_true / H_true[2, 2]
     np.testing.assert_allclose(H_recovered_norm, H_true_norm, atol=1e-4)
