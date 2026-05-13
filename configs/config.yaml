@@ -3,12 +3,12 @@
 
 # Video settings
 show: false  # Display video output (disable for Docker/headless)
-save_video: false  # Save annotated video output to disk
+save_video: true  # Save annotated video output to disk
 output_dir: "volumes/storage/person-tracking"  # Directory for outputs
-
+use_api_for_cameras: true
 # Recognition settings
 match_threshold: 0.3  # Face similarity threshold for matching
-person_detection_threshold: 0.45  # Person detection confidence threshold (0.0-1.0)
+person_detection_threshold: 0.3  # Person detection confidence threshold (0.0-1.0)
 person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
 
 # Feature flags
@@ -18,30 +18,55 @@ face_detection_padding: 20.0  # Padding % around detected faces for better recog
 # Action Recognition settings (Activity tracking via Ollama)
 action_recognition:
   enabled: true  # Enable action recognition
-  check_interval_seconds: 60  # Check each person every N seconds
+  check_interval_seconds: 20  # Check each person every N seconds
   max_queue_size: 50  # Maximum queued inference requests
   async_workers: 1  # Number of background worker threads for inference
   inference_timeout: 30  # Timeout for Ollama API calls in seconds (prevents blocking on slow/hung inference)
   # Supported actions with backend mapping and descriptions for VLM prompt
   actions:
-    sleeping:
-      backend_type: sleeping
-      description: "head resting on desk, leaning back with eyes closed, or slumped over"
-    using phone:
+#    looking_at_product:
+ #     backend_type: product_interest
+  #    description: "standing near shelves or displays, looking at products, comparing items, or visually inspecting merchandise"
+
+   # picking_up_product:
+    #  backend_type: product_pickup
+     # description: "reaching for, holding, taking, or lifting a product from a shelf, rack, counter, or display"
+
+    #returning_product:
+     # backend_type: product_return
+      #description: "placing an item back onto a shelf, rack, counter, basket, or display area"
+
+    using_phone:
       backend_type: phone_usage
-      description: "holding a phone, looking down at a device in hand"
-    working with computer:
-      backend_type: working
-      description: "sitting at a desk facing a screen or typing"
-    talking with someone:
-      backend_type: talking
-      description: "facing another person, gesturing, or in conversation"
-    not_focusing:
-      backend_type: not_focusing
-      description: "distracted, looking away from work, wandering attention"
+      description: "holding a phone, looking at a phone screen, typing, scrolling, browsing, texting, or using a mobile device without clear calling behavior"
+
+    phone_calling:
+      backend_type: phone_calling
+      description: "holding a phone near the ear or mouth, speaking into a phone, appearing to make or receive a phone call, or using speakerphone/voice call behavior"
+
+    #talking_with_staff_or_customer:
+     # backend_type: talking
+      #description: "facing another person, gesturing, asking questions, receiving help, or having a conversation in the store"
+
+    #waiting_in_queue:
+     # backend_type: queue_waiting
+      #description: "standing in line near checkout, reception, counter, cashier area, or service desk while waiting"
+
+    browsing:
+      backend_type: browsing
+      description: "walking slowly through aisles, scanning shelves, looking around displays, or exploring products without taking a specific item"
+
+    entering_store:
+      backend_type: entering
+      description: "walking into the store, reception area, entrance zone, or customer-facing area from outside"
+
+    leaving_store:
+      backend_type: leaving
+      description: "walking out of the store, reception area, entrance zone, or customer-facing area toward the exit"
+
     idle:
       backend_type: unknown
-      description: "standing still, sitting without doing anything specific, looking around"
+      description: "standing still, sitting, waiting, or looking around without a clear retail action"
 
 # Parallel multi-camera pipeline settings
 pipeline:
@@ -51,6 +76,6 @@ pipeline:
 
 # Monitoring & alerting thresholds
 monitoring:
-  fps_alert_threshold: 15.0    # alert if any camera FPS drops below this
+  fps_alert_threshold: 1.0     # alert if any camera FPS drops below this (low: 8 cameras share GPU)
   gpu_mem_threshold: 90.0      # alert if GPU VRAM usage exceeds this %
   ram_threshold: 90.0          # alert if system RAM usage exceeds this %

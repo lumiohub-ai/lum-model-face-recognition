@@ -53,11 +53,13 @@ services:
         condition: service_healthy
     volumes:
       - ./.env:/app/.env:ro
+      - ./configs:/app/configs:ro
       - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
       - ./credentials:/app/credentials
       - ./volumes/models/insightface:/root/.insightface
       - ./volumes/models/huggingface:/root/.cache/huggingface
       - ./volumes/models/weights:/app/volumes/models/weights
+      - ${SO_ENROLLMENT_PHOTOS_DIR:-./enrollment_photos}:/app/enrollment_photos:ro
     networks:
       - person-tracking-network
     ports:
@@ -106,7 +108,7 @@ services:
       - "host.docker.internal:host-gateway"
     command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
     healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -136,3 +138,5 @@ volumes:
 networks:
   person-tracking-network:
     driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "${SO_NETWORK_MTU:-1500}"

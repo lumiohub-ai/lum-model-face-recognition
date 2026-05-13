@@ -83,6 +83,9 @@ volumes/
 weights/
 *.weights
 
+# Pre-downloaded pip wheels (intentionally included in build context)
+!wheels/
+
 # Local config (use .env.example instead)
 .env
 .env.local

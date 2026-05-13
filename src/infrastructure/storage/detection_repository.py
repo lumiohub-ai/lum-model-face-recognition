@@ -36,6 +36,8 @@ class DetectionRepository:
         timestamp: datetime,
         status: str,
         proof_image_url: Optional[str] = None,
+        gender: Optional[str] = None,
+        age: Optional[int] = None,
     ) -> int:
         """Insert an attendance record.
 
@@ -46,8 +48,8 @@ class DetectionRepository:
         with self._db.get_connection() as conn:
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.attendance_records
-                (external_id, user_id, camera_id, timestamp, status, proof_image_url, source)
-                VALUES (:external_id, :user_id, :camera_id, :timestamp, :status, :proof_image_url, :source)
+                (external_id, user_id, camera_id, timestamp, status, proof_image_url, source, gender, age)
+                VALUES (:external_id, :user_id, :camera_id, :timestamp, :status, :proof_image_url, :source, :gender, :age)
                 RETURNING id
             """), {
                 'external_id': external_id,
@@ -57,6 +59,8 @@ class DetectionRepository:
                 'status': status.lower(),
                 'proof_image_url': proof_image_url,
                 'source': 'ai_detection',
+                'gender': gender,
+                'age': age,
             })
             conn.commit()
             row = result.fetchone()
@@ -70,6 +74,8 @@ class DetectionRepository:
         status: Optional[str],
         image_url: Optional[str] = None,
         notes: Optional[str] = None,
+        gender: Optional[str] = None,
+        age: Optional[int] = None,
     ) -> int:
         """Insert an unrecognized face record.
 
@@ -83,8 +89,8 @@ class DetectionRepository:
         with self._db.get_connection() as conn:
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.unrecognized_faces
-                (detection_time, status, user_status, image_url, notes, created_at, updated_at)
-                VALUES (:detection_time, :status, :user_status, :image_url, :notes, :created_at, :updated_at)
+                (detection_time, status, user_status, image_url, notes, created_at, updated_at, gender, age)
+                VALUES (:detection_time, :status, :user_status, :image_url, :notes, :created_at, :updated_at, :gender, :age)
                 RETURNING id
             """), {
                 'detection_time': timestamp,
@@ -94,6 +100,8 @@ class DetectionRepository:
                 'notes': full_notes or None,
                 'created_at': timestamp,
                 'updated_at': timestamp,
+                'gender': gender,
+                'age': age,
             })
             conn.commit()
             row = result.fetchone()
@@ -236,7 +244,7 @@ class DetectionRepository:
                 'user_id': user_id,
                 'camera_id': camera_id,
                 'detected_at': timestamp,
-                'status': status.lower(),
+                'status': {'general': 'in', 'entrance': 'in', 'exit': 'out'}.get(status.lower(), 'in'),
                 'updated_at': timestamp,
             })
             conn.commit()

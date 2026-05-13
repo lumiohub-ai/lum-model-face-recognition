@@ -213,6 +213,10 @@ class EmbeddingSyncService:
             user_id = str(user.get('id'))
             image_dicts = self._to_image_dicts(user.get('image_urls', []))
             if not image_dicts:
+                logger.warning(
+                    f"⚠️  User '{user.get('full_name')}' ({user_id}) has no images — "
+                    f"cannot create embedding. Add a photo in the backend."
+                )
                 continue
 
             if user_id not in existing_images:

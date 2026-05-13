@@ -39,6 +39,7 @@ class StreamManager:
         self._initialized = False
         self._last_write_time: List[float] = []
         self._write_interval: float = 1.0 / 20
+        self._writer_paths: List[Optional[str]] = []
 
     def init_streams(self) -> List[StreamHandler]:
         """Initialize stream handlers for all cameras.
@@ -70,6 +71,7 @@ class StreamManager:
             List of VideoWriter objects (or None for failed writers)
         """
         self.video_writers = []
+        self._writer_paths = []
 
         now = datetime.now()
         date = now.strftime("%Y%m%d")
@@ -111,6 +113,7 @@ class StreamManager:
 
             writer = self._create_video_writer(filename, w, h, fps)
             self.video_writers.append(writer)
+            self._writer_paths.append(filename if writer is not None else None)
             self._last_write_time.append(0.0)
 
         self._write_interval = 1.0 / (fps if fps > 0 else 20)
@@ -137,26 +140,23 @@ class StreamManager:
         try:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             writer = cv2.VideoWriter(filename, fourcc, fps, (width, height))
-
             if writer.isOpened():
                 logger.info(f"Video writer initialized: {filename} ({width}x{height} @ {fps}fps) [mp4v]")
                 return writer
-            else:
-                writer.release()
-                logger.error(f"Failed to open video writer: {filename}")
-                return None
+            writer.release()
+            logger.error(f"Failed to open video writer: {filename}")
+            return None
         except Exception as e:
             logger.exception(f"Exception initializing video writer: {filename} - {e}")
             return None
 
     def start_streams(self) -> None:
-        """Start all non-video file streams (RTSP, webcam)."""
+        """Start background threads for all streams (video files and live streams)."""
         if not self._initialized:
             self.init_streams()
 
         for stream in self.streams:
-            if not stream.is_video:
-                stream.start()
+            stream.start()
 
         logger.info("Started video streams")
 
@@ -214,13 +214,27 @@ class StreamManager:
             if writer is not None:
                 writer.release()
         self.video_writers = []
+        self._writer_paths = []
         logger.info("Released all video writers")
+
+    def snapshot_frame(self, camera_id: int) -> Optional[np.ndarray]:
+        """Return a clean representative frame for Virtual Line / ROI configuration.
+
+        For video files this opens a temporary independent VideoCapture seeked to 10%
+        into the video, avoiding black/transition frames at the start and any race with
+        the pipeline reader.  For live streams it returns the latest buffered frame.
+        """
+        for i, config in enumerate(self.camera_configs):
+            if config.get('camera_id') == camera_id and i < len(self.streams):
+                return self.streams[i].snapshot()
+        return None
 
     def get_frame(self, camera_id: int) -> Optional[np.ndarray]:
         """Return the latest frame for a specific camera without blocking the pipeline.
 
-        Reads directly from the StreamHandler's background thread buffer.
-        Does not start a new RTSP connection.
+        Reads directly from the StreamHandler's frame buffer — thread-safe for both
+        video files and live streams. Does not call cap.read() to avoid racing with
+        the main pipeline loop.
 
         Args:
             camera_id: The camera ID to capture from
@@ -230,8 +244,12 @@ class StreamManager:
         """
         for i, config in enumerate(self.camera_configs):
             if config.get('camera_id') == camera_id and i < len(self.streams):
-                _, frame = self.streams[i].read()
-                return frame
+                stream = self.streams[i]
+                with stream.lock:
+                    # latest_frame is populated by the background thread (live) or
+                    # by read() on each pipeline iteration (video file). Fall back to
+                    # the initial frame captured during StreamHandler.__init__.
+                    return stream.latest_frame if stream.latest_frame is not None else stream.frame
         return None
 
     def cleanup(self) -> None:

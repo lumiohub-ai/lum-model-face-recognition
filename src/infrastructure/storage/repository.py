@@ -129,21 +129,25 @@ class Repository:
                 # Base query
                 query = f"""
                     SELECT id, name, stream_url, camera_type, application,
-                           matching_threshold, virtual_line_points, roi_points, status
+                           matching_threshold, virtual_line_points, virtual_lines,
+                           roi_points, status
                     FROM {self.schema}.cameras
+                    WHERE stream_url IS NOT NULL AND stream_url != ''
                 """
 
                 result = conn.execute(text(query))
                 cameras = []
 
-                for row in result.fetchall():
-                    # JSONB may arrive as a raw JSON string depending on the driver version
-                    cam_apps = row[4]
-                    if isinstance(cam_apps, str):
+                def _parse_jsonb(value):
+                    if isinstance(value, str):
                         try:
-                            cam_apps = json.loads(cam_apps)
+                            return json.loads(value)
                         except (json.JSONDecodeError, ValueError):
-                            pass
+                            return None
+                    return value
+
+                for row in result.fetchall():
+                    cam_apps = _parse_jsonb(row[4])
 
                     camera = {
                         'id': row[0],
@@ -152,9 +156,10 @@ class Repository:
                         'camera_type': row[3],
                         'application': cam_apps,
                         'matching_threshold': row[5],
-                        'virtual_line_points': row[6],
-                        'roi_points': row[7],
-                        'status': row[8],
+                        'virtual_line_points': _parse_jsonb(row[6]),
+                        'virtual_lines': _parse_jsonb(row[7]) or [],
+                        'roi_points': _parse_jsonb(row[8]),
+                        'status': row[9],
                     }
 
                     # Filter by application if specified

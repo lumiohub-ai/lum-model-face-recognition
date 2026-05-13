@@ -86,7 +86,9 @@ class EntryLogger:
         appear_time: datetime,
         camera_name: str = "Unknown",
         camera_id: Optional[int] = None,
-        proof_image: Optional[np.ndarray] = None
+        proof_image: Optional[np.ndarray] = None,
+        gender: Optional[str] = None,
+        age: Optional[int] = None,
     ) -> bool:
         """Log a person's entry or exit."""
         previous_status = self.person_status.get(name)
@@ -111,7 +113,7 @@ class EntryLogger:
 
         # Send attendance data (production mode)
         if self.args.production:
-            self._send_attendance(name, status, camera_id, camera_name, proof_image)
+            self._send_attendance(name, status, camera_id, camera_name, proof_image, gender, age)
 
         self._log_status_to_console(name, status, today_time)
         self.recent_entries.appendleft(f"{name} - {status} @ {today_time}")
@@ -136,7 +138,9 @@ class EntryLogger:
         status: str,
         camera_id: Optional[int],
         camera_name: Optional[str],
-        proof_image: Optional[np.ndarray]
+        proof_image: Optional[np.ndarray],
+        gender: Optional[str] = None,
+        age: Optional[int] = None,
     ) -> None:
         """Send attendance record via Celery task."""
         user_id = next((int(i['id']) for i in self.name_to_id if i['name'] == name), None)
@@ -157,15 +161,18 @@ class EntryLogger:
 
         try:
             from workers.detection_tasks import task_record_attendance
+            in_out = {'general': 'in', 'entrance': 'in', 'exit': 'out'}.get(status.lower(), 'in')
             task_record_attendance.delay(
                 client_slug=self.client_slug,
                 user_id=user_id,
                 user_name=name,
-                status=status,
+                status=in_out,
                 camera_id=camera_id,
                 camera_name=camera_name,
                 proof_image_url=proof_image_url,
-                recorded_at=timestamp
+                recorded_at=timestamp,
+                gender=gender,
+                age=age,
             )
             logger.debug(f"[Celery] Queued attendance: {name} {status}")
         except Exception as e:
@@ -203,7 +210,9 @@ class EntryLogger:
         face: np.ndarray,
         status: str,
         camera_id: Optional[int] = None,
-        camera_name: Optional[str] = None
+        camera_name: Optional[str] = None,
+        gender: Optional[str] = None,
+        age: Optional[int] = None,
     ) -> bool:
         """Send unrecognized face via Celery task."""
         # Upload face image to GCS
@@ -226,7 +235,9 @@ class EntryLogger:
                 camera_name=camera_name,
                 status=status,
                 image_url=image_url,
-                detected_at=timestamp
+                detected_at=timestamp,
+                gender=gender,
+                age=age,
             )
             logger.debug(f"[Celery] Queued unrecognized face from camera {camera_id}")
             return True

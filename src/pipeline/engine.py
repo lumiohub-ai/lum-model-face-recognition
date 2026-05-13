@@ -253,10 +253,12 @@ class SmartOfficeEngine:
 
         pipeline_cfg = self.config.get("pipeline", {})
         metrics_interval: float = float(pipeline_cfg.get("metrics_interval", 30))
+        embedding_sync_interval: float = float(pipeline_cfg.get("embedding_sync_interval", 120))
 
         last_validation_time = time.time()
         validation_interval = 30.0
         last_metrics_time = time.time()
+        last_embedding_sync_time = time.time()
 
         try:
             while self._running:
@@ -274,6 +276,11 @@ class SmartOfficeEngine:
                 if self._metrics_enabled and current_time - last_metrics_time >= metrics_interval:
                     self._report_metrics()
                     last_metrics_time = current_time
+
+                # Periodic embedding sync — catches new users even if Celery/Pub-Sub fails
+                if current_time - last_embedding_sync_time >= embedding_sync_interval:
+                    self._sync_embeddings_periodic()
+                    last_embedding_sync_time = current_time
 
         except Exception as e:
             logger.exception(f"SmartOfficeEngine error: {e}")
@@ -308,15 +315,20 @@ class SmartOfficeEngine:
                     for i, old_config in enumerate(self.camera_configs):
                         if old_config.get("camera_id") == new_config.get("camera_id"):
                             self.camera_configs[i] = new_config
+                            new_vl = new_config.get("virtual_lines", [])
                             for engine in self.camera_engines:
                                 if engine.camera_id == new_config.get("camera_id"):
                                     engine.application = new_config.get(
                                         "application", ["attendance"]
                                     )
-                                    logger.info(
-                                        f"Updated camera {engine.camera_id} "
-                                        f"applications: {engine.application}"
-                                    )
+                            for worker in self.camera_workers:
+                                if worker.camera_config.get("camera_id") == new_config.get("camera_id"):
+                                    worker.virtual_lines = new_vl
+                                    worker._rebuild_line_states(new_vl)
+                            logger.info(
+                                f"Updated camera {new_config.get('camera_id')} "
+                                f"virtual_lines: {len(new_vl)} line(s)"
+                            )
                             break
                 logger.info(
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
@@ -384,7 +396,7 @@ class SmartOfficeEngine:
     def _do_capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
         """Background: grab latest frame → upload to GCS → save to DB → publish event."""
         try:
-            frame = self.stream_manager.get_frame(camera_id)
+            frame = self.stream_manager.snapshot_frame(camera_id)
             if frame is None:
                 logger.warning(f"capture_frame: no frame for camera {camera_id}")
                 return
@@ -407,7 +419,10 @@ class SmartOfficeEngine:
                 frame_index=frame_index,
                 captured_at=datetime.utcnow(),
             )
-            logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}, frame_index={frame_index}")
+            if record_id:
+                logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}, frame_index={frame_index}")
+            else:
+                logger.error(f"Calibration frame DB save failed for camera={camera_id} — FrameCaptured event will still be published")
 
             from messaging.publisher import MDAPublisher
             MDAPublisher(self.client_slug).publish_frame_captured(
@@ -668,6 +683,25 @@ class SmartOfficeEngine:
 
         self._log_final_stats()
         logger.info("SmartOfficeEngine shutdown complete")
+
+    def _sync_embeddings_periodic(self) -> None:
+        """Periodic safety-net sync: picks up new users missed by Celery/Pub-Sub."""
+        try:
+            sync_service = EmbeddingSyncService(
+                client_slug=self.client_slug,
+                gpu_id=0,
+                config=self.config,
+                detector=self.models.face_detector,
+                store=self.models.face_recognizer.pgvector_store,
+            )
+            result = sync_service.sync_missing_embeddings()
+            if result.get("success") and result.get("embeddings_added", 0) > 0:
+                logger.info(
+                    f"Periodic sync added {result['embeddings_added']} embeddings — reloading"
+                )
+                self.reload_embeddings()
+        except Exception as e:
+            logger.warning(f"Periodic embedding sync failed: {e}")
 
     def _sync_embeddings_on_startup(self) -> bool:
         try:

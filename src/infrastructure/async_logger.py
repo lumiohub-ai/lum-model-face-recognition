@@ -153,6 +153,9 @@ class AsyncLogger:
         recognized = entry.get("recognized", False)
         face_image = entry.get("face_image")
 
+        gender = entry.get("gender")
+        age = entry.get("age")
+
         if recognized and name:
             recorded = self._entry_logger.log_person_entry(
                 name=name,
@@ -161,6 +164,8 @@ class AsyncLogger:
                 camera_name=camera_name,
                 camera_id=camera_id,
                 proof_image=proof_image,
+                gender=gender,
+                age=age,
             )
             if recorded:
                 logger.info(
@@ -175,6 +180,8 @@ class AsyncLogger:
                         status=status,
                         camera_id=camera_id,
                         camera_name=camera_name,
+                        gender=gender,
+                        age=age,
                     )
                     logger.info(
                         f"UNRECOGNIZED | Sent face from camera {camera_id} ({status})"

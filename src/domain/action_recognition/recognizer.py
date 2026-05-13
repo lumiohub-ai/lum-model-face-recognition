@@ -297,7 +297,8 @@ class ActionRecognizer:
             logger.warning(f"Ollama API timeout after {self.inference_timeout}s: {e}")
             return None
         except Exception as e:
-            logger.exception(f"Ollama API error: {e}")
+            self.total_api_errors += 1
+            logger.warning(f"Ollama API error: {type(e).__name__}: {e}")
             return None
 
     def _parse_action_response(self, raw_output: str) -> Optional[str]:

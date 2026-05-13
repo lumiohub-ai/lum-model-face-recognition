@@ -387,8 +387,7 @@ class ImageFetcher:
             str: Public URL of uploaded image, or None if failed
         """
         if not self.gcs_client:
-            logger.warning("GCS client not initialized, cannot upload image")
-            return None
+            return self._upload_image_locally(image, prefix, client_slug)
 
         try:
             # Generate unique filename with timestamp
@@ -431,6 +430,41 @@ class ImageFetcher:
 
         except Exception as e:
             logger.exception(f"Failed to upload image to GCS: {e}")
+            return None
+
+    def _upload_image_locally(
+        self,
+        image: np.ndarray,
+        prefix: str = "unrecognized_faces",
+        client_slug: Optional[str] = None
+    ) -> Optional[str]:
+        """Save image to local disk and return an HTTP URL served by the metrics server."""
+        try:
+            if image is None or image.size == 0:
+                return None
+
+            local_dir = os.environ.get(
+                "SO_LOCAL_IMAGE_DIR",
+                "/app/volumes/storage/person-tracking/images"
+            )
+            os.makedirs(local_dir, exist_ok=True)
+
+            now = datetime.now()
+            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            filename = f"{timestamp}_{unique_id}.jpg"
+
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(image_rgb)
+            pil_image.save(os.path.join(local_dir, filename), format="JPEG", quality=85)
+
+            host = os.environ.get("SO_LOCAL_IMAGE_HOST", "localhost")
+            port = os.environ.get("SO_METRICS_PORT", "8765")
+            url = f"http://{host}:{port}/images/{filename}"
+            logger.info(f"Saved image locally: {url}")
+            return url
+        except Exception as e:
+            logger.exception(f"Failed to save image locally: {e}")
             return None
 
 

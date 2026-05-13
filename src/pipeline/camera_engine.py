@@ -9,6 +9,7 @@ This module handles per-camera processing including:
 
 import threading
 import time
+from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -101,7 +102,7 @@ class CameraEngine:
         self.match_threshold = camera_config.get('match_threshold', 0.3)
         self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
         self.roi = camera_config.get('roi')
-        self.line_points = camera_config.get('line_points')
+        self.virtual_lines = camera_config.get('virtual_lines', [])
 
         # Shared components (models)
         self.face_detector = face_detector
@@ -173,6 +174,9 @@ class CameraEngine:
         # Bounded: old entries pruned in _check_and_queue_action_recognition()
         self.last_action_check_per_identity: Dict[str, float] = {}
         self._max_action_identity_cache = 500
+
+        # Best-scoring gender/age per track from InsightFace genderage model
+        self.track_gender_age: Dict[int, Dict] = {}
 
         # Frame counter
         self.frame_count = 0
@@ -293,6 +297,36 @@ class CameraEngine:
                 track_id=track_id,
             )
 
+            # Accumulate gender/age samples per track; use running average for stable age
+            if face_data.get("face_detected"):
+                gender = face_data.get("gender")
+                age = face_data.get("age")
+                det_score = face_data.get("det_score", 0.0)
+                if gender is not None or age is not None:
+                    current = self.track_gender_age.get(track_id)
+                    if current is None:
+                        self.track_gender_age[track_id] = {
+                            "gender": gender,
+                            "age": age,
+                            "age_samples": [age] if age is not None else [],
+                            "gender_samples": [gender] if gender is not None else [],
+                            "det_score": det_score,
+                        }
+                    else:
+                        if age is not None:
+                            current["age_samples"].append(age)
+                            if len(current["age_samples"]) > 30:
+                                current["age_samples"] = current["age_samples"][-30:]
+                            current["age"] = round(sum(current["age_samples"]) / len(current["age_samples"]))
+                        if gender is not None:
+                            current["gender_samples"].append(gender)
+                            if len(current["gender_samples"]) > 30:
+                                current["gender_samples"] = current["gender_samples"][-30:]
+                            # majority vote for gender
+                            current["gender"] = Counter(current["gender_samples"]).most_common(1)[0][0]
+                        if det_score > current.get("det_score", 0.0):
+                            current["det_score"] = det_score
+
             prev_state = self.state_manager.get_state(track_id)
             identity: Optional[str] = None
             identity_locked = False
@@ -384,6 +418,7 @@ class CameraEngine:
                     )
 
                     proof_image = self._get_best_person_image(track_id)
+                    _ga = self.track_gender_age.get(track_id, {})
                     recognized_persons.append(
                         {
                             "track_id": track_id,
@@ -398,6 +433,8 @@ class CameraEngine:
                             "face_image": face_image,
                             "proof_image": proof_image,
                             "application": self.application,
+                            "gender": _ga.get("gender"),
+                            "age": _ga.get("age"),
                         }
                     )
                 else:
@@ -429,10 +466,10 @@ class CameraEngine:
             )
 
             if (
-                identity_locked
-                and self.action_recognizer
+                self.action_recognizer
                 and self.action_recognizer.enabled
                 and "activity" in self.application
+                and proof_image is not None
             ):
                 self._check_and_queue_action_recognition(
                     track_id=track_id,
@@ -462,6 +499,7 @@ class CameraEngine:
                         global_track_id = self.global_track_manager.get_global_id(
                             self.camera_id, track_id
                         )
+                    _ga = self.track_gender_age.get(track_id, {})
                     recognized_persons.append(
                         {
                             "track_id": track_id,
@@ -475,6 +513,8 @@ class CameraEngine:
                             "status": self.cam_type,
                             "face_image": person_image,
                             "application": self.application,
+                            "gender": _ga.get("gender"),
+                            "age": _ga.get("age"),
                         }
                     )
 
@@ -485,6 +525,7 @@ class CameraEngine:
             self.state_manager.remove_person(track_id)
             self.identity_manager.reset_track(track_id)
             self.id_corrector.reset_track(track_id)
+            self.track_gender_age.pop(track_id, None)
 
         # Batch ID correction
         if self.id_corrector.should_run_correction():
@@ -702,11 +743,12 @@ class CameraEngine:
             return
 
         current_time = time.time()
-        last_check_time = self.last_action_check_per_identity.get(identity, 0.0)
+        # Key by track_id so each person gets their own cooldown slot
+        last_check_time = self.last_action_check_per_identity.get(track_id, 0.0)
         if current_time - last_check_time < self.action_recognizer.check_interval_seconds:
             return
 
-        self.last_action_check_per_identity[identity] = current_time
+        self.last_action_check_per_identity[track_id] = current_time
 
         # Prune stale entries to prevent unbounded growth
         if len(self.last_action_check_per_identity) > self._max_action_identity_cache:
@@ -715,10 +757,7 @@ class CameraEngine:
             for k in stale:
                 del self.last_action_check_per_identity[k]
 
-        user_id = self.name_to_id_map.get(identity)
-        if user_id is None:
-            logger.warning(f"Cannot find user_id for '{identity}', skipping action recognition")
-            return
+        user_id = self.name_to_id_map.get(identity) if identity else None
 
         request_id = f"cam{self.camera_id}_track{track_id}_frame{frame_num}"
 
@@ -778,5 +817,6 @@ class CameraEngine:
         self.identity_manager.reset()
         self.state_manager.reset()
         self.last_action_check_per_identity.clear()
+        self.track_gender_age.clear()
         self.frame_count = 0
 

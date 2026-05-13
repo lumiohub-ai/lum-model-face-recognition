@@ -38,7 +38,9 @@ def task_record_attendance(
     camera_id: Optional[int] = None,
     camera_name: Optional[str] = None,
     proof_image_url: Optional[str] = None,
-    recorded_at: Optional[str] = None
+    recorded_at: Optional[str] = None,
+    gender: Optional[str] = None,
+    age: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Record attendance in AI's database and publish event."""
     logger.info(f"[Celery] Recording attendance: {user_name} (id={user_id}) {status}")
@@ -54,6 +56,8 @@ def task_record_attendance(
             timestamp=timestamp,
             status=status,
             proof_image_url=proof_image_url,
+            gender=gender,
+            age=age,
         )
         logger.info(f"[Celery] Attendance recorded: id={record_id} user={user_id} {status}")
 
@@ -88,7 +92,9 @@ def task_save_unrecognized_face(
     status: Optional[str] = None,
     image_url: Optional[str] = None,
     notes: Optional[str] = None,
-    detected_at: Optional[str] = None
+    detected_at: Optional[str] = None,
+    gender: Optional[str] = None,
+    age: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Save unrecognized face in database and publish event."""
     logger.info(f"[Celery] Saving unrecognized face from camera {camera_id}")
@@ -105,6 +111,8 @@ def task_save_unrecognized_face(
             status=status,
             image_url=image_url,
             notes=notes,
+            gender=gender,
+            age=age,
         )
         logger.info(f"[Celery] Unrecognized face saved: id={record_id} camera={camera_id}")
 

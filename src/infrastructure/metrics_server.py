@@ -12,6 +12,7 @@ Endpoints:
 """
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import List, Optional
@@ -398,6 +399,49 @@ class _Handler(BaseHTTPRequestHandler):
                 self._ok("application/json", json.dumps(dates).encode())
             except Exception as e:
                 self._err(500, str(e))
+
+        elif path.startswith("/images/"):
+            filename = os.path.basename(path)
+            image_dir = os.environ.get(
+                "SO_LOCAL_IMAGE_DIR",
+                "/app/volumes/storage/person-tracking/images"
+            )
+            file_path = os.path.join(image_dir, filename)
+            if os.path.isfile(file_path):
+                with open(file_path, "rb") as f:
+                    data = f.read()
+                self._ok("image/jpeg", data)
+            else:
+                self._err(404, "Image not found")
+
+        elif path == "/videos" or path == "/videos/":
+            video_dir = "/app/volumes/storage/person-tracking"
+            videos = sorted(
+                f for f in os.listdir(video_dir)
+                if f.endswith(".mp4") and not f.startswith("camera")
+            )
+            links = "".join(
+                f'<li><a href="/videos/{v}" download>{v}</a></li>' for v in videos
+            )
+            html = f"<html><body><h2>Output Videos</h2><ul>{links}</ul></body></html>"
+            self._ok("text/html; charset=utf-8", html.encode())
+
+        elif path.startswith("/videos/"):
+            filename = os.path.basename(path)
+            video_dir = "/app/volumes/storage/person-tracking"
+            file_path = os.path.join(video_dir, filename)
+            if os.path.isfile(file_path) and filename.endswith(".mp4"):
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(os.path.getsize(file_path)))
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with open(file_path, "rb") as f:
+                    while chunk := f.read(1024 * 1024):
+                        self.wfile.write(chunk)
+            else:
+                self._err(404, "Video not found")
 
         else:
             self._err(404, "Not Found")

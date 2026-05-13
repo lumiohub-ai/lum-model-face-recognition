@@ -134,11 +134,22 @@ class StreamHandler:
         """
         return isinstance(source, str) and source.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))
 
-    def start(self) -> "StreamHandler":
-        """Start the frame reading thread for non-video file sources.
+    def snapshot(self) -> Any:
+        """Return a clean frame for configuration purposes (Virtual Line / ROI).
 
-        Returns:
-            Self reference for method chaining
+        Uses the latest frame already buffered by the pipeline, which is always
+        clean because it was decoded sequentially. Opening a fresh VideoCapture
+        at position 0 causes HEVC decode artifacts on files whose first frames
+        are P/B-frames without a preceding IDR frame.
+        """
+        with self.lock:
+            return self.latest_frame if self.latest_frame is not None else self.frame
+
+    def start(self) -> "StreamHandler":
+        """Start the frame reading thread for live streams (RTSP, webcam).
+
+        Video files are read directly by the pipeline in read(); they do not need
+        a background thread because the pipeline drives the frame rate.
         """
         if not self.is_video:
             self.thread = threading.Thread(target=self.update, daemon=True)
@@ -146,12 +157,14 @@ class StreamHandler:
         return self
 
     def update(self) -> None:
-        """Background thread function that continuously reads frames from the video source.
+        """Background thread: continuously read frames from live streams.
 
-        This method runs in a separate thread for live streams, continuously reading frames
-        and updating the frame queue with the most recent frame.
+        Reconnects on failure and skips the first 30 post-reconnect frames so
+        that partially-decoded HEVC frames never land in latest_frame.
         """
         consecutive_failures = 0
+        frames_to_skip = 0
+
         while True:
             with self.lock:
                 if self.stopped:
@@ -165,42 +178,47 @@ class StreamHandler:
                     if self.stopped or not self._reconnect():
                         break
                     consecutive_failures = 0
+                    # After reconnect the HEVC decoder has no reference frames yet.
+                    # Skip the first 30 frames (~1 s at 30 fps) so partial /
+                    # black-macroblock frames never land in latest_frame.
+                    frames_to_skip = 30
                 time.sleep(0.5)
                 continue
 
-            # Reset failure counter on successful read
             consecutive_failures = 0
 
-            # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
-            # This prevents jitter by ensuring we never show old frames
+            # Discard post-reconnect frames until the HEVC decoder has rebuilt its RPS
+            if frames_to_skip > 0:
+                frames_to_skip -= 1
+                continue
+
+            # LATEST FRAME ONLY: always overwrite with the newest frame
             with self.lock:
                 self.latest_ret = ret
                 self.latest_frame = frame
 
-            # Periodically run garbage collection
             current_time = time.time()
             if current_time - self.last_gc_time > self.gc_interval:
                 gc.collect()
                 self.last_gc_time = current_time
 
     def read(self) -> Tuple[bool, Any]:
-        """Read the next frame from the video source.
-
-        Returns:
-            Tuple containing a boolean indicating success and the frame (if successful)
-        """
+        """Read the next frame from the video source."""
         if self.is_video:
             ret, frame = self.cap.read()
             if not ret and not self.stopped:
-                # For video files that reached the end, we can just stop the stream
                 self.logger.warning(f"End of video stream reached: {self.src}")
                 self.stop()
                 return False, None
 
+            if ret:
+                with self.lock:
+                    self.latest_ret = ret
+                    self.latest_frame = frame
+
             return ret, frame
 
-        # LATEST FRAME ONLY: Return the most recent frame from background thread
-        # No queue, no old frames, no jitter
+        # Live streams: return latest frame from background thread
         with self.lock:
             if self.latest_frame is not None:
                 self.ret = self.latest_ret

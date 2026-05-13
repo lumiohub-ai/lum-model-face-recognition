@@ -27,8 +27,6 @@ class FaceAnalysis:
         self.model_dir = ensure_available('models', name, root=root)
         onnx_files = glob.glob(osp.join(self.model_dir, '*.onnx'))
         onnx_files = sorted(onnx_files)
-        # Mirsaid: we dont need genderage.onnx file
-        onnx_files = [file for file in onnx_files if 'genderage' not in file]
 
         for onnx_file in onnx_files:
             model = model_zoo.get_model(onnx_file, **kwargs)

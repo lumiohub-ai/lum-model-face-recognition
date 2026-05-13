@@ -18,6 +18,9 @@ from typing import Any, Dict, List, Optional
 import cv2
 from loguru import logger
 
+MAX_CROSSING_EVENTS = 1000
+CROSSING_COOLDOWN_SECONDS = 2.0
+
 
 class CameraWorker:
     """Processes a single camera stream in a dedicated thread.
@@ -82,12 +85,62 @@ class CameraWorker:
         # Cache last known face bbox + score per track (persists between recognition frames)
         self._face_cache: Dict[int, Dict] = {}  # track_id -> {face_bbox, face_det_score}
 
+        # Per-line crossing state — keyed by line id
+        self.virtual_lines: List[Dict] = camera_config.get("virtual_lines", [])
+        self._line_states: Dict[str, Dict] = {}
+        for vl in self.virtual_lines:
+            lid = vl.get("id")
+            if not lid:
+                continue
+            line_type = vl.get("line_type", "person_counting")
+            timer_enabled = bool(vl.get("timer_enabled", False))
+            is_fitting = line_type == "fitting_room" or timer_enabled
+            state: Dict = {
+                "in": 0,
+                "out": 0,
+                "track_side": {},
+                "track_last_cross": {},
+                "crossing_events": [],
+            }
+            if is_fitting:
+                state["occupancy"] = 0
+                state["timer_start"] = None
+            self._line_states[lid] = state
+
         logger.debug(
             f"CameraWorker[{camera_idx}] created: "
             f"camera_id={camera_config.get('camera_id')}, "
             f"detect_every={detection_interval}, "
             f"recog_every={recognition_interval}"
         )
+
+    def _rebuild_line_states(self, new_virtual_lines: List[Dict]) -> None:
+        """Update _line_states to match new_virtual_lines.
+
+        Keeps existing counts for lines that survive; adds state for new lines;
+        drops state for removed lines.
+        """
+        new_ids = {vl.get("id") for vl in new_virtual_lines if vl.get("id")}
+        # Remove stale lines
+        for lid in list(self._line_states.keys()):
+            if lid not in new_ids:
+                del self._line_states[lid]
+        # Add state for brand-new lines
+        for vl in new_virtual_lines:
+            lid = vl.get("id")
+            if not lid or lid in self._line_states:
+                continue
+            line_type = vl.get("line_type", "person_counting")
+            timer_enabled = bool(vl.get("timer_enabled", False))
+            is_fitting = line_type == "fitting_room" or timer_enabled
+            state: Dict = {
+                "in": 0, "out": 0,
+                "track_side": {}, "track_last_cross": {}, "crossing_events": [],
+            }
+            if is_fitting:
+                state["occupancy"] = 0
+                state["timer_start"] = None
+            self._line_states[lid] = state
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -154,6 +207,10 @@ class CameraWorker:
             self.camera_engine.update_tracking(detections, frame, frame_num)
         )
 
+        # ── Step 5b: Virtual line crossing detection ──────────────────────────
+        if self.virtual_lines:
+            self._detect_virtual_line_crossings(active_tracks, frame_num)
+
         # ── Step 6: Submit face ROIs to GPU worker, wait for embeddings ───────
         run_recognition = (
             self._detection_frame_num % self.recognition_interval == 0
@@ -182,6 +239,119 @@ class CameraWorker:
         # ── Step 9: Annotate + write video (only when save_video=True) ────────
         if self.annotator is not None and self.video_writer is not None:
             self._annotate_and_write(frame, active_tracks, embeddings_map, roi_offsets)
+
+    def _distance_to_segment(
+        self,
+        px: float, py: float,
+        ax: float, ay: float,
+        bx: float, by: float,
+    ) -> float:
+        """Return the distance from point (px, py) to the finite segment (ax,ay)-(bx,by)."""
+        abx, aby = bx - ax, by - ay
+        apx, apy = px - ax, py - ay
+        ab_len_sq = abx * abx + aby * aby
+        if ab_len_sq == 0:
+            return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+        t = max(0.0, min(1.0, (apx * abx + apy * aby) / ab_len_sq))
+        cx, cy = ax + t * abx, ay + t * aby
+        return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+
+    def _detect_virtual_line_crossings(self, active_tracks: List[Dict], frame_num: int) -> None:
+        """Detect crossings for all configured virtual lines.
+
+        Uses cross-product side detection for diagonal-line support and a
+        segment-distance gate to ignore crossings on the imaginary extension of
+        the line beyond its endpoints.
+        """
+        now = time.time()
+        active_ids = {t["track_id"] for t in active_tracks if t.get("bbox") is not None}
+
+        for vl in self.virtual_lines:
+            lid = vl.get("id")
+            if not lid or lid not in self._line_states:
+                continue
+            pts = vl.get("points", [])
+            if len(pts) < 2:
+                continue
+
+            state = self._line_states[lid]
+            (x1, y1), (x2, y2) = pts[0], pts[1]
+            dx, dy = x2 - x1, y2 - y1
+            inside_side = int(vl.get("inside_side", 1))
+            line_type = vl.get("line_type", "person_counting")
+            timer_enabled = bool(vl.get("timer_enabled", False))
+            is_fitting = line_type == "fitting_room" or timer_enabled
+            max_distance = float(vl.get("max_distance", 80.0))
+
+            for track in active_tracks:
+                track_id = track["track_id"]
+                bbox = track.get("bbox")
+                if bbox is None:
+                    continue
+
+                bx = (bbox[0] + bbox[2]) / 2.0
+                by = bbox[3]
+
+                cross = dx * (by - y1) - dy * (bx - x1)
+                side = 1 if cross >= 0 else -1
+
+                prev_side = state["track_side"].get(track_id)
+                if prev_side is not None and prev_side != side:
+                    last_cross = state["track_last_cross"].get(track_id, 0.0)
+                    if now - last_cross >= CROSSING_COOLDOWN_SECONDS:
+                        distance = self._distance_to_segment(bx, by, x1, y1, x2, y2)
+
+                        if distance <= max_distance:
+                            state["track_last_cross"][track_id] = now
+                            direction = "IN" if side == inside_side else "OUT"
+
+                            if direction == "IN":
+                                state["in"] += 1
+                                if is_fitting:
+                                    state["occupancy"] += 1
+                                    if state["occupancy"] == 1:
+                                        state["timer_start"] = now
+                            else:
+                                state["out"] += 1
+                                if is_fitting:
+                                    state["occupancy"] = max(0, state["occupancy"] - 1)
+                                    if state["occupancy"] == 0:
+                                        state["timer_start"] = None
+
+                            event = {
+                                "camera_idx": self.camera_idx,
+                                "camera_id": self.camera_config.get("camera_id"),
+                                "line_id": lid,
+                                "track_id": track_id,
+                                "direction": direction,
+                                "timestamp": now,
+                                "frame_num": frame_num,
+                                "point": [bx, by],
+                                "previous_side": prev_side,
+                                "current_side": side,
+                                "distance_to_segment": distance,
+                            }
+                            if len(state["crossing_events"]) >= MAX_CROSSING_EVENTS:
+                                state["crossing_events"].pop(0)
+                            state["crossing_events"].append(event)
+
+                            logger.debug(
+                                f"[line={lid}] track={track_id} {direction} "
+                                f"side={side} pt=({bx:.0f},{by:.0f}) dist={distance:.1f}"
+                            )
+                        else:
+                            logger.debug(
+                                f"[line={lid}] track={track_id} side changed but ignored: "
+                                f"distance={distance:.1f} > max_distance={max_distance}"
+                            )
+
+                state["track_side"][track_id] = side
+
+            # Evict stale tracks for this line only
+            for stale in list(state["track_side"].keys()):
+                if stale not in active_ids:
+                    del state["track_side"][stale]
+                    state["track_last_cross"].pop(stale, None)
 
     def _annotate_and_write(
         self,
@@ -238,6 +408,7 @@ class CameraWorker:
                 if tentative and vote_status.get("votes", 0) > 0:
                     identity = tentative
 
+            _ga = self.camera_engine.track_gender_age.get(track_id, {})
             person_states.append({
                 "track_id": track_id,
                 "global_id": track.get("global_track_id"),
@@ -253,9 +424,36 @@ class CameraWorker:
                 "track_age": 0,
                 "in_current_frame": True,
                 "last_detected_action": state.last_detected_action if state else None,
+                "gender": _ga.get("gender"),
+                "age": _ga.get("age"),
+            })
+
+        virtual_lines_stats = []
+        for vl in self.virtual_lines:
+            lid = vl.get("id")
+            if not lid or lid not in self._line_states:
+                continue
+            state = self._line_states[lid]
+            line_type = vl.get("line_type", "person_counting")
+            timer_enabled = bool(vl.get("timer_enabled", False))
+            is_fitting = line_type == "fitting_room" or timer_enabled
+            duration = None
+            if is_fitting and state.get("timer_start") is not None:
+                duration = now - state["timer_start"]
+            virtual_lines_stats.append({
+                "id": lid,
+                "name": vl.get("name", lid),
+                "points": vl.get("points", []),
+                "line_type": line_type,
+                "timer_enabled": timer_enabled,
+                "in": state.get("in", 0),
+                "out": state.get("out", 0),
+                "occupancy": state.get("occupancy", 0),
+                "duration": duration,
             })
 
         annotated = self.annotator.annotate_frame(
-            frame, person_states, fps=self._fps, roi_active=bool(self.roi)
+            frame, person_states, fps=self._fps, roi_active=bool(self.roi),
+            virtual_lines_stats=virtual_lines_stats,
         )
         self.video_writer.write(annotated)

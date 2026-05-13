@@ -8,7 +8,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_DEFAULT_TIMEOUT=300
 ENV PIP_RETRIES=5
 
+# Optional: override apt mirror when port-80 is blocked on the build network.
+# Example: --build-arg APT_MIRROR=https://mirror.xtom.com.hk
+ARG APT_MIRROR=""
+
 WORKDIR /app
+
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://archive.ubuntu.com|${APT_MIRROR}|g; s|http://security.ubuntu.com|${APT_MIRROR}|g" /etc/apt/sources.list; \
+    fi
 
 # Install Python + build tools (build-time only)
 RUN rm -rf /var/lib/apt/lists/* && \
@@ -30,9 +38,16 @@ RUN rm -rf /var/lib/apt/lists/* && \
 RUN pip install --upgrade pip setuptools wheel
 
 # Install PyTorch with CUDA 12.2
-RUN pip install --no-cache-dir \
-    torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
-    --extra-index-url https://download.pytorch.org/whl/cu121
+# Wheels are pre-downloaded on the host to avoid large unstable downloads inside Docker
+COPY wheels/ ./wheels/
+RUN if ls wheels/torch*.whl 1>/dev/null 2>&1; then \
+        pip install --no-cache-dir --no-index --find-links=./wheels/ torch==2.4.0+cu121 torchvision==0.19.0+cu121; \
+    else \
+        pip install --no-cache-dir \
+            torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
+            --extra-index-url https://download.pytorch.org/whl/cu121; \
+    fi && \
+    rm -rf ./wheels/
 
 # Copy and install requirements
 COPY requirements.txt ./
@@ -55,7 +70,13 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH="/app/src:/app"
 
+ARG APT_MIRROR=""
+
 WORKDIR /app
+
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://archive.ubuntu.com|${APT_MIRROR}|g; s|http://security.ubuntu.com|${APT_MIRROR}|g" /etc/apt/sources.list; \
+    fi
 
 # Install only runtime system libraries (no build tools)
 RUN rm -rf /var/lib/apt/lists/* && \

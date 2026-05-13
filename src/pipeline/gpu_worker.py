@@ -259,7 +259,18 @@ class GPUInferenceWorker:
 
                     x1, y1, x2, y2 = face.bbox.astype(int)
                     x1 -= pad_w; y1 -= pad_h; x2 -= pad_w; y2 -= pad_h
-                    face_crop = roi[max(0, y1):y2, max(0, x1):x2]
+
+                    # Add 40% padding around the face so RetinaFace can detect
+                    # it when this crop is later used as a user enrollment photo
+                    face_w = x2 - x1
+                    face_h = y2 - y1
+                    save_pad_x = int(face_w * 0.4)
+                    save_pad_y = int(face_h * 0.4)
+                    sx1 = max(0, x1 - save_pad_x)
+                    sy1 = max(0, y1 - save_pad_y)
+                    sx2 = min(roi_w, x2 + save_pad_x)
+                    sy2 = min(roi_h, y2 + save_pad_y)
+                    face_crop = roi[sy1:sy2, sx1:sx2]
 
                     kps = None
                     if hasattr(face, "kps") and face.kps is not None:
@@ -276,6 +287,8 @@ class GPUInferenceWorker:
                         ),
                         "face_bbox": [x1, y1, x2, y2],
                         "face_landmarks": kps,
+                        "gender": getattr(face, "sex", None),
+                        "age": int(round(face.age)) if getattr(face, "age", None) is not None else None,
                     }
             except Exception as e:
                 logger.debug(f"Face detection error on ROI: {e}")

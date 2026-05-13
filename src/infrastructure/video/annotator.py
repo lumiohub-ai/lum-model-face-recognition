@@ -90,6 +90,7 @@ class FrameAnnotator:
         fps: float = 0.0,
         show_stats: bool = True,
         roi_active: bool = False,
+        virtual_lines_stats: Optional[List[Dict]] = None,
     ) -> np.ndarray:
         """Annotate frame with all detection results.
 
@@ -98,6 +99,8 @@ class FrameAnnotator:
             person_states: List of person state dictionaries
             fps: Current FPS to display
             show_stats: Whether to show statistics overlay
+            roi_active: Whether to draw orange ROI border
+            virtual_lines_stats: List of virtual line stat dicts (one per configured line)
 
         Returns:
             Annotated frame
@@ -107,6 +110,11 @@ class FrameAnnotator:
         # Draw ROI border when camera has an active ROI configured
         if roi_active:
             self._draw_roi_border(annotated)
+
+        # Draw all virtual lines
+        if virtual_lines_stats:
+            for vls in virtual_lines_stats:
+                self.draw_virtual_line(annotated, vls)
 
         # Draw each person
         for state in person_states:
@@ -132,6 +140,74 @@ class FrameAnnotator:
         color = (0, 140, 255)  # orange
         cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, t)
         cv2.putText(frame, "ROI", (t + 5, t + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+    def draw_virtual_line(self, frame: np.ndarray, vls: Dict) -> None:
+        """Draw a virtual line and its counters on the frame.
+
+        For person_counting lines: shows name + IN/OUT only.
+        For fitting_room lines: also shows occupancy and optional timer.
+        """
+        points = vls.get("points", [])
+        if len(points) < 2:
+            return
+
+        pt1 = tuple(map(int, points[0]))
+        pt2 = tuple(map(int, points[1]))
+
+        name          = vls.get("name", "")
+        line_type     = vls.get("line_type", "person_counting")
+        timer_enabled = bool(vls.get("timer_enabled", False))
+        zone_in       = vls.get("in", 0)
+        zone_out      = vls.get("out", 0)
+        occupancy     = vls.get("occupancy", 0)
+        duration      = vls.get("duration")
+        is_fitting    = line_type == "fitting_room" or timer_enabled
+
+        CYAN   = (255, 255, 0)
+        GREEN  = (0, 220, 0)
+        RED    = (0, 0, 220)
+        WHITE  = (255, 255, 255)
+        BLACK  = (0, 0, 0)
+        YELLOW = (0, 220, 220)
+
+        # Main line
+        cv2.line(frame, pt1, pt2, CYAN, 2, cv2.LINE_AA)
+
+        # Direction arrow at mid-point
+        mx, my = (pt1[0] + pt2[0]) // 2, (pt1[1] + pt2[1]) // 2
+        dx, dy = pt2[0] - pt1[0], pt2[1] - pt1[1]
+        length = max(1, (dx**2 + dy**2) ** 0.5)
+        nx, ny = -dy / length, dx / length
+        tip = (int(mx + nx * 14), int(my + ny * 14))
+        cv2.arrowedLine(frame, (mx, my), tip, CYAN, 2, cv2.LINE_AA, tipLength=0.5)
+
+        def fmt(secs: float) -> str:
+            s = int(secs)
+            return f"{s // 60}:{s % 60:02d}"
+
+        # Panel content differs by line type
+        if is_fitting:
+            header = f"{name}  IN:{zone_in}  OUT:{zone_out}  Room:{occupancy}"
+            panel_lines = [(header, WHITE, 0.55, 1)]
+            if timer_enabled and duration is not None:
+                panel_lines.append((f"  Time: {fmt(duration)}", YELLOW, 0.5, 1))
+        else:
+            header = f"{name}  IN:{zone_in}  OUT:{zone_out}"
+            panel_lines = [(header, WHITE, 0.55, 1)]
+
+        panel_x, panel_y = mx - 60, my - 55
+        for i, (text, color, fscale, thick) in enumerate(panel_lines):
+            ty = panel_y + i * 22
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fscale, thick)
+            cv2.rectangle(frame, (panel_x - 4, ty - th - 4), (panel_x + tw + 4, ty + 4), BLACK, -1)
+            cv2.putText(frame, text, (panel_x, ty), cv2.FONT_HERSHEY_SIMPLEX, fscale, color, thick, cv2.LINE_AA)
+
+        # Endpoint badges
+        for badge_pt, label, color in [(pt1, f"IN {zone_in}", GREEN), (pt2, f"OUT {zone_out}", RED)]:
+            (bw, bh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            bx, by = badge_pt[0] - bw // 2, badge_pt[1] - 8
+            cv2.rectangle(frame, (bx - 3, by - bh - 3), (bx + bw + 3, by + 3), BLACK, -1)
+            cv2.putText(frame, label, (bx, by), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
     def draw_person(
         self,
@@ -227,6 +303,8 @@ class FrameAnnotator:
             action=action,
             vote_count=state.get('vote_count', 0),
             required_votes=state.get('required_votes', 0),
+            gender=state.get('gender'),
+            age=state.get('age'),
         )
 
     def draw_bbox(
@@ -319,6 +397,8 @@ class FrameAnnotator:
         action: Optional[str] = None,
         vote_count: int = 0,
         required_votes: int = 0,
+        gender: Optional[str] = None,
+        age: Optional[int] = None,
     ) -> None:
         """Draw label above person bounding box.
 
@@ -349,6 +429,14 @@ class FrameAnnotator:
                     parts.append(f"{vote_count}/{required_votes}v")
                 else:
                     parts.append("?")
+
+        if gender or age is not None:
+            ga_parts = []
+            if gender:
+                ga_parts.append("M" if gender.lower() in ("male", "m") else "F")
+            if age is not None:
+                ga_parts.append(str(age))
+            parts.append(" ".join(ga_parts))
 
         if action:
             parts.append(f"[{action}]")
@@ -420,51 +508,25 @@ class FrameAnnotator:
         num_persons: int,
         position: str = 'top_left'
     ) -> None:
-        """Draw statistics overlay on frame.
-
-        Args:
-            frame: Frame to draw on
-            fps: Current FPS
-            num_persons: Number of tracked persons
-            position: Position of overlay ('top_left', 'top_right')
-        """
-        lines = [
-            f"FPS: {fps:.1f}",
-            f"Persons: {num_persons}"
+        """Draw statistics overlay on frame."""
+        entries = [
+            (f"Persons: {num_persons}", 0.9, 2, (0, 255, 0)),
         ]
 
-        # Calculate position
         if position == 'top_left':
-            x, y = 10, 25
+            x, y = 10, 22
         else:
-            x, y = frame.shape[1] - 150, 25
+            x, y = frame.shape[1] - 180, 22
 
-        # Draw each line
-        for i, line in enumerate(lines):
-            text_y = y + i * 25
-
-            # Draw background
-            (w, h), _ = cv2.getTextSize(
-                line,
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                2
-            )
+        cursor_y = y
+        for text, fscale, thick, color in entries:
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fscale, thick)
             cv2.rectangle(
                 frame,
-                (x - 5, text_y - h - 5),
-                (x + w + 5, text_y + 5),
+                (x - 5, cursor_y - th - 5),
+                (x + tw + 5, cursor_y + 5),
                 (0, 0, 0),
-                -1
+                -1,
             )
-
-            # Draw text
-            cv2.putText(
-                frame,
-                line,
-                (x, text_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
+            cv2.putText(frame, text, (x, cursor_y), cv2.FONT_HERSHEY_SIMPLEX, fscale, color, thick, cv2.LINE_AA)
+            cursor_y += th + 12
