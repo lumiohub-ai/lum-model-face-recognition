@@ -27,6 +27,7 @@ EVENT_CHANNELS = {
     'FRAME_CAPTURE': 'events:frame_captured',
     'CALIBRATION': 'events:calibration',
     'METRICS': 'events:metrics',
+    'ZONE_SESSION': 'events:zone_session',
 }
 
 # Event types
@@ -43,6 +44,8 @@ EVENT_TYPES = {
     'TEST_CALIBRATION_COMPLETE': 'TestCalibrationComplete',
     'SYSTEM_METRICS': 'SystemMetrics',
     'SYSTEM_ALERT': 'SystemAlert',
+    'ZONE_SESSION_ENTRY': 'ZoneSessionEntry',
+    'ZONE_SESSION_EXIT': 'ZoneSessionExit',
 }
 
 

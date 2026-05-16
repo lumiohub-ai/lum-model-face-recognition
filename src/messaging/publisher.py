@@ -77,7 +77,11 @@ class MDAPublisher:
         camera_id: Optional[int] = None,
         camera_name: Optional[str] = None,
         proof_image_url: Optional[str] = None,
-        recorded_at: Optional[str] = None
+        recorded_at: Optional[str] = None,
+        age: Optional[int] = None,
+        age_confidence: Optional[float] = None,
+        gender: Optional[str] = None,
+        gender_confidence: Optional[float] = None
     ) -> bool:
         """
         Publish AttendanceRecorded event to Backend.
@@ -108,6 +112,10 @@ class MDAPublisher:
             'camera_name': camera_name,
             'proof_image_url': proof_image_url,
             'recorded_at': recorded_at or self._get_timestamp(),
+            'age': age,
+            'age_confidence': age_confidence,
+            'gender': gender,
+            'gender_confidence': gender_confidence,
         }
 
         logger.info(f"[Events] Publishing AttendanceRecorded: user {user_id} {status}")
@@ -119,7 +127,12 @@ class MDAPublisher:
         camera_id: Optional[int] = None,
         camera_name: Optional[str] = None,
         image_url: Optional[str] = None,
-        detected_at: Optional[str] = None
+        detected_at: Optional[str] = None,
+        age: Optional[int] = None,
+        age_confidence: Optional[float] = None,
+        gender: Optional[str] = None,
+        gender_confidence: Optional[float] = None,
+        user_status: Optional[str] = None
     ) -> bool:
         """
         Publish UnrecognizedFaceSaved event to Backend.
@@ -144,6 +157,11 @@ class MDAPublisher:
             'camera_name': camera_name,
             'image_url': image_url,
             'detected_at': detected_at or self._get_timestamp(),
+            'age': age,
+            'age_confidence': age_confidence,
+            'gender': gender,
+            'gender_confidence': gender_confidence,
+            'user_status': user_status,
         }
 
         logger.info(f"[Events] Publishing UnrecognizedFaceSaved from camera {camera_id}")
@@ -393,4 +411,58 @@ class MDAPublisher:
         }
         logger.warning(f"[Events] SystemAlert: {alert_type} — {message}")
         self.redis.publish(EVENT_CHANNELS['METRICS'], event)
+
+    def publish_zone_session_entry(
+        self,
+        camera_id: int,
+        line_id: str,
+        line_type: str,
+        track_id: str,
+        global_track_id: str,
+        entered_at: Optional[str] = None,
+        age: Optional[int] = None,
+        age_confidence: Optional[float] = None,
+        gender: Optional[str] = None,
+        gender_confidence: Optional[float] = None,
+        image_url: Optional[str] = None
+    ) -> bool:
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['ZONE_SESSION_ENTRY'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'camera_id': camera_id,
+            'line_id': line_id,
+            'line_type': line_type,
+            'track_id': track_id,
+            'global_track_id': global_track_id,
+            'entered_at': entered_at or self._get_timestamp(),
+            'age': age,
+            'age_confidence': age_confidence,
+            'gender': gender,
+            'gender_confidence': gender_confidence,
+            'image_url': image_url,
+        }
+        logger.info(f"[Events] Publishing ZoneSessionEntry: camera {camera_id}, line {line_id}, track {global_track_id}")
+        return self.redis.publish(EVENT_CHANNELS['ZONE_SESSION'], event)
+
+    def publish_zone_session_exit(
+        self,
+        camera_id: int,
+        line_id: str,
+        global_track_id: str,
+        exited_at: Optional[str] = None
+    ) -> bool:
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['ZONE_SESSION_EXIT'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'camera_id': camera_id,
+            'line_id': line_id,
+            'global_track_id': global_track_id,
+            'exited_at': exited_at or self._get_timestamp(),
+        }
+        logger.info(f"[Events] Publishing ZoneSessionExit: camera {camera_id}, line {line_id}, track {global_track_id}")
+        return self.redis.publish(EVENT_CHANNELS['ZONE_SESSION'], event)
 

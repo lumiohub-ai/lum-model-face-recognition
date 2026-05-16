@@ -13,6 +13,7 @@ This allows N camera threads to share the GPU in one batched worker.
 
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -42,6 +43,7 @@ class CameraWorker:
         annotator=None,
         video_writer: Optional[cv2.VideoWriter] = None,
         metrics_collector=None,
+        publisher=None,
     ):
         """
         Args:
@@ -66,6 +68,7 @@ class CameraWorker:
         self.recognition_interval = max(1, recognition_interval)
         self.annotator = annotator
         self.video_writer = video_writer
+        self.publisher = publisher
 
         self.roi: Optional[List[int]] = camera_config.get("roi")
         self._running = False
@@ -88,6 +91,8 @@ class CameraWorker:
         # Per-line crossing state — keyed by line id
         self.virtual_lines: List[Dict] = camera_config.get("virtual_lines", [])
         self._line_states: Dict[str, Dict] = {}
+        # Per-line per-track entry timestamps for zone session dwell time
+        self._track_entry_times: Dict[str, Dict[int, float]] = {}
         for vl in self.virtual_lines:
             lid = vl.get("id")
             if not lid:
@@ -311,12 +316,14 @@ class CameraWorker:
                                     state["occupancy"] += 1
                                     if state["occupancy"] == 1:
                                         state["timer_start"] = now
+                                    self._on_fitting_room_entry(lid, line_type, track_id, now)
                             else:
                                 state["out"] += 1
                                 if is_fitting:
                                     state["occupancy"] = max(0, state["occupancy"] - 1)
                                     if state["occupancy"] == 0:
                                         state["timer_start"] = None
+                                    self._on_fitting_room_exit(lid, track_id, now)
 
                             event = {
                                 "camera_idx": self.camera_idx,
@@ -352,6 +359,57 @@ class CameraWorker:
                 if stale not in active_ids:
                     del state["track_side"][stale]
                     state["track_last_cross"].pop(stale, None)
+
+    def _on_fitting_room_entry(self, lid: str, line_type: str, track_id: int, now: float) -> None:
+        if lid not in self._track_entry_times:
+            self._track_entry_times[lid] = {}
+        self._track_entry_times[lid][track_id] = now
+
+        if not self.publisher:
+            return
+
+        camera_id = self.camera_config.get("camera_id")
+        date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+        global_track_id = f"{camera_id}_{date_str}_{track_id}"
+        entered_at = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+
+        ga = self.camera_engine.track_gender_age.get(track_id, {})
+        try:
+            self.publisher.publish_zone_session_entry(
+                camera_id=camera_id,
+                line_id=lid,
+                line_type=line_type,
+                track_id=str(track_id),
+                global_track_id=global_track_id,
+                entered_at=entered_at,
+                age=ga.get("age"),
+                age_confidence=ga.get("age_confidence"),
+                gender=ga.get("gender"),
+                gender_confidence=ga.get("gender_confidence"),
+            )
+        except Exception as e:
+            logger.warning(f"[ZoneSession] Failed to publish entry: {e}")
+
+    def _on_fitting_room_exit(self, lid: str, track_id: int, now: float) -> None:
+        self._track_entry_times.get(lid, {}).pop(track_id, None)
+
+        if not self.publisher:
+            return
+
+        camera_id = self.camera_config.get("camera_id")
+        date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+        global_track_id = f"{camera_id}_{date_str}_{track_id}"
+        exited_at = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+
+        try:
+            self.publisher.publish_zone_session_exit(
+                camera_id=camera_id,
+                line_id=lid,
+                global_track_id=global_track_id,
+                exited_at=exited_at,
+            )
+        except Exception as e:
+            logger.warning(f"[ZoneSession] Failed to publish exit: {e}")
 
     def _annotate_and_write(
         self,

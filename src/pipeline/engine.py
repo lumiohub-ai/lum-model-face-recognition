@@ -34,6 +34,7 @@ from pipeline.gpu_worker import GPUInferenceWorker
 from pipeline.camera_worker import CameraWorker
 from infrastructure.async_logger import AsyncLogger
 from infrastructure.video.annotator import FrameAnnotator
+from messaging.publisher import MDAPublisher
 
 
 class SmartOfficeEngine:
@@ -215,6 +216,7 @@ class SmartOfficeEngine:
                 annotator=self._annotator,
                 video_writer=video_writer,
                 metrics_collector=self.metrics,
+                publisher=MDAPublisher(self.client_slug),
             )
             workers.append(worker)
         return workers
