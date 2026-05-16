@@ -4,70 +4,56 @@
 # Video settings
 show: false  # Display video output (disable for Docker/headless)
 save_video: true  # Save annotated video output to disk
-output_dir: "volumes/storage/person-tracking"  # Directory for outputs
+output_dir: "volumes/storage/videos"  # Directory for outputs
 use_api_for_cameras: true
 # Recognition settings
-match_threshold: 0.3  # Face similarity threshold for matching
+match_threshold: 0.42  # Face similarity threshold for matching (cosine similarity, higher = stricter)
+match_margin: 0.10     # Minimum gap between best and second-best score (open-set: prevents weak matches)
 person_detection_threshold: 0.3  # Person detection confidence threshold (0.0-1.0)
+min_face_size: 60        # Minimum face crop px (width AND height) to attempt recognition — lower for wide-angle/factory cameras
+blur_threshold: 30.0     # Minimum Laplacian variance to accept a face crop — lower for compressed CCTV video
 person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
 
 # Feature flags
 enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)
 face_detection_padding: 20.0  # Padding % around detected faces for better recognition (0-100)
 
-# Action Recognition settings (Activity tracking via Ollama)
+# Action Recognition settings (Activity tracking via Ollama + YOLO phone detector)
 action_recognition:
-  enabled: true  # Enable action recognition
-  check_interval_seconds: 20  # Check each person every N seconds
-  max_queue_size: 50  # Maximum queued inference requests
-  async_workers: 1  # Number of background worker threads for inference
-  inference_timeout: 30  # Timeout for Ollama API calls in seconds (prevents blocking on slow/hung inference)
-  # Supported actions with backend mapping and descriptions for VLM prompt
+  enabled: true
+  check_interval_seconds: 8   # Per-person VLM check cadence (~1-2s inference after image resize)
+  max_queue_size: 20
+  async_workers: 2
+  inference_timeout: 30
+  action_ttl_seconds: 10      # Phone labels decay quickly; working/idle last a bit longer
   actions:
-#    looking_at_product:
- #     backend_type: product_interest
-  #    description: "standing near shelves or displays, looking at products, comparing items, or visually inspecting merchandise"
-
-   # picking_up_product:
-    #  backend_type: product_pickup
-     # description: "reaching for, holding, taking, or lifting a product from a shelf, rack, counter, or display"
-
-    #returning_product:
-     # backend_type: product_return
-      #description: "placing an item back onto a shelf, rack, counter, basket, or display area"
-
     using_phone:
       backend_type: phone_usage
-      description: "holding a phone, looking at a phone screen, typing, scrolling, browsing, texting, or using a mobile device without clear calling behavior"
+      description: "Select this ONLY when a mobile phone or phone-like rectangular object is clearly visible in the person's hand AND the person appears to be looking at it, typing, scrolling, or holding it for screen use. The object must be distinct from clothing, shadows, tools, wood, pockets, or machinery. Do NOT select this only because the person has a hand near the chest, face, or pocket. Do NOT select this for dark shapes on clothes or ambiguous objects."
 
     phone_calling:
       backend_type: phone_calling
-      description: "holding a phone near the ear or mouth, speaking into a phone, appearing to make or receive a phone call, or using speakerphone/voice call behavior"
+      description: "Select this ONLY when a phone-like rectangular object is clearly visible touching or very near the person's ear, cheek, or mouth area and the person appears to be speaking or listening. Do NOT select this only because the hand is near the face."
 
-    #talking_with_staff_or_customer:
-     # backend_type: talking
-      #description: "facing another person, gesturing, asking questions, receiving help, or having a conversation in the store"
+    chatting:
+      backend_type: talking
+      description: "Select this ONLY if two or more people are clearly facing each other and visibly interacting, gesturing, or speaking. Do NOT select this just because people are standing near each other."
 
-    #waiting_in_queue:
-     # backend_type: queue_waiting
-      #description: "standing in line near checkout, reception, counter, cashier area, or service desk while waiting"
+    working:
+      backend_type: working
+      description: "Select this when the person is at or near a workbench, table, machine, tool, or material and appears to be doing a productive task such as examining boards, positioning parts, operating equipment, assembling, measuring, or handling work material. Prefer working over using_phone when no phone-like object is clearly visible."
 
-    browsing:
-      backend_type: browsing
-      description: "walking slowly through aisles, scanning shelves, looking around displays, or exploring products without taking a specific item"
+    carrying:
+      backend_type: carrying
+      description: "Select this when the person is visibly holding, lifting, or transporting a non-phone object such as a board, box, tool, part, or material with one or both hands."
 
-    entering_store:
-      backend_type: entering
-      description: "walking into the store, reception area, entrance zone, or customer-facing area from outside"
-
-    leaving_store:
-      backend_type: leaving
-      description: "walking out of the store, reception area, entrance zone, or customer-facing area toward the exit"
+    walking:
+      backend_type: walking
+      description: "Select this when the person is moving through the space without carrying a visible object and without clearly interacting with a person, machine, tool, material, or phone."
 
     idle:
-      backend_type: unknown
-      description: "standing still, sitting, waiting, or looking around without a clear retail action"
-
+      backend_type: idle
+      description: "Select this when the person is standing still, waiting, or the activity is unclear and no phone-like object is visible. Use idle instead of using_phone when no phone-like object is clearly distinguishable."
 # Parallel multi-camera pipeline settings
 pipeline:
   detection_interval: 2        # run YOLO every N frames (1 = every frame)

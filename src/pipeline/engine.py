@@ -74,6 +74,7 @@ class SmartOfficeEngine:
         self.camera_configs = load_cameras_from_db(
             client_slug=client_slug,
             applications=self.applications,
+            global_config=self.config,
         )
         if not self.camera_configs:
             raise ValueError("No cameras configured. Check config file or database.")
@@ -101,7 +102,8 @@ class SmartOfficeEngine:
         if self.save_video:
             output_dir = kwargs.get("output_dir", "volumes/storage/person-tracking")
             self.stream_manager.init_video_writers(output_dir)
-            self._annotator = FrameAnnotator()
+            action_ttl = kwargs.get('action_recognition', {}).get('action_ttl_seconds', 30)
+            self._annotator = FrameAnnotator(action_ttl_seconds=action_ttl)
         else:
             self._annotator = None
 
@@ -302,6 +304,7 @@ class SmartOfficeEngine:
             new_configs = load_cameras_from_db(
                 client_slug=self.client_slug,
                 applications=self.applications,
+                global_config=self.config,
             )
             if not new_configs:
                 logger.warning("No cameras found after reload — keeping existing config")
@@ -411,18 +414,21 @@ class SmartOfficeEngine:
             )
 
             # Persist to calibration_frames table
-            from infrastructure.storage.detection_repository import DetectionRepository
-            from datetime import datetime
-            record_id = DetectionRepository(self.client_slug).save_calibration_frame(
-                camera_id=camera_id,
-                frame_url=image_url,
-                frame_index=frame_index,
-                captured_at=datetime.utcnow(),
-            )
-            if record_id:
-                logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}, frame_index={frame_index}")
+            if image_url:
+                from infrastructure.storage.detection_repository import DetectionRepository
+                from datetime import datetime
+                record_id = DetectionRepository(self.client_slug).save_calibration_frame(
+                    camera_id=camera_id,
+                    frame_url=image_url,
+                    frame_index=frame_index,
+                    captured_at=datetime.utcnow(),
+                )
+                if record_id:
+                    logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}, frame_index={frame_index}")
+                else:
+                    logger.error(f"Calibration frame DB save failed for camera={camera_id} — FrameCaptured event will still be published")
             else:
-                logger.error(f"Calibration frame DB save failed for camera={camera_id} — FrameCaptured event will still be published")
+                logger.warning(f"Calibration frame image upload failed for camera={camera_id} — skipping DB save")
 
             from messaging.publisher import MDAPublisher
             MDAPublisher(self.client_slug).publish_frame_captured(

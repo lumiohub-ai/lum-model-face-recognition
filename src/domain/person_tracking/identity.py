@@ -94,6 +94,12 @@ class IdentityManager:
         if similarity < self.similarity_threshold:
             return
 
+        # Skip if another track already holds this identity (locked) — prevents
+        # an unknown person from accumulating votes toward an identity that's taken
+        for other_id, locked in self.locked_identities.items():
+            if other_id != track_id and locked['name'] == identity:
+                return
+
         # Add vote
         timestamp = time.time()
         self.identity_votes[track_id].append((identity, similarity, timestamp))

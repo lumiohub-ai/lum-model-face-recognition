@@ -4,6 +4,7 @@ This module provides the FrameAnnotator class for drawing bounding boxes,
 keypoints, labels, and other visual elements on video frames.
 """
 
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -57,22 +58,16 @@ class FrameAnnotator:
         draw_trajectory: bool = False,
         font_scale: float = 0.5,
         line_thickness: int = 2,
-        keypoint_radius: int = 4
+        keypoint_radius: int = 4,
+        action_ttl_seconds: int = 30,
     ):
-        """Initialize the FrameAnnotator.
-
-        Args:
-            draw_skeleton: Whether to draw pose skeleton
-            draw_trajectory: Whether to draw movement trajectory
-            font_scale: Font scale for text labels
-            line_thickness: Thickness for lines and boxes
-            keypoint_radius: Radius for keypoint circles
-        """
+        """Initialize the FrameAnnotator."""
         self.draw_skeleton = draw_skeleton
         self.draw_trajectory = draw_trajectory
         self.font_scale = font_scale
         self.line_thickness = line_thickness
         self.keypoint_radius = keypoint_radius
+        self.action_ttl_seconds = action_ttl_seconds
 
         # Color scheme
         self.colors = {
@@ -290,8 +285,11 @@ class FrameAnnotator:
         if trajectory and self.draw_trajectory:
             self.draw_person_trajectory(frame, trajectory, color)
 
-        # Draw label
+        # Draw label — hide action if older than TTL
         action = state.get('last_detected_action')
+        last_action_time = state.get('last_action_time', 0.0)
+        if action and last_action_time > 0 and (time.time() - last_action_time) > self.action_ttl_seconds:
+            action = None
         self.draw_person_label(
             frame,
             bbox,
@@ -420,15 +418,8 @@ class FrameAnnotator:
         else:
             parts = [f"ID:{track_id}"]
 
-        if identity:
+        if identity_locked and identity:
             parts.append(identity)
-
-            if not identity_locked:
-                # Show vote progress toward lock
-                if required_votes > 0:
-                    parts.append(f"{vote_count}/{required_votes}v")
-                else:
-                    parts.append("?")
 
         if gender or age is not None:
             ga_parts = []

@@ -1,35 +1,71 @@
 """Action Recognition using Ollama with Gemma 3 model.
 
-This module provides action recognition for detecting person activities:
-- sleeping
-- using phone
-- working with computer
-- talking with someone
-
-Uses Ollama API with gemma3:4b model for inference.
+Evidence-based pipeline:
+  1. Resize person crop (≤512 px) for fast inference.
+  2. Run phone object detector (YOLO COCO class 67) on the crop.
+  3. Build a VLM prompt that includes phone-detector evidence.
+  4. Parse the VLM JSON (activity, confidence, phone_visible, phone_location, reason).
+  5. Apply phone-gating: if no phone detected AND VLM confidence < 0.90,
+     reject using_phone / phone_calling.
+  6. Apply action-specific temporal voting (phone actions need 2/4 votes).
+  7. Optionally save debug crops for false-positive inspection.
 """
 
+import json
+import os
 import queue
 import threading
 import time
-from typing import Optional, Dict, List, Callable
-import base64
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, List, Callable, Deque
 
-import numpy as np
 import cv2
+import numpy as np
+import base64
 from loguru import logger
 import ollama
+
+# Actions that require extra voting evidence before being displayed
+_PHONE_ACTIONS = frozenset({'using_phone', 'phone_calling'})
+
+# Temporal voting parameters
+_VOTE_WINDOW = 4          # keep last 4 VLM results per track
+_VOTE_REQUIRED_PHONE = 2  # phone labels need 2/4 consensus
+_VOTE_REQUIRED_DEFAULT = 1  # other actions update immediately
+
+# If the phone object detector found no phone, require at least this VLM
+# confidence before allowing using_phone / phone_calling.
+_NO_PHONE_VLM_THRESHOLD = 0.90
+
+# Per-action minimum confidence (applied AFTER phone-gating)
+_MIN_CONFIDENCE = {
+    'using_phone': 0.70,
+    'phone_calling': 0.70,
+    'chatting': 0.55,
+    'working': 0.45,
+    'carrying': 0.50,
+    'walking': 0.45,
+    'idle': 0.35,
+}
+
+# Fallback keywords: model outputs not in the action list that map to idle
+_IDLE_FALLBACK_KEYWORDS = frozenset({
+    'none', 'other', 'unclear', 'unknown',
+    'not_using_phone', 'handling', 'moving', 'passing', 'standing',
+})
 
 
 class ActionRecognizer:
     """Recognizes person actions using Ollama with Gemma 3 model.
 
-    Features:
-    - Ollama Python client for LLM inference
-    - Async queue-based processing
-    - Automatic backend activity posting
-    - Rate limiting per person
-    - Configurable actions via config.yaml
+    Uses a two-stage pipeline:
+      - PhoneDetector (YOLO) for hard evidence of a visible phone
+      - VLM (Gemma 3 via Ollama) for activity classification
+
+    Phone labels (using_phone, phone_calling) are gated on the phone
+    detector and require 2 consecutive positive detections before display.
     """
 
     def __init__(
@@ -37,26 +73,15 @@ class ActionRecognizer:
         ollama_api_url: Optional[str] = None,
         client_slug: Optional[str] = None,
         enabled: bool = True,
-        check_interval_seconds: int = 30,
-        max_queue_size: int = 50,
-        num_workers: int = 1,
-        model_name: str = "gemma3:4b",
+        check_interval_seconds: int = 8,
+        max_queue_size: int = 20,
+        num_workers: int = 2,
+        model_name: str = 'gemma3:4b',
         inference_timeout: int = 30,
-        actions: Dict = None
+        actions: Dict = None,
+        phone_detector=None,
+        debug_save_dir: Optional[str] = None,
     ):
-        """Initialize action recognizer.
-
-        Args:
-            ollama_api_url: URL of Ollama API service (e.g., http://localhost:11434)
-            client_slug: Organization slug for Celery tasks
-            enabled: Enable/disable action recognition
-            check_interval_seconds: Interval between action checks per person
-            max_queue_size: Maximum queued inference requests
-            num_workers: Number of background worker threads
-            model_name: Ollama model to use for inference
-            inference_timeout: Timeout for Ollama API calls in seconds (default: 30s)
-            actions: Dictionary of actions from config.yaml (action_name -> {backend_type, description})
-        """
         self.ollama_api_url = ollama_api_url
         self.client_slug = client_slug
         self.enabled = enabled
@@ -65,17 +90,32 @@ class ActionRecognizer:
         self.num_workers = num_workers
         self.model_name = model_name
         self.inference_timeout = inference_timeout
+        self.phone_detector = phone_detector
 
         self.actions_config = actions or {}
         self.action_mapping = self._build_action_mapping()
-        self.prompt_template = self._build_prompt_template()
 
-        # Create Ollama client once (reused across all inference calls)
-        self._ollama_client = ollama.Client(host=self.ollama_api_url, timeout=inference_timeout)
+        # Debug crop saving (non-fatal if directory creation fails)
+        self.debug_save_dir = debug_save_dir
+        if debug_save_dir:
+            try:
+                Path(debug_save_dir).mkdir(parents=True, exist_ok=True)
+                logger.info(f"ActionRecognizer: debug crops → {debug_save_dir}")
+            except Exception as e:
+                logger.warning(f"ActionRecognizer: could not create debug dir '{debug_save_dir}': {e}")
+                self.debug_save_dir = None
+
+        # Ollama client
+        self._ollama_client = ollama.Client(
+            host=self.ollama_api_url, timeout=inference_timeout
+        )
 
         # Async processing queue
         self.inference_queue = queue.Queue(maxsize=max_queue_size)
         self.result_callbacks: Dict[str, Callable] = {}
+
+        # Temporal voting: action history per track_id
+        self._action_history: Dict[int, Deque] = {}
 
         # Worker threads
         self.workers: List[threading.Thread] = []
@@ -87,242 +127,513 @@ class ActionRecognizer:
         self.total_api_errors = 0
         self.total_timeouts = 0
 
+        phone_det_status = 'available' if (phone_detector and phone_detector.available) else 'disabled'
         logger.info(
             f"ActionRecognizer initialized | enabled={enabled} | "
-            f"ollama_api={self.ollama_api_url} | model={model_name} | "
+            f"ollama_api={ollama_api_url} | model={model_name} | "
             f"interval={check_interval_seconds}s | workers={num_workers} | "
-            f"timeout={inference_timeout}s | actions={len(self.actions_config)}"
+            f"timeout={inference_timeout}s | actions={len(self.actions_config)} | "
+            f"phone_detector={phone_det_status}"
         )
 
-    def _build_action_mapping(self) -> Dict[str, str]:
-        """Build VLM action to backend activity_type mapping from config.
-
-        Returns:
-            Dictionary mapping action names to backend activity types
-        """
-        mapping = {None: "unknown"}
-        for action_name, config in self.actions_config.items():
-            backend_type = config.get("backend_type", action_name)
-            mapping[action_name] = backend_type
-        return mapping
-
-    def _build_prompt_template(self) -> str:
-        """Build VLM prompt from configured actions.
-
-        Returns:
-            Prompt string with numbered action list and descriptions
-        """
-        lines = ["Classify what the person in this image is doing. Pick the best match:\n"]
-
-        # Build numbered action list with descriptions
-        for i, (action_name, config) in enumerate(self.actions_config.items(), 1):
-            description = config.get("description", "")
-            lines.append(f"{i}. {action_name} - {description}")
-
-        # Add response instructions
-        lines.append("\nRespond with ONLY one of these exact phrases:")
-        for action_name in self.actions_config.keys():
-            lines.append(f'- "{action_name}"')
-        lines.append("\nJust the phrase, no explanation.")
-
-        return "\n".join(lines)
+    # ── Public lifecycle ──────────────────────────────────────────────────────
 
     def start_workers(self) -> None:
-        """Start background worker threads for async inference."""
         if not self.enabled:
             logger.info("Action recognition disabled, not starting workers")
             return
-
         if self.running:
-            logger.warning("Workers already running")
             return
-
         self.running = True
-
         for i in range(self.num_workers):
-            worker = threading.Thread(
+            t = threading.Thread(
                 target=self._worker_loop,
                 name=f"ActionRecognizer-Worker-{i}",
-                daemon=True
+                daemon=True,
             )
-            worker.start()
-            self.workers.append(worker)
+            t.start()
+            self.workers.append(t)
 
     def stop_workers(self) -> None:
-        """Stop all worker threads gracefully."""
         if not self.running:
             return
-
         logger.info("Stopping action recognition workers...")
         self.running = False
-
-        # Send sentinel values to unblock workers
         for _ in self.workers:
             try:
                 self.inference_queue.put(None, timeout=1.0)
             except queue.Full:
                 pass
-
-        # Wait for workers to finish
-        for worker in self.workers:
-            worker.join(timeout=5.0)
-
+        for t in self.workers:
+            t.join(timeout=5.0)
         self.workers.clear()
         logger.info("Action recognition workers stopped")
 
+    def recognize_async(
+        self,
+        image: np.ndarray,
+        request_id: str,
+        callback: Optional[Callable] = None,
+        metadata: Optional[Dict] = None,
+    ) -> bool:
+        """Queue image for async recognition.  Returns False if queue is full."""
+        if not self.enabled:
+            return False
+        try:
+            if callback:
+                self.result_callbacks[request_id] = callback
+            self.inference_queue.put(
+                {'image': image, 'request_id': request_id, 'metadata': metadata or {}},
+                block=False,
+            )
+            return True
+        except queue.Full:
+            logger.warning(
+                f"Action recognition queue full ({self.max_queue_size}), dropping request"
+            )
+            return False
+
+    def get_queue_size(self) -> int:
+        return self.inference_queue.qsize()
+
+    def get_metrics(self) -> Dict:
+        avg = (
+            self.total_inference_time / self.total_inferences
+            if self.total_inferences > 0 else 0.0
+        )
+        return {
+            'total_inferences': self.total_inferences,
+            'total_time': self.total_inference_time,
+            'average_time': avg,
+            'total_errors': self.total_api_errors,
+            'total_timeouts': self.total_timeouts,
+            'queue_size': self.get_queue_size(),
+            'workers_running': self.running,
+        }
+
+    # ── Internal worker loop ──────────────────────────────────────────────────
+
     def _worker_loop(self) -> None:
-        """Background worker loop for processing inference queue."""
         while self.running:
             try:
-                # Get item from queue (blocking)
                 item = self.inference_queue.get(timeout=1.0)
-
-                # Sentinel value to stop worker
                 if item is None:
                     break
-
-                # Process inference request
                 self._process_inference_request(item)
-
-                # Mark task as done
                 self.inference_queue.task_done()
-
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.exception(f"Error in action recognition worker: {e}")
+                logger.exception(f"Action recognition worker error: {e}")
 
     def _process_inference_request(self, item: Dict) -> None:
-        """Process a single inference request.
+        image = item['image']
+        request_id = item['request_id']
+        metadata = item.get('metadata', {})
+        track_id = metadata.get('track_id', -1)
+        global_id = metadata.get('global_id')
+        camera_id = metadata.get('camera_id', '?')
 
-        Args:
-            item: Dictionary containing inference request data
-        """
-        try:
-            image = item['image']
-            request_id = item['request_id']
-            metadata = item.get('metadata', {})
+        # ── Step 1: resize crop (≤512 px on longest side) ────────────────────
+        h, w = image.shape[:2]
+        max_dim = 512
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            image = cv2.resize(
+                image, (int(w * scale), int(h * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+        crop_h, crop_w = image.shape[:2]
 
-            # Run inference via VLM API
-            start_time = time.time()
-            result = self.recognize_via_api(image)
-            inference_time = time.time() - start_time
+        # ── Step 2: phone object detection ───────────────────────────────────
+        phone_info: Dict = {'phone_detected': False, 'phone_confidence': 0.0,
+                            'phone_bbox_in_crop': None, 'phone_location_hint': 'none'}
+        if self.phone_detector and self.phone_detector.available:
+            phone_info = self.phone_detector.detect(image)
 
-            # Update metrics
-            self.total_inferences += 1
-            self.total_inference_time += inference_time
+        logger.debug(
+            f"PHONE_DETECTION | cam={camera_id} track={track_id} global={global_id} | "
+            f"crop={crop_h}x{crop_w} | phone_det={phone_info['phone_detected']} "
+            f"conf={phone_info['phone_confidence']:.2f} "
+            f"location={phone_info['phone_location_hint']}"
+        )
 
-            # Map VLM action to backend activity_type
-            vlm_action = result.get('action') if result else None
-            activity_type = self.action_mapping.get(vlm_action, "unknown")
+        # ── Step 3: VLM inference ────────────────────────────────────────────
+        t0 = time.time()
+        vlm_result = self._recognize_via_api(image, phone_info)
+        inference_time = time.time() - t0
 
-            # Prepare result
-            result_data = {
-                'action': vlm_action,
-                'activity_type': activity_type,
-                'raw_output': result.get('raw_output') if result else None,
-                'inference_time': inference_time,
-                'metadata': metadata
-            }
+        self.total_inferences += 1
+        self.total_inference_time += inference_time
 
-            # Post to backend if we have user_id and camera_id
-            if metadata.get('user_id') and metadata.get('camera_id'):
-                try:
-                    self._post_activity_to_backend(
-                        user_id=metadata['user_id'],
-                        camera_id=metadata['camera_id'],
-                        activity_type=activity_type,
-                        proof_image=image,  # Send the person crop as proof
-                        metadata=metadata
+        raw_action = vlm_result.get('action') if vlm_result else None
+        vlm_confidence = vlm_result.get('confidence', 0.0) if vlm_result else 0.0
+        vlm_phone_visible = vlm_result.get('phone_visible', False) if vlm_result else False
+        vlm_phone_location = vlm_result.get('phone_location', 'none') if vlm_result else 'none'
+
+        logger.debug(
+            f"VLM_RESULT | cam={camera_id} track={track_id} | "
+            f"raw_action={raw_action} conf={vlm_confidence:.2f} | "
+            f"phone_visible={vlm_phone_visible} phone_location={vlm_phone_location}"
+        )
+
+        # ── Step 4: phone-gating ─────────────────────────────────────────────
+        gated_action = raw_action
+        rejection_reason = None
+
+        if raw_action in _PHONE_ACTIONS:
+            phone_confirmed = (
+                phone_info['phone_detected']
+                or vlm_phone_visible
+            )
+            if not phone_confirmed:
+                if vlm_confidence < _NO_PHONE_VLM_THRESHOLD:
+                    gated_action = 'working' if 'working' in self.actions_config else 'idle'
+                    rejection_reason = (
+                        f"rejected_{raw_action}_no_phone_object"
+                        f"_vlm_conf_{vlm_confidence:.2f}"
                     )
-                except Exception as e:
-                    logger.exception(f"Failed to post activity to backend: {e}")
+            elif raw_action == 'phone_calling':
+                # calling requires phone near face/ear
+                location_ok = phone_info['phone_location_hint'] in ('ear', 'face')
+                if not location_ok and vlm_phone_location not in ('ear', 'face'):
+                    gated_action = 'using_phone'  # downgrade, not reject entirely
 
-            # Call callback if registered
-            callback = self.result_callbacks.get(request_id)
-            if callback:
-                callback(result_data)
-                # Clean up callback
-                del self.result_callbacks[request_id]
+        # ── Step 5: temporal voting ──────────────────────────────────────────
+        voted_action = self.get_voted_action(track_id, gated_action)
 
+        if voted_action in _PHONE_ACTIONS and not (
+            phone_info['phone_detected'] or vlm_phone_visible
+        ):
+            voted_action = None
+            rejection_reason = rejection_reason or f"rejected_{voted_action}_not_enough_votes"
+
+        # Log final decision
+        if rejection_reason:
+            logger.info(
+                f"VOTE_RESULT | cam={camera_id} track={track_id} | "
+                f"voted={voted_action} | gated={gated_action} raw={raw_action} | "
+                f"REJECTED: {rejection_reason}"
+            )
+        else:
+            display_str = 'displayed' if voted_action else 'suppressed_no_consensus'
             logger.debug(
-                f"Action recognized: {vlm_action} ({activity_type}) | "
-                f"time={inference_time:.3f}s | "
-                f"user_id={metadata.get('user_id')} | "
-                f"track_id={metadata.get('track_id')}"
+                f"VOTE_RESULT | cam={camera_id} track={track_id} | "
+                f"voted={voted_action} | gated={gated_action} raw={raw_action} | "
+                f"{display_str}"
             )
 
-        except Exception as e:
-            logger.exception(f"Failed to process inference request: {e}")
-            self.total_api_errors += 1
+        # ── Step 6: debug crop saving ────────────────────────────────────────
+        if self.debug_save_dir and (
+            raw_action in _PHONE_ACTIONS
+            or phone_info['phone_detected']
+        ):
+            self._save_debug_crop(
+                image, camera_id, track_id,
+                raw_action or 'none', vlm_confidence,
+                phone_info['phone_detected'],
+                voted_action,
+            )
 
-    def recognize_via_api(self, image: np.ndarray) -> Optional[Dict]:
-        """Send image to Ollama for action recognition.
+        # ── Step 7: build result and call callback ───────────────────────────
+        activity_type = self.action_mapping.get(voted_action, 'unknown')
+        result_data = {
+            'action': voted_action,
+            'activity_type': activity_type,
+            'confidence': vlm_confidence,
+            'raw_output': vlm_result.get('raw_output') if vlm_result else None,
+            'inference_time': inference_time,
+            'phone_detected': phone_info['phone_detected'],
+            'phone_confidence': phone_info['phone_confidence'],
+            'phone_location': phone_info['phone_location_hint'],
+            'metadata': metadata,
+        }
 
-        Args:
-            image: Person crop image (numpy array, BGR format from OpenCV)
+        if metadata.get('user_id') and metadata.get('camera_id') and voted_action:
+            try:
+                self._post_activity_to_backend(
+                    user_id=metadata['user_id'],
+                    camera_id=metadata['camera_id'],
+                    activity_type=activity_type,
+                    proof_image=image,
+                    metadata=metadata,
+                )
+            except Exception as e:
+                logger.exception(f"Failed to post activity to backend: {e}")
 
-        Returns:
-            Dictionary with action and raw model output, or None if failed
+        callback = self.result_callbacks.pop(request_id, None)
+        if callback:
+            callback(result_data)
+
+    # ── VLM inference ─────────────────────────────────────────────────────────
+
+    def _recognize_via_api(
+        self, image: np.ndarray, phone_info: Dict
+    ) -> Optional[Dict]:
+        """Send image to Ollama for activity classification.
+
+        Builds a dynamic prompt that includes phone-detector evidence so the
+        VLM can make an informed, evidence-anchored decision.
         """
         try:
-            # Convert image to base64 for Ollama
-            # Ollama expects images in JPEG format
-            _, buffer = cv2.imencode('.jpg', image)
-            image_base64 = base64.b64encode(buffer).decode('utf-8')
+            _, buffer = cv2.imencode(
+                '.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85]
+            )
+            image_b64 = base64.b64encode(buffer).decode('utf-8')
 
-            # Call Ollama API using shared client
+            prompt = self._build_dynamic_prompt(phone_info)
+
             response = self._ollama_client.generate(
                 model=self.model_name,
-                prompt=self.prompt_template,
-                images=[image_base64],
-                stream=False
+                prompt=prompt,
+                images=[image_b64],
+                stream=False,
             )
 
-            # Parse response
-            raw_output = response.get('response', '').strip().lower()
+            raw_output = (
+                getattr(response, 'response', None) or response['response']
+            ).strip()
 
-            # Extract action from response using configured actions
-            action = self._parse_action_response(raw_output)
+            action, confidence, phone_visible, phone_location = (
+                self._parse_json_response(raw_output)
+            )
 
-            logger.debug(f"Ollama response: {raw_output} -> action: {action}")
+            logger.info(
+                f"Ollama response: '{raw_output[:100]}' → "
+                f"action={action} conf={confidence:.2f} "
+                f"phone_visible={phone_visible}"
+            )
 
             return {
                 'action': action,
-                'raw_output': raw_output
+                'confidence': confidence,
+                'phone_visible': phone_visible,
+                'phone_location': phone_location,
+                'raw_output': raw_output,
             }
 
-        except TimeoutError as e:
-            self.total_timeouts += 1
-            logger.warning(f"Ollama API timeout after {self.inference_timeout}s: {e}")
-            return None
         except Exception as e:
-            self.total_api_errors += 1
-            logger.warning(f"Ollama API error: {type(e).__name__}: {e}")
+            err_name = type(e).__name__
+            if 'timeout' in err_name.lower():
+                self.total_timeouts += 1
+                logger.warning(
+                    f"Ollama timeout after {self.inference_timeout}s: {err_name}: {e}"
+                )
+            else:
+                self.total_api_errors += 1
+                logger.warning(f"Ollama API error: {err_name}: {e}")
             return None
 
-    def _parse_action_response(self, raw_output: str) -> Optional[str]:
-        """Parse VLM response to extract action using configured actions.
+    def _build_dynamic_prompt(self, phone_info: Dict) -> str:
+        """Build a VLM prompt that embeds phone-detector evidence.
 
-        Args:
-            raw_output: Raw response from VLM (lowercase, stripped)
-
-        Returns:
-            Matched action name or None if no match
+        When the phone detector found a phone, the VLM is asked to verify
+        and classify it.  When no phone was found, the VLM is explicitly
+        instructed to raise its evidence bar for phone labels.
         """
-        # Check for "none" or "none of" patterns first (fallback to idle if configured)
-        if raw_output.startswith('none') or 'none of' in raw_output:
-            if 'idle' in self.actions_config:
-                return 'idle'
+        action_names = list(self.actions_config.keys())
+        labels_str = ', '.join(action_names)
+
+        lines = [
+            "You are analyzing a CCTV person crop from a factory or workshop.",
+            f"Choose exactly one activity label from: {labels_str}",
+            "",
+        ]
+
+        # Embed phone detector evidence
+        if phone_info.get('phone_detected'):
+            conf = phone_info.get('phone_confidence', 0.0)
+            loc = phone_info.get('phone_location_hint', 'unknown')
+            lines += [
+                "PHONE DETECTION RESULT (YOLO object detector):",
+                f"  A phone-like object was detected in this crop "
+                f"(confidence {conf:.2f}, location: {loc}).",
+                "  Use this as evidence when deciding whether using_phone or phone_calling applies.",
+                "  Confirm visually — if you see a rectangular device consistent with the "
+                "phone detector finding, select the appropriate phone label.",
+                "",
+            ]
+        else:
+            lines += [
+                "PHONE DETECTION RESULT (YOLO object detector):",
+                "  No phone-like object was detected in this crop.",
+                "  Only choose using_phone or phone_calling if a phone is UNMISTAKABLY "
+                "visible with confidence >= 0.90.",
+                "  If in doubt, do NOT choose using_phone — prefer working, carrying, "
+                "walking, or idle instead.",
+                "",
+            ]
+
+        lines.append("Activity rules:")
+        for action_name, cfg in self.actions_config.items():
+            desc = cfg.get('description', '')
+            lines.append(f"  - {action_name}: {desc}")
+
+        lines += [
+            "",
+            "IMPORTANT — do NOT choose using_phone or phone_calling:",
+            "  - because the person is looking down.",
+            "  - because a hand is near the chest, face, or pocket.",
+            "  - for dark shirt areas, shadows, tools, wood pieces, machine parts, or pockets.",
+            "  - when the object in hand is clearly a tool, board, box, or material.",
+            "",
+            "Respond ONLY with valid JSON, no extra text:",
+            '{"activity": "...", "confidence": 0.0, '
+            '"phone_visible": false, "phone_location": "none", "reason": "..."}',
+            "",
+            f"Use only these labels: {labels_str}",
+            'If uncertain and no phone is visible, use '
+            '{"activity": "idle", "confidence": 0.5, "phone_visible": false, '
+            '"phone_location": "none", "reason": "uncertain"}',
+        ]
+
+        return "\n".join(lines)
+
+    # ── JSON parsing ──────────────────────────────────────────────────────────
+
+    def _parse_json_response(self, raw_output: str):
+        """Parse VLM JSON response.
+
+        Returns (action, confidence, phone_visible, phone_location).
+        """
+        text = raw_output.strip()
+
+        # Strip markdown fences
+        if '```' in text:
+            for part in text.split('```'):
+                part = part.strip().lstrip('json').strip()
+                if part.startswith('{'):
+                    text = part
+                    break
+
+        # Isolate JSON object
+        start, end = text.find('{'), text.rfind('}')
+        if start != -1 and end > start:
+            text = text[start:end + 1]
+
+        try:
+            data = json.loads(text)
+            raw_action = str(data.get('activity', '')).strip().lower()
+            confidence = float(data.get('confidence', 0.5))
+            phone_visible = bool(data.get('phone_visible', False))
+            phone_location = str(data.get('phone_location', 'none')).lower()
+        except (json.JSONDecodeError, ValueError, TypeError):
+            raw_action = raw_output.strip().lower().rstrip('.,!;:')
+            confidence = 0.5
+            phone_visible = False
+            phone_location = 'none'
+
+        action = self._match_action_name(raw_action)
+
+        # Apply per-action minimum confidence
+        min_conf = _MIN_CONFIDENCE.get(action, 0.35)
+        if action in _PHONE_ACTIONS and not phone_visible and confidence < min_conf:
+            # VLM itself says phone not visible → downgrade
+            fallback = 'working' if 'working' in self.actions_config else 'idle'
+            return fallback, confidence, phone_visible, phone_location
+
+        if confidence < min_conf:
+            fallback = 'idle' if 'idle' in self.actions_config else None
+            return fallback, confidence, phone_visible, phone_location
+
+        return action, confidence, phone_visible, phone_location
+
+    def _match_action_name(self, raw: str) -> Optional[str]:
+        """Match raw VLM string to a configured action name."""
+        if not raw:
+            return 'idle' if 'idle' in self.actions_config else None
+
+        # Exact match (with and without underscores)
+        for name in self.actions_config:
+            if raw == name.lower() or raw == name.lower().replace('_', ' '):
+                return name
+
+        # Fallback keywords that mean idle / not meaningful
+        if any(w in raw for w in _IDLE_FALLBACK_KEYWORDS):
+            return 'idle' if 'idle' in self.actions_config else None
+
+        # Substring — longest configured name wins
+        best, best_len = None, 0
+        for name in self.actions_config:
+            a = name.lower()
+            a_sp = a.replace('_', ' ')
+            if a in raw or a_sp in raw:
+                if len(a) > best_len:
+                    best, best_len = name, len(a)
+        return best
+
+    # ── Temporal voting ───────────────────────────────────────────────────────
+
+    def get_voted_action(
+        self, track_id: int, new_action: Optional[str]
+    ) -> Optional[str]:
+        """Record new result and return the majority from the last N results.
+
+        Phone actions (using_phone, phone_calling) require 2/4 votes.
+        All other actions require 1/4 (displayed after first detection).
+        """
+        if track_id not in self._action_history:
+            self._action_history[track_id] = deque(maxlen=_VOTE_WINDOW)
+        self._action_history[track_id].append(new_action)
+
+        history = self._action_history[track_id]
+        counts: Dict[Optional[str], int] = {}
+        for a in history:
+            if a is not None:
+                counts[a] = counts.get(a, 0) + 1
+
+        if not counts:
             return None
 
-        # Check each configured action
-        for action_name in self.actions_config.keys():
-            action_lower = action_name.lower()
-            if raw_output.startswith(action_lower) or raw_output == action_lower:
-                return action_name
+        best = max(counts, key=lambda k: counts[k])
+        vote_req = (
+            _VOTE_REQUIRED_PHONE if best in _PHONE_ACTIONS
+            else _VOTE_REQUIRED_DEFAULT
+        )
 
-        return None
+        if len(history) < vote_req:
+            # Not enough history yet — phone waits, others show immediately
+            return None if best in _PHONE_ACTIONS else new_action
+
+        return best if counts[best] >= vote_req else None
+
+    # ── Debug helpers ─────────────────────────────────────────────────────────
+
+    def _save_debug_crop(
+        self,
+        image: np.ndarray,
+        camera_id,
+        track_id: int,
+        raw_action: str,
+        confidence: float,
+        phone_detected: bool,
+        voted_action: Optional[str],
+    ) -> None:
+        if not self.debug_save_dir:
+            return
+        try:
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            phone_tag = 'phoneTrue' if phone_detected else 'phoneFalse'
+            voted_tag = voted_action or 'suppressed'
+            fname = (
+                f"cam{camera_id}_track{track_id}_{ts}_"
+                f"raw{raw_action}_conf{int(confidence * 100)}_"
+                f"{phone_tag}_voted{voted_tag}.jpg"
+            )
+            path = os.path.join(self.debug_save_dir, fname)
+            cv2.imwrite(path, image)
+        except Exception as e:
+            logger.debug(f"Failed to save debug crop: {e}")
+
+    # ── Action mapping ────────────────────────────────────────────────────────
+
+    def _build_action_mapping(self) -> Dict[str, str]:
+        mapping: Dict[Optional[str], str] = {None: 'unknown'}
+        for name, cfg in self.actions_config.items():
+            mapping[name] = cfg.get('backend_type', name)
+        return mapping
+
+    # ── Backend posting ───────────────────────────────────────────────────────
 
     def _post_activity_to_backend(
         self,
@@ -330,37 +641,25 @@ class ActionRecognizer:
         camera_id: int,
         activity_type: str,
         proof_image: np.ndarray,
-        metadata: dict
+        metadata: dict,
     ) -> None:
-        """Post activity to backend API.
-
-        Args:
-            user_id: User ID
-            camera_id: Camera ID
-            activity_type: Activity type (backend format)
-            proof_image: Person crop image to send as proof
-            metadata: Additional metadata
-        """
         if not self.client_slug:
-            logger.warning("No client_slug configured, skipping backend post")
             return
-
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime as _dt, timezone
             from workers.detection_tasks import task_record_activity
             from infrastructure.storage import ImageFetcher
 
-            # Upload proof image to GCS if provided
-            proof_image_url = None
+            proof_url = None
             if proof_image is not None:
                 try:
-                    proof_image_url = ImageFetcher().upload_image(proof_image, "activity_proofs", self.client_slug)
+                    proof_url = ImageFetcher().upload_image(
+                        proof_image, 'activity_proofs', self.client_slug
+                    )
                 except Exception as e:
-                    logger.warning(f"Failed to upload activity proof image: {e}")
+                    logger.warning(f"Failed to upload activity proof: {e}")
 
-            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-            # Queue Celery task directly
+            ts = _dt.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
             task_record_activity.delay(
                 client_slug=self.client_slug,
                 user_id=int(user_id) if user_id else 0,
@@ -368,83 +667,13 @@ class ActionRecognizer:
                 activity_type=activity_type,
                 camera_id=camera_id,
                 confidence=None,
-                proof_image_url=proof_image_url,
-                detected_at=timestamp
+                proof_image_url=proof_url,
+                detected_at=ts,
             )
-
-            logger.info(f"Activity queued to Celery: user_id={user_id}, type={activity_type}")
-
+            logger.info(f"Activity queued: user={user_id} type={activity_type}")
         except Exception as e:
             logger.exception(f"Failed to queue activity: {e}")
             raise
 
-    def recognize_async(
-        self,
-        image: np.ndarray,
-        request_id: str,
-        callback: Optional[Callable] = None,
-        metadata: Optional[Dict] = None
-    ) -> bool:
-        """Queue image for async action recognition.
-
-        Args:
-            image: Person crop image (numpy array)
-            request_id: Unique request identifier
-            callback: Optional callback function to receive results
-            metadata: Optional metadata (should include user_id, camera_id, person_name, track_id, timestamp)
-
-        Returns:
-            True if queued successfully, False if queue is full
-        """
-        if not self.enabled:
-            return False
-
-        try:
-            # Register callback if provided
-            if callback:
-                self.result_callbacks[request_id] = callback
-
-            # Queue inference request
-            self.inference_queue.put({
-                'image': image,
-                'request_id': request_id,
-                'metadata': metadata or {}
-            }, block=False)
-
-            return True
-
-        except queue.Full:
-            logger.warning(
-                f"Action recognition queue full ({self.max_queue_size}), "
-                "dropping request"
-            )
-            return False
-
-    def get_queue_size(self) -> int:
-        """Get current queue size."""
-        return self.inference_queue.qsize()
-
-    def get_metrics(self) -> Dict:
-        """Get performance metrics."""
-        avg_time = (
-            self.total_inference_time / self.total_inferences
-            if self.total_inferences > 0
-            else 0.0
-        )
-
-        return {
-            'total_inferences': self.total_inferences,
-            'total_time': self.total_inference_time,
-            'average_time': avg_time,
-            'total_errors': self.total_api_errors,
-            'total_timeouts': self.total_timeouts,
-            'queue_size': self.get_queue_size(),
-            'workers_running': self.running,
-            'ollama_api_url': self.ollama_api_url,
-            'model_name': self.model_name,
-            'inference_timeout': self.inference_timeout
-        }
-
     def __del__(self):
-        """Cleanup on deletion."""
         self.stop_workers()

@@ -51,19 +51,28 @@ class FaceRecognition:
         q = face_embs / np.where(norms == 0, 1, norms)
         return np.dot(q, self.db_embs.T)
 
-    def get_best_match(self, similarities: np.ndarray) -> Tuple[int, float]:
+    def get_best_match(self, similarities: np.ndarray) -> Tuple[int, float, float]:
         """Find the best matching face embedding from the database.
 
         Args:
             similarities: Matrix of similarity scores (shape: [n_faces, n_database_faces])
 
         Returns:
-            Tuple of (best_match_index, similarity_score)
+            Tuple of (best_match_index, best_similarity, margin)
+            where margin = best_similarity - second_best_similarity
         """
         max_sim_indices = np.argmax(similarities, axis=1)
         max_sim_values = np.max(similarities, axis=1)
         best_idx = np.argmax(max_sim_values)
-        best_similarity = max_sim_values[best_idx]
-        best_match_db_idx = max_sim_indices[best_idx]
+        best_similarity = float(max_sim_values[best_idx])
+        best_match_db_idx = int(max_sim_indices[best_idx])
 
-        return best_match_db_idx, best_similarity
+        # Compute margin: difference between best and second-best score
+        row = similarities[best_idx]
+        if len(row) >= 2:
+            sorted_vals = np.sort(row)[::-1]
+            margin = float(sorted_vals[0] - sorted_vals[1])
+        else:
+            margin = best_similarity  # only one embedding — no second-best
+
+        return best_match_db_idx, best_similarity, margin

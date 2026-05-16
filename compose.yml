@@ -47,6 +47,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    user: "1010:11000"
+    environment:
+      HOME: /tmp
+      YOLO_CONFIG_DIR: /app/volumes/yolo-cache
+      HF_HOME: /app/volumes/hf-cache
+      MPLCONFIGDIR: /tmp/mpl
+      SO_LOCAL_IMAGE_DIR: /app/volumes/storage/videos/images
     restart: unless-stopped
     depends_on:
       ollama:
@@ -54,10 +61,13 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./configs:/app/configs:ro
-      - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
+      - ./volumes/storage/videos:/app/volumes/storage/videos
+      - ./volumes/input_videos:/app/volumes/input_videos:ro
       - ./credentials:/app/credentials
-      - ./volumes/models/insightface:/root/.insightface
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/logs:/app/logs
+      - ./volumes/yolo-cache:/app/volumes/yolo-cache
+      - ./volumes/models/insightface:/tmp/.insightface
+      - ./volumes/models/huggingface:/app/volumes/hf-cache
       - ./volumes/models/weights:/app/volumes/models/weights
       - ${SO_ENROLLMENT_PHOTOS_DIR:-./enrollment_photos}:/app/enrollment_photos:ro
     networks:

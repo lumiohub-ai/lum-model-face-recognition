@@ -63,6 +63,8 @@ def load_config(config_path: Optional[str] = None, default_config: Optional[Dict
         return default_config
 
 
+_logging_configured = False
+
 def setup_logging(
     log_level: Optional[str] = None,
     log_dir: str = "logs",
@@ -76,6 +78,11 @@ def setup_logging(
         log_dir: Directory for log files.
         app_name: Application name for log file naming.
     """
+    global _logging_configured
+    if _logging_configured:
+        return
+    _logging_configured = True
+
     if log_level is None:
         from config.settings import settings
         log_level = settings.log_level

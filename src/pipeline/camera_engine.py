@@ -100,7 +100,9 @@ class CameraEngine:
         self.stream_url = camera_config['stream_url']
         self.application = camera_config.get('application', ['attendance'])
         self.match_threshold = camera_config.get('match_threshold', 0.3)
-        self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
+        self.match_margin = camera_config.get('match_margin', 0.10)
+        self.min_face_size = camera_config.get('min_face_size', 60)
+        self.blur_threshold = float(camera_config.get('blur_threshold', 30.0))
         self.roi = camera_config.get('roi')
         self.virtual_lines = camera_config.get('virtual_lines', [])
 
@@ -306,24 +308,26 @@ class CameraEngine:
                     current = self.track_gender_age.get(track_id)
                     if current is None:
                         self.track_gender_age[track_id] = {
-                            "gender": gender,
-                            "age": age,
-                            "age_samples": [age] if age is not None else [],
+                            "gender": None,
+                            "age": age if det_score >= 0.55 else None,
+                            "age_samples": [age] if (age is not None and det_score >= 0.55) else [],
                             "gender_samples": [gender] if gender is not None else [],
                             "det_score": det_score,
                         }
                     else:
-                        if age is not None:
+                        # Only accumulate age from reasonably sharp detections
+                        if age is not None and det_score >= 0.55:
                             current["age_samples"].append(age)
-                            if len(current["age_samples"]) > 30:
-                                current["age_samples"] = current["age_samples"][-30:]
+                            if len(current["age_samples"]) > 20:
+                                current["age_samples"] = current["age_samples"][-20:]
                             current["age"] = round(sum(current["age_samples"]) / len(current["age_samples"]))
                         if gender is not None:
                             current["gender_samples"].append(gender)
                             if len(current["gender_samples"]) > 30:
                                 current["gender_samples"] = current["gender_samples"][-30:]
-                            # majority vote for gender
-                            current["gender"] = Counter(current["gender_samples"]).most_common(1)[0][0]
+                            # Only set gender after >= 5 samples for reliable majority vote
+                            if len(current["gender_samples"]) >= 5:
+                                current["gender"] = Counter(current["gender_samples"]).most_common(1)[0][0]
                         if det_score > current.get("det_score", 0.0):
                             current["det_score"] = det_score
 
@@ -451,11 +455,24 @@ class CameraEngine:
                     identity = voting["top_candidate"]
                     identity_confidence = voting.get("top_avg_similarity", 0.0)
 
-            # Proof image crop for state manager
+            # Proof image crop for state manager (tight bbox for face recognition)
             proof_image = None
             if bbox is not None:
                 x1, y1, x2, y2 = self._clip_bbox(frame, bbox)
                 proof_image = frame[y1:y2, x1:x2]
+
+            # Padded context crop for activity recognition (VLM needs surrounding context)
+            activity_image = None
+            if bbox is not None:
+                fh, fw = frame.shape[:2]
+                bx1, by1, bx2, by2 = bbox[:4]
+                pw = (bx2 - bx1) * 0.45
+                ph = (by2 - by1) * 0.35
+                ax1 = max(0, int(bx1 - pw))
+                ay1 = max(0, int(by1 - ph))
+                ax2 = min(fw, int(bx2 + pw))
+                ay2 = min(fh, int(by2 + ph * 0.5))
+                activity_image = frame[ay1:ay2, ax1:ax2]
 
             self.state_manager.update_person(
                 track_id=track_id,
@@ -468,13 +485,12 @@ class CameraEngine:
             if (
                 self.action_recognizer
                 and self.action_recognizer.enabled
-                and "activity" in self.application
-                and proof_image is not None
+                and activity_image is not None
             ):
                 self._check_and_queue_action_recognition(
                     track_id=track_id,
                     identity=identity,
-                    proof_image=proof_image,
+                    proof_image=activity_image,
                     frame_num=frame_num,
                 )
 
@@ -590,9 +606,9 @@ class CameraEngine:
         similarities = self.face_recognizer.compute_similarities(
             np.array([embedding])
         )
-        best_idx, best_similarity = self.face_recognizer.get_best_match(similarities)
+        best_idx, best_similarity, margin = self.face_recognizer.get_best_match(similarities)
 
-        if best_similarity >= self.match_threshold:
+        if best_similarity >= self.match_threshold and margin >= self.match_margin:
             name = self.face_recognizer.db_names[best_idx]
             if self.global_track_manager:
                 self.global_track_manager.on_face_detected(
@@ -655,8 +671,8 @@ class CameraEngine:
         if not crops:
             return None
 
-        min_face_size = getattr(self, 'min_face_size', 150)
-        blur_threshold = 100.0
+        min_face_size = self.min_face_size
+        blur_threshold = self.blur_threshold
 
         best_frame_num = None
         best_score = -1
@@ -779,6 +795,7 @@ class CameraEngine:
                 'track_id': track_id,
                 'identity': identity,
                 'user_id': user_id,
+                'user_name': identity,
                 'camera_id': self.camera_id,
                 'frame_num': frame_num,
             },
@@ -809,6 +826,7 @@ class CameraEngine:
         state = self.state_manager.get_state(track_id)
         if state:
             state.last_detected_action = action
+            state.last_action_time = time.time()
 
     def reset(self) -> None:
         """Reset all tracking state."""

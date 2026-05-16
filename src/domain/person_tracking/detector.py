@@ -8,6 +8,8 @@ Detects persons in video frames using Ultralytics YOLO models.
 """
 
 from typing import List, Dict, Optional
+import os
+from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 from loguru import logger
@@ -100,6 +102,10 @@ class PersonDetector:
             model_name = f"yolov8{model_size}-pose.pt" if use_pose else f"yolov8{model_size}.pt"
 
         try:
+            yolo_cache = os.environ.get("YOLO_CONFIG_DIR")
+            if yolo_cache:
+                cached = Path(yolo_cache) / model_name
+                model_name = str(cached) if cached.exists() else model_name
             self.model = YOLO(model_name)
             logger.debug(f"{model_type} model loaded: {model_name}")
 

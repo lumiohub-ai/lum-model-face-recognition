@@ -404,7 +404,7 @@ class _Handler(BaseHTTPRequestHandler):
             filename = os.path.basename(path)
             image_dir = os.environ.get(
                 "SO_LOCAL_IMAGE_DIR",
-                "/app/volumes/storage/person-tracking/images"
+                "/app/volumes/storage/videos/images"
             )
             file_path = os.path.join(image_dir, filename)
             if os.path.isfile(file_path):

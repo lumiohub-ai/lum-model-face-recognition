@@ -40,6 +40,7 @@ class PersonState:
     # Action Recognition
     last_action_check_time: float = 0.0  # Unix timestamp of last action recognition check
     last_detected_action: Optional[str] = None  # Last detected action type
+    last_action_time: float = 0.0  # Unix timestamp when action was last detected
 
     # Stats
     total_frames: int = 0

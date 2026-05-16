@@ -43,7 +43,8 @@ class PgVectorStore:
         image_url: str,
         embedding: np.ndarray,
         external_id: Optional[str] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        image_url_norm_override: Optional[str] = None,
     ) -> Optional[int]:
         """Add a single face embedding to database (idempotent).
 
@@ -65,8 +66,7 @@ class PgVectorStore:
             Exception: If database operation fails
         """
         try:
-            # Normalize URL for stable identity
-            image_url_norm = normalize_image_url(image_url)
+            image_url_norm = image_url_norm_override or normalize_image_url(image_url)
 
             # Convert numpy array to list for PostgreSQL
             embedding_list = embedding.tolist()

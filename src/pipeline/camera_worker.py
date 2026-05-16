@@ -424,6 +424,7 @@ class CameraWorker:
                 "track_age": 0,
                 "in_current_frame": True,
                 "last_detected_action": state.last_detected_action if state else None,
+                "last_action_time": state.last_action_time if state else 0.0,
                 "gender": _ga.get("gender"),
                 "age": _ga.get("age"),
             })

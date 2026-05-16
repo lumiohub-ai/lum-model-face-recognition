@@ -11,7 +11,7 @@ from config.settings import settings
 
 from .detector import FaceDetector
 from .recognizer import FaceRecognition
-from domain.action_recognition import ActionRecognizer
+from domain.action_recognition import ActionRecognizer, PhoneDetector
 from domain.person_tracking import PersonDetector
 from domain.person_tracking.global_track import GlobalTrackManager
 
@@ -35,6 +35,7 @@ class ModelFactory:
         self._face_detector: Optional[FaceDetector] = None
         self._face_recognizer: Optional[FaceRecognition] = None
         self._person_detector: Optional[PersonDetector] = None
+        self._phone_detector: Optional[PhoneDetector] = None
         self._action_recognizer: Optional[ActionRecognizer] = None
         self._global_track_manager: Optional[GlobalTrackManager] = None
         self._global_id_generator = None  # GlobalTrackIDGenerator (lazy import)
@@ -74,6 +75,17 @@ class ModelFactory:
         return self._person_detector
 
     @property
+    def phone_detector(self) -> PhoneDetector:
+        """Get or create phone object detector (lazy initialization)."""
+        if self._phone_detector is None:
+            logger.debug("Initializing PhoneDetector...")
+            self._phone_detector = PhoneDetector(
+                model_path=None,        # auto-resolve from YOLO_CONFIG_DIR
+                confidence_threshold=0.25,
+            )
+        return self._phone_detector
+
+    @property
     def action_recognizer(self) -> ActionRecognizer:
         """Get or create action recognizer (lazy initialization)."""
         if self._action_recognizer is None:
@@ -82,17 +94,32 @@ class ModelFactory:
             ollama_api_url = settings.ollama_api_url
             model_name = settings.ollama_model
 
-            actions = action_config.get('actions')
+            actions = self.config.get('actions') or action_config.get('actions')
+
+            # Debug crop directory — resolve to an absolute path so mkdir works
+            # regardless of the container's working directory.
+            debug_save_dir = None
+            if enabled:
+                import pathlib
+                output_dir = self.config.get('output_dir', 'volumes/storage/videos')
+                out_path = pathlib.Path(output_dir)
+                if not out_path.is_absolute():
+                    # Anchor to /app (container root) when relative path given
+                    out_path = pathlib.Path('/app') / out_path
+                debug_save_dir = str(out_path.parent / 'debug' / 'action_recognition')
+
             self._action_recognizer = ActionRecognizer(
                 ollama_api_url=ollama_api_url,
                 client_slug=self.client_slug,
                 enabled=enabled,
-                check_interval_seconds=action_config.get('check_interval_seconds', 30),
-                max_queue_size=action_config.get('max_queue_size', 50),
-                num_workers=action_config.get('async_workers', 1),
+                check_interval_seconds=action_config.get('check_interval_seconds', 8),
+                max_queue_size=action_config.get('max_queue_size', 20),
+                num_workers=action_config.get('async_workers', 2),
                 model_name=model_name,
                 inference_timeout=action_config.get('inference_timeout', 30),
-                actions=actions
+                actions=actions,
+                phone_detector=self.phone_detector if enabled else None,
+                debug_save_dir=debug_save_dir,
             )
 
             # Start worker threads if enabled
@@ -136,6 +163,7 @@ class ModelFactory:
         _ = self.face_detector
         _ = self.face_recognizer
         _ = self.person_detector
+        _ = self.phone_detector
         _ = self.action_recognizer
         _ = self.global_track_manager
         _ = self.global_id_generator

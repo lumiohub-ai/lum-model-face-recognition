@@ -445,7 +445,7 @@ class ImageFetcher:
 
             local_dir = os.environ.get(
                 "SO_LOCAL_IMAGE_DIR",
-                "/app/volumes/storage/person-tracking/images"
+                "/app/volumes/storage/videos/images"
             )
             os.makedirs(local_dir, exist_ok=True)
 

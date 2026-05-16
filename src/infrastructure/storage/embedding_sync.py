@@ -1,8 +1,11 @@
 """Service to sync face embeddings from backend user events."""
 
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
+import cv2
+import numpy as np
 from loguru import logger
 from sqlalchemy import text
 
@@ -11,6 +14,10 @@ from .pgvector import PgVectorStore
 from .repository import Repository
 from .url_utils import normalize_image_url
 from .gcs import ImageFetcher
+
+# Elevation angles (degrees above horizontal) to simulate for top-mounted CCTV cameras.
+# These cover the most common ceiling/wall-high camera mounting angles.
+_PITCH_AUGMENT_DEGREES = []  # Disabled: augmented embeddings cause cross-user false positives
 
 
 class EmbeddingSyncService:
@@ -74,7 +81,7 @@ class EmbeddingSyncService:
 
     def _process_single_image(self, img_data: Dict, user_id: str, user_name: str,
                                external_id: Optional[str]) -> Optional[Dict]:
-        """Fetch one image, detect face, return embedding dict or None."""
+        """Fetch one image, detect face, return embedding dict (with raw image for augmentation)."""
         original_url = img_data.get('original')
         if not original_url:
             logger.warning("Image data missing 'original' URL, skipping")
@@ -102,11 +109,98 @@ class EmbeddingSyncService:
                     'landmarks': face['landmarks'].tolist(),
                     'bbox': [float(x) for x in face['bbox']],
                 },
+                '_image': image,
+                '_landmarks': face['landmarks'],
             }
 
         except Exception as e:
             logger.exception(f"❌ Error processing image {original_url}: {e}")
             return None
+
+    def _get_rec_model(self):
+        """Return the InsightFace ArcFace recognition model, or None."""
+        try:
+            for model in self.detector.model.models.values():
+                if hasattr(model, 'get_feat'):
+                    return model
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _apply_pitch_down(aligned_112: np.ndarray, degrees: float) -> np.ndarray:
+        """Simulate a face crop as seen from a camera elevated 'degrees' above horizontal.
+
+        Vertically compresses the 112x112 aligned crop to mimic foreshortening:
+        more forehead, less chin — exactly what high-mounted CCTV cameras capture.
+        """
+        h, w = aligned_112.shape[:2]
+        visible_frac = math.cos(math.radians(degrees))
+        show_px = max(int(h * visible_frac), 20)
+        cropped = aligned_112[0:show_px, :]
+        return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    def _generate_pitch_augmentations(
+        self,
+        image: np.ndarray,
+        landmarks: np.ndarray,
+        base_url: str,
+        user_id: str,
+        user_name: str,
+        external_id: Optional[str],
+    ) -> List[Dict]:
+        """Generate pitch-down augmented embeddings for top-mounted CCTV compatibility.
+
+        For each degree in _PITCH_AUGMENT_DEGREES, applies a perspective compression
+        to the landmark-aligned 112x112 crop and runs ArcFace on the result.
+        Stored with a synthetic image_url_norm so they don't conflict with the base
+        embedding and are skipped by stale-embedding cleanup.
+        """
+        try:
+            from insightface.utils import face_align
+            aligned = face_align.norm_crop(
+                image, landmark=landmarks.astype(np.float32), image_size=112
+            )
+
+            rec = self._get_rec_model()
+            if rec is None:
+                logger.warning("ArcFace model not accessible — skipping pitch augmentation")
+                return []
+
+            base_norm = normalize_image_url(base_url)
+            results = []
+            for deg in _PITCH_AUGMENT_DEGREES:
+                try:
+                    rotated = self._apply_pitch_down(aligned, deg)
+                    feat = rec.get_feat([rotated])
+                    embedding = feat.flatten().astype(np.float32)
+                    norm = np.linalg.norm(embedding)
+                    if norm == 0:
+                        continue
+                    embedding = embedding / norm
+                    results.append({
+                        'user_id': user_id,
+                        'user_name': user_name,
+                        'image_url': base_url,
+                        'image_url_norm_override': f"{base_norm}#aug_pitch_{deg}",
+                        'embedding': embedding,
+                        'external_id': external_id,
+                        'metadata': {
+                            'augmentation': f'pitch_down_{deg}deg',
+                            'source_url': base_url,
+                        },
+                    })
+                    logger.debug(f"✔ pitch_{deg}° aug for {user_name}")
+                except Exception as e:
+                    logger.debug(f"pitch_{deg}° aug failed for {user_name}: {e}")
+
+            if results:
+                logger.info(f"Generated {len(results)} pitch augmentations for {user_name}")
+            return results
+
+        except Exception as e:
+            logger.warning(f"Pitch augmentation failed for {user_name}: {e}")
+            return []
 
     def handle_user_created(self, user_data: Dict) -> Dict:
         """Handle user creation event from backend (parallelized).
@@ -148,6 +242,10 @@ class EmbeddingSyncService:
                         results['failed_images'].append(original_url)
                         continue
 
+                    # Extract private augmentation fields before storing
+                    image = result.pop('_image', None)
+                    landmarks = result.pop('_landmarks', None)
+
                     self.store.add_embedding(
                         user_id=result['user_id'],
                         user_name=result['user_name'],
@@ -157,6 +255,21 @@ class EmbeddingSyncService:
                         metadata=result['metadata'],
                     )
                     results['embeddings_added'] += 1
+
+                    # Generate pitch-down augmentations for top-mounted CCTV cameras
+                    if image is not None and landmarks is not None:
+                        aug_list = self._generate_pitch_augmentations(
+                            image=image,
+                            landmarks=landmarks,
+                            base_url=result['image_url'],
+                            user_id=result['user_id'],
+                            user_name=result['user_name'],
+                            external_id=result['external_id'],
+                        )
+                        for aug in aug_list:
+                            norm_override = aug.pop('image_url_norm_override', None)
+                            self.store.add_embedding(**aug, image_url_norm_override=norm_override)
+                            results['embeddings_added'] += 1
 
                 except Exception as e:
                     logger.exception(f"❌ Error saving embedding for {original_url}: {e}")
@@ -192,6 +305,10 @@ class EmbeddingSyncService:
             image_dicts = self._to_image_dicts(user.get('image_urls', []))
             backend_norm = {normalize_image_url(img['original']) for img in image_dicts}
             for norm_url in existing_images[user_id] - backend_norm:
+                if '#aug_' in norm_url:
+                    continue  # Keep pitch-augmented embeddings — they're derived, not backend-owned
+                if 'cctv_crop:' in norm_url:
+                    continue  # Keep manually-enrolled CCTV crops — they're not backend-owned
                 images_deleted += self.store.delete_by_image_url_norm(user_id, norm_url)
 
         if users_deleted or images_deleted:
@@ -224,6 +341,13 @@ class EmbeddingSyncService:
                 users_to_process.append({**user, 'image_urls': image_dicts})
             else:
                 existing_norm = existing_images[user_id]
+                # If user has manually-enrolled CCTV crops, skip backend-image enrollment
+                if any('cctv_crop:' in n for n in existing_norm):
+                    logger.debug(
+                        f"Skipping backend enrollment for {user.get('full_name')} "
+                        f"— manually-enrolled CCTV crops already present"
+                    )
+                    continue
                 new_dicts = [
                     img for img in image_dicts
                     if normalize_image_url(img['original']) not in existing_norm
