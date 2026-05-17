@@ -11,6 +11,7 @@ Each camera gets one CameraWorker that:
 This allows N camera threads to share the GPU in one batched worker.
 """
 
+import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -152,6 +153,7 @@ class CameraWorker:
     def start(self) -> None:
         """Start the camera worker thread."""
         self._running = True
+        self._restore_occupancy_states()
         name = f"cam-worker-{self.camera_idx}"
         self._thread = threading.Thread(target=self.run, daemon=True, name=name)
         self._thread.start()
@@ -214,7 +216,7 @@ class CameraWorker:
 
         # ── Step 5b: Virtual line crossing detection ──────────────────────────
         if self.virtual_lines:
-            self._detect_virtual_line_crossings(active_tracks, frame_num)
+            self._detect_virtual_line_crossings(active_tracks, frame_num, frame)
 
         # ── Step 6: Submit face ROIs to GPU worker, wait for embeddings ───────
         run_recognition = (
@@ -261,7 +263,7 @@ class CameraWorker:
         cx, cy = ax + t * abx, ay + t * aby
         return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
 
-    def _detect_virtual_line_crossings(self, active_tracks: List[Dict], frame_num: int) -> None:
+    def _detect_virtual_line_crossings(self, active_tracks: List[Dict], frame_num: int, frame=None) -> None:
         """Detect crossings for all configured virtual lines.
 
         Uses cross-product side detection for diagonal-line support and a
@@ -316,13 +318,21 @@ class CameraWorker:
                                     state["occupancy"] += 1
                                     if state["occupancy"] == 1:
                                         state["timer_start"] = now
-                                    self._on_fitting_room_entry(lid, line_type, track_id, now)
+                                    self._persist_occupancy_state(lid, state)
+                                    self._on_fitting_room_entry(lid, line_type, track_id, now, track=track, frame=frame)
                             else:
                                 state["out"] += 1
                                 if is_fitting:
                                     state["occupancy"] = max(0, state["occupancy"] - 1)
                                     if state["occupancy"] == 0:
+                                        if state["timer_start"] is not None:
+                                            room_duration = now - state["timer_start"]
+                                            if room_duration >= 3.0:
+                                                self._on_room_occupancy_session_end(
+                                                    lid, line_type, state["timer_start"], now
+                                                )
                                         state["timer_start"] = None
+                                    self._persist_occupancy_state(lid, state)
                                     self._on_fitting_room_exit(lid, track_id, now)
 
                             event = {
@@ -354,13 +364,46 @@ class CameraWorker:
 
                 state["track_side"][track_id] = side
 
-            # Evict stale tracks for this line only
+            # Evict stale tracks for this line only.
+            # If the track had an open zone session (entered but never exited),
+            # decrement occupancy and fire a synthetic exit so the session gets closed.
             for stale in list(state["track_side"].keys()):
                 if stale not in active_ids:
                     del state["track_side"][stale]
                     state["track_last_cross"].pop(stale, None)
+                    if is_fitting and stale in self._track_entry_times.get(lid, {}):
+                        state["occupancy"] = max(0, state["occupancy"] - 1)
+                        if state["occupancy"] == 0 and state.get("timer_start") is not None:
+                            room_duration = now - state["timer_start"]
+                            if room_duration >= 3.0:
+                                self._on_room_occupancy_session_end(
+                                    lid, line_type, state["timer_start"], now
+                                )
+                            state["timer_start"] = None
+                        self._on_fitting_room_exit(lid, stale, now)
+                        self._persist_occupancy_state(lid, state)
 
-    def _on_fitting_room_entry(self, lid: str, line_type: str, track_id: int, now: float) -> None:
+    def _extract_zone_crop(self, track: "dict | None", frame) -> "Optional[Any]":
+        """Extract padded person crop from frame. Pure — no I/O."""
+        if frame is None or not track:
+            return None
+        bbox = track.get("bbox")
+        if bbox is None:
+            return None
+        try:
+            h, w = frame.shape[:2]
+            x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+            pad_x = max(8, int((x2 - x1) * 0.12))
+            pad_y = max(8, int((y2 - y1) * 0.08))
+            crop = frame[max(0, y1 - pad_y):min(h, y2 + pad_y),
+                         max(0, x1 - pad_x):min(w, x2 + pad_x)].copy()
+            return crop if crop.size > 0 else None
+        except Exception as e:
+            logger.warning(f"[ZoneSession] Failed to extract crop: {e}")
+            return None
+
+    def _on_fitting_room_entry(self, lid: str, line_type: str, track_id: int,
+                               now: float, track: "dict | None" = None, frame=None) -> None:
         if lid not in self._track_entry_times:
             self._track_entry_times[lid] = {}
         self._track_entry_times[lid][track_id] = now
@@ -372,23 +415,81 @@ class CameraWorker:
         date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
         global_track_id = f"{camera_id}_{date_str}_{track_id}"
         entered_at = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
-
         ga = self.camera_engine.track_gender_age.get(track_id, {})
-        try:
-            self.publisher.publish_zone_session_entry(
-                camera_id=camera_id,
-                line_id=lid,
-                line_type=line_type,
-                track_id=str(track_id),
-                global_track_id=global_track_id,
-                entered_at=entered_at,
-                age=ga.get("age"),
-                age_confidence=ga.get("age_confidence"),
-                gender=ga.get("gender"),
-                gender_confidence=ga.get("gender_confidence"),
+
+        publish_kwargs = dict(
+            camera_id=camera_id, line_id=lid, line_type=line_type,
+            track_id=str(track_id), global_track_id=global_track_id,
+            entered_at=entered_at,
+            age=ga.get("age"), age_confidence=ga.get("age_confidence"),
+            gender=ga.get("gender"), gender_confidence=ga.get("gender_confidence"),
+        )
+
+        crop = self._extract_zone_crop(track, frame)
+        publisher = self.publisher  # capture for closure
+
+        if crop is not None and self.async_logger is not None:
+            client_slug = (
+                getattr(self.publisher, "client_slug", None)
+                or self.camera_config.get("client_slug")
             )
+
+            def _on_upload_done(url: "Optional[str]") -> None:
+                try:
+                    publisher.publish_zone_session_entry(**publish_kwargs, image_url=url)
+                except Exception as exc:
+                    logger.warning(f"[ZoneSession] Failed to publish entry after upload: {exc}")
+
+            self.async_logger.upload_image({
+                "image": crop,
+                "folder": "zone_sessions",
+                "client_slug": client_slug,
+                "callback": _on_upload_done,
+            })
+        else:
+            try:
+                publisher.publish_zone_session_entry(**publish_kwargs, image_url=None)
+            except Exception as e:
+                logger.warning(f"[ZoneSession] Failed to publish entry: {e}")
+
+    # ── Occupancy persistence ─────────────────────────────────────────────────
+
+    def _occupancy_redis_key(self, lid: str) -> str:
+        camera_id = self.camera_config.get("camera_id", "unknown")
+        return f"occupancy:{camera_id}:{lid}"
+
+    def _persist_occupancy_state(self, lid: str, state: dict) -> None:
+        """Write occupancy + timer_start to Redis with 24h TTL."""
+        try:
+            from messaging.redis_client import RedisClient
+            rc = RedisClient.get_instance()
+            payload = json.dumps({
+                "occupancy": state.get("occupancy", 0),
+                "timer_start": state.get("timer_start"),
+            })
+            rc.client.setex(self._occupancy_redis_key(lid), 86400, payload)
         except Exception as e:
-            logger.warning(f"[ZoneSession] Failed to publish entry: {e}")
+            logger.warning(f"[Occupancy] Failed to persist state for {lid}: {e}")
+
+    def _restore_occupancy_states(self) -> None:
+        """On startup, restore occupancy state from Redis (survives process restart)."""
+        try:
+            from messaging.redis_client import RedisClient
+            rc = RedisClient.get_instance()
+            for lid, state in self._line_states.items():
+                if "occupancy" not in state:
+                    continue
+                raw = rc.client.get(self._occupancy_redis_key(lid))
+                if raw:
+                    data = json.loads(raw)
+                    state["occupancy"] = max(0, data.get("occupancy", 0))
+                    state["timer_start"] = data.get("timer_start")
+                    logger.info(
+                        f"[Occupancy] Restored line={lid} occupancy={state['occupancy']} "
+                        f"timer={'set' if state['timer_start'] else 'None'}"
+                    )
+        except Exception as e:
+            logger.warning(f"[Occupancy] Failed to restore states: {e}")
 
     def _on_fitting_room_exit(self, lid: str, track_id: int, now: float) -> None:
         self._track_entry_times.get(lid, {}).pop(track_id, None)
@@ -410,6 +511,27 @@ class CameraWorker:
             )
         except Exception as e:
             logger.warning(f"[ZoneSession] Failed to publish exit: {e}")
+
+    def _on_room_occupancy_session_end(self, lid: str, line_type: str, started_at: float, ended_at: float) -> None:
+        if not self.publisher:
+            return
+
+        camera_id = self.camera_config.get("camera_id")
+        started_at_iso = datetime.fromtimestamp(started_at, tz=timezone.utc).isoformat()
+        ended_at_iso = datetime.fromtimestamp(ended_at, tz=timezone.utc).isoformat()
+        duration_seconds = int(ended_at - started_at)
+
+        try:
+            self.publisher.publish_zone_room_session(
+                camera_id=camera_id,
+                line_id=lid,
+                line_type=line_type,
+                started_at=started_at_iso,
+                ended_at=ended_at_iso,
+                duration_seconds=duration_seconds,
+            )
+        except Exception as e:
+            logger.warning(f"[ZoneSession] Failed to publish room session: {e}")
 
     def _annotate_and_write(
         self,

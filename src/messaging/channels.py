@@ -46,6 +46,7 @@ EVENT_TYPES = {
     'SYSTEM_ALERT': 'SystemAlert',
     'ZONE_SESSION_ENTRY': 'ZoneSessionEntry',
     'ZONE_SESSION_EXIT': 'ZoneSessionExit',
+    'ZONE_ROOM_SESSION': 'ZoneRoomSession',
 }
 
 

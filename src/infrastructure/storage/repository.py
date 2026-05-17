@@ -162,9 +162,13 @@ class Repository:
                         'status': row[9],
                     }
 
-                    # Filter by application if specified
+                    # Filter by application if specified.
+                    # Cameras with a NULL/empty application are treated as
+                    # unrestricted (match every application).
                     if application:
-                        if isinstance(cam_apps, list) and application in cam_apps:
+                        if cam_apps is None or cam_apps == [] or cam_apps == '':
+                            cameras.append(camera)
+                        elif isinstance(cam_apps, list) and application in cam_apps:
                             cameras.append(camera)
                         elif isinstance(cam_apps, str) and cam_apps == application:
                             cameras.append(camera)

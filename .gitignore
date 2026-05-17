@@ -342,4 +342,7 @@ node_modules/
 buffalo_l.zip
 
 .claude
+
+# GCS / cloud credentials — never commit service account keys
+credentials/*.json
 CLAUDE.md

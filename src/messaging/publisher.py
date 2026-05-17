@@ -466,3 +466,27 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing ZoneSessionExit: camera {camera_id}, line {line_id}, track {global_track_id}")
         return self.redis.publish(EVENT_CHANNELS['ZONE_SESSION'], event)
 
+    def publish_zone_room_session(
+        self,
+        camera_id: int,
+        line_id: str,
+        line_type: str,
+        started_at: str,
+        ended_at: str,
+        duration_seconds: int,
+    ) -> bool:
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['ZONE_ROOM_SESSION'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'camera_id': camera_id,
+            'line_id': line_id,
+            'line_type': line_type,
+            'started_at': started_at,
+            'ended_at': ended_at,
+            'duration_seconds': duration_seconds,
+        }
+        logger.info(f"[Events] Publishing ZoneRoomSession: camera {camera_id}, line {line_id}, duration {duration_seconds}s")
+        return self.redis.publish(EVENT_CHANNELS['ZONE_SESSION'], event)
+

@@ -44,6 +44,7 @@ class Settings:
     celery_concurrency = int(os.getenv("SO_CELERY_CONCURRENCY", 2))
 
     # Google Cloud Storage
+    use_gcs = os.getenv("SO_USE_GCS", "false").lower() in ("true", "1", "yes")
     gcs_credentials_path = os.getenv("SO_GCS_CREDENTIALS_PATH", "")
     gcs_bucket = os.getenv("SO_GCS_BUCKET", "hbai-general-data")
 

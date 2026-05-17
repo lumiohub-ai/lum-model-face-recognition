@@ -88,6 +88,7 @@ RUN rm -rf /var/lib/apt/lists/* && \
     ca-certificates \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    curl \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

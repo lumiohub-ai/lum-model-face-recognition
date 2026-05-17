@@ -14,6 +14,7 @@ Endpoints:
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -369,7 +370,10 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path in ("/", "/index.html"):
+        if path == "/health":
+            self._ok("application/json", json.dumps({"status": "ok", "timestamp": time.time()}).encode())
+
+        elif path in ("/", "/index.html"):
             self._ok("text/html; charset=utf-8", _DASHBOARD_HTML.encode())
 
         elif path == "/api/metrics":

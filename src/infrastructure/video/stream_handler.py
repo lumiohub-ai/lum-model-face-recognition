@@ -22,8 +22,8 @@ class StreamHandler:
             src: Video source (file path, camera index, or network URL)
             logger: Logger instance for reporting stream status
         """
-        self.src = src
-        self.is_video = self.is_video_file(src)
+        self.src = self.resolve_local_source(src)
+        self.is_video = self.is_video_file(self.src)
         self.logger = logger
 
         # Suppress FFmpeg/libav C-level logs — they bypass Python logging and
@@ -32,7 +32,7 @@ class StreamHandler:
         os.environ['OPENCV_FFMPEG_LOGLEVEL'] = '-8'  # AV_LOG_QUIET
 
         # Configure RTSP options for better compatibility and smooth playback
-        if isinstance(src, str) and src.startswith('rtsp://'):
+        if isinstance(self.src, str) and self.src.startswith('rtsp://'):
             # Set FFmpeg options BEFORE creating VideoCapture
             os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
                 'rtsp_transport;tcp|'        # Use TCP for reliability
@@ -41,11 +41,11 @@ class StreamHandler:
                 'fflags;nobuffer|'           # Minimize buffering for real-time
                 'flags;low_delay'            # Low latency mode
             )
-            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
             # Set buffer size: 3 frames is optimal for real-time playback
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
         else:
-            self.cap = cv2.VideoCapture(src)
+            self.cap = cv2.VideoCapture(self.src)
         self.stopped = False
         self.lock = threading.Lock()
         # NO QUEUE - use latest frame only to prevent jitter and lag
@@ -58,11 +58,11 @@ class StreamHandler:
 
         ret, frame = self.cap.read()
         if not ret:
-            self.logger.warning(f"Unable to read from source: {src}, will try to reconnect")
+            self.logger.warning(f"Unable to read from source: {self.src}, will try to reconnect")
             self._reconnect()
             ret, frame = self.cap.read()
             if not ret:
-                raise ValueError(f"Unable to read from source after initial reconnection attempts: {src}")
+                raise ValueError(f"Unable to read from source after initial reconnection attempts: {self.src}")
 
         self.ret = ret
         self.frame = frame
@@ -133,6 +133,43 @@ class StreamHandler:
             True if the source is a video file, False otherwise
         """
         return isinstance(source, str) and source.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))
+
+    @staticmethod
+    def resolve_local_source(source: Any) -> Any:
+        """Resolve mounted local video files before opening them with OpenCV."""
+        if not isinstance(source, str):
+            return source
+
+        stripped = source.strip()
+        if not stripped or stripped.startswith(("rtsp://", "http://", "https://")):
+            return source
+
+        configured_media_dirs = os.getenv("SO_MEDIA_DIRS")
+        if configured_media_dirs:
+            media_dirs = [p for p in configured_media_dirs.split(os.pathsep) if p]
+        else:
+            media_dirs = [
+                os.getenv("SO_RAW_MEDIA_DIR", "/app/raw_media"),
+                os.getenv("SO_NEW_MEDIA_DIR", "/app/new_media"),
+            ]
+        basename = os.path.basename(stripped)
+        aliases = {
+            "fitting_room1.mp4": "fitting_room_1.mp4",
+        }
+
+        candidates = [stripped]
+        if basename:
+            for media_dir in media_dirs:
+                candidates.append(os.path.join(media_dir, basename))
+                alias = aliases.get(basename)
+                if alias:
+                    candidates.append(os.path.join(media_dir, alias))
+
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                return candidate
+
+        return source
 
     def snapshot(self) -> Any:
         """Return a clean frame for configuration purposes (Virtual Line / ROI).
@@ -207,9 +244,13 @@ class StreamHandler:
         if self.is_video:
             ret, frame = self.cap.read()
             if not ret and not self.stopped:
-                self.logger.warning(f"End of video stream reached: {self.src}")
-                self.stop()
-                return False, None
+                self.logger.info(f"End of video stream reached, looping from start: {self.src}")
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = self.cap.read()
+                if not ret:
+                    self.logger.warning(f"Unable to loop video stream: {self.src}")
+                    self.stop()
+                    return False, None
 
             if ret:
                 with self.lock:

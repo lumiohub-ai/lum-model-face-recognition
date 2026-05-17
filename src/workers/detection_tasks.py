@@ -95,6 +95,8 @@ def task_save_unrecognized_face(
     detected_at: Optional[str] = None,
     gender: Optional[str] = None,
     age: Optional[int] = None,
+    age_confidence: Optional[float] = None,
+    gender_confidence: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Save unrecognized face in database and publish event."""
     logger.info(f"[Celery] Saving unrecognized face from camera {camera_id}")
@@ -121,7 +123,11 @@ def task_save_unrecognized_face(
             camera_id=camera_id,
             camera_name=camera_name,
             image_url=image_url,
-            detected_at=timestamp.isoformat() + 'Z'
+            detected_at=timestamp.isoformat() + 'Z',
+            age=age,
+            age_confidence=age_confidence,
+            gender=gender,
+            gender_confidence=gender_confidence,
         )
 
         return {'status': 'success', 'record_id': record_id, 'camera_id': camera_id}

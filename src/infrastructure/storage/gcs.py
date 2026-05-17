@@ -179,6 +179,7 @@ class ImageFetcher:
             allowed_http_domains: Optional list of allowed HTTP domains
         """
         from config.settings import settings
+        self.use_gcs = settings.use_gcs
         self.gcs_credentials = settings.gcs_credentials_path
         self.gcs_bucket = settings.gcs_bucket
         self.gcs_client = None
@@ -190,7 +191,7 @@ class ImageFetcher:
             URLValidator.configure(allowed_http_domains=allowed_http_domains)
 
         # Initialize GCS client if credentials exist
-        if GCS_AVAILABLE and self.gcs_credentials and os.path.exists(self.gcs_credentials):
+        if self.use_gcs and GCS_AVAILABLE and self.gcs_credentials and os.path.exists(self.gcs_credentials):
             try:
                 self.gcs_client = storage.Client.from_service_account_json(
                     self.gcs_credentials
@@ -200,9 +201,8 @@ class ImageFetcher:
                 logger.exception(f"Failed to initialize GCS client: {e}")
                 self.gcs_client = None
         else:
-            logger.warning(
-                "GCS credentials not found or invalid. "
-                "GCS downloads will fail. Using HTTP fallback."
+            logger.info(
+                "GCS disabled or unavailable. Using local image storage."
             )
 
     def fetch_image(self, url: str) -> Optional[np.ndarray]:
@@ -466,5 +466,4 @@ class ImageFetcher:
         except Exception as e:
             logger.exception(f"Failed to save image locally: {e}")
             return None
-
 

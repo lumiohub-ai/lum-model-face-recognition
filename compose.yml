@@ -56,22 +56,35 @@ services:
       - ./configs:/app/configs:ro
       - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
       - ./credentials:/app/credentials
+      # Overlay the backend GCS service-account key so GCS uploads work without
+      # duplicating the credential file.
+      - ../so.stack/volumes/src/backend/src/keys/humblebee-service-account.json:/app/credentials/gcs-service-account.json:ro
       - ./volumes/models/insightface:/root/.insightface
       - ./volumes/models/huggingface:/root/.cache/huggingface
       - ./volumes/models/weights:/app/volumes/models/weights
       - ${SO_ENROLLMENT_PHOTOS_DIR:-./enrollment_photos}:/app/enrollment_photos:ro
+      - ../raw_media:/app/raw_media:ro
+      - ../raw_media:/mnt/data/mirodilbek/lumio-galizio/raw_media:ro
+      - ../new_media:/app/new_media:ro
+      - ../new_media:/mnt/data/mirodilbek/lumio-galizio/new_media:ro
     networks:
       - person-tracking-network
     ports:
       - "${SO_METRICS_PORT:-8765}:8765"
+    environment:
+      SO_LOCAL_IMAGE_HOST: ${SO_LOCAL_IMAGE_HOST:-100.100.1.70}
+      SO_LOCAL_IMAGE_DIR: /app/volumes/storage/person-tracking/images
+      SO_RAW_MEDIA_DIR: /app/raw_media
+      SO_NEW_MEDIA_DIR: /app/new_media
+      SO_MEDIA_DIRS: /app/raw_media:/app/new_media:/mnt/data/mirodilbek/lumio-galizio/raw_media:/mnt/data/mirodilbek/lumio-galizio/new_media
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'python' > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8765/health > /dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     deploy:
       resources:
         limits:
@@ -100,12 +113,16 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
+      - ../so.stack/volumes/src/backend/src/keys/humblebee-service-account.json:/app/credentials/gcs-service-account.json:ro
       - ./volumes/models/insightface:/root/.insightface
       - ./volumes/models/huggingface:/root/.cache/huggingface
     networks:
       - person-tracking-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      SO_LOCAL_IMAGE_HOST: ${SO_LOCAL_IMAGE_HOST:-100.100.1.70}
+      SO_LOCAL_IMAGE_DIR: /app/volumes/storage/person-tracking/images
     command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
