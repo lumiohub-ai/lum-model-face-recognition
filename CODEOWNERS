@@ -1,0 +1,9 @@
+* @team-lead @senior-dev
+/src/ @ml-team
+/configs/ @ml-team
+/scripts/ @devops-team
+/compose.yml @devops-team
+/Dockerfile @devops-team
+/Dockerfile.flower @devops-team
+/.github/ @devops-team
+/.pre-commit-config.yaml @devops-team
