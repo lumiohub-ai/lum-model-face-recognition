@@ -74,6 +74,21 @@ def load_cameras_from_db(
     cfg = global_config or {}
     default_min_face_size = int(cfg.get('min_face_size', 60))
     default_blur_threshold = float(cfg.get('blur_threshold', 30.0))
+    default_identity_min_det_score = float(cfg.get('identity_min_det_score', 0.65))
+    default_identity_lock_frames = int(cfg.get('identity_lock_frames', 7))
+    default_identity_consensus = float(cfg.get('identity_consensus', 0.80))
+    default_identity_min_window_duration_ms = int(
+        cfg.get('identity_min_window_duration_ms', 700)
+    )
+    default_gender_age_min_face_size = int(
+        cfg.get('gender_age_min_face_size', default_min_face_size)
+    )
+    default_gender_age_min_det_score = float(
+        cfg.get('gender_age_min_det_score', 0.60)
+    )
+    default_gender_age_blur_threshold = float(
+        cfg.get('gender_age_blur_threshold', default_blur_threshold)
+    )
     default_match_margin = float(cfg.get('match_margin', 0.10))
     # Global config threshold overrides the DB per-camera value (DB value often left as null/default)
     default_match_threshold = float(cfg.get('match_threshold', 0.42))
@@ -92,6 +107,13 @@ def load_cameras_from_db(
                 'match_margin': default_match_margin,
                 'min_face_size': default_min_face_size,
                 'blur_threshold': default_blur_threshold,
+                'identity_min_det_score': default_identity_min_det_score,
+                'identity_lock_frames': default_identity_lock_frames,
+                'identity_consensus': default_identity_consensus,
+                'identity_min_window_duration_ms': default_identity_min_window_duration_ms,
+                'gender_age_min_face_size': default_gender_age_min_face_size,
+                'gender_age_min_det_score': default_gender_age_min_det_score,
+                'gender_age_blur_threshold': default_gender_age_blur_threshold,
                 'roi': _parse_roi(cam.get('roi_points')),
                 'virtual_lines': _parse_virtual_lines(cam),
             }

@@ -249,7 +249,11 @@ class GPUInferenceWorker:
             try:
                 faces = self._face_detector.detect(roi)
                 if faces:
-                    face = faces[0]
+                    # A person ROI can include nearby faces in crowded scenes.
+                    # Use the strongest/largest face instead of InsightFace's
+                    # first result so identity and attributes stay tied to the
+                    # tracked person as often as possible.
+                    face = max(faces, key=self._face_rank)
                     # face.bbox / face.kps are in padded-image coordinates.
                     # Subtract the padding offset to get back to ROI space.
                     roi_h, roi_w = roi.shape[:2]
@@ -286,8 +290,10 @@ class GPUInferenceWorker:
                             else 0.0
                         ),
                         "face_bbox": [x1, y1, x2, y2],
+                        "face_width": max(0, face_w),
+                        "face_height": max(0, face_h),
                         "face_landmarks": kps,
-                        "gender": getattr(face, "sex", None),
+                        "gender": getattr(face, "sex", getattr(face, "gender", None)),
                         "age": int(round(face.age)) if getattr(face, "age", None) is not None else None,
                     }
             except Exception as e:
@@ -297,6 +303,17 @@ class GPUInferenceWorker:
         if self._metrics is not None and results:
             self._metrics.record_arcface_ms(duration_ms)
         return results
+
+    @staticmethod
+    def _face_rank(face) -> Tuple[float, float]:
+        """Rank detected faces by confidence first, then face area."""
+        det_score = float(getattr(face, "det_score", 0.0) or 0.0)
+        try:
+            x1, y1, x2, y2 = face.bbox.astype(float)
+            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        except Exception:
+            area = 0.0
+        return det_score, area
 
     @staticmethod
     def _parse_yolo_result(result) -> List[Dict]:

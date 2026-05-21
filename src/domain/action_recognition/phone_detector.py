@@ -7,6 +7,7 @@ dark clothing, tools, pockets, and machine parts.
 """
 
 import os
+import types
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -65,6 +66,21 @@ class PhoneDetector:
             from ultralytics import YOLO
             self._model = YOLO(model_path)
             self._model.to(self.device)
+            self._patch_fused_model()
+            # Patch fuse() to be a no-op: yolo26 (NMS-free) may have already been
+            # fused by PersonDetector; calling fuse() again raises AttributeError: bn.
+            orig_fuse = self._model.model.fuse
+
+            def _safe_fuse(*args, **kwargs):
+                try:
+                    return orig_fuse(*args, **kwargs)
+                except AttributeError as e:
+                    if "'Conv' object has no attribute 'bn'" not in str(e):
+                        raise
+                    self._patch_fused_model()
+                    return self._model.model
+
+            self._model.model.fuse = _safe_fuse
             logger.info(
                 f"PhoneDetector: loaded '{model_path}' on {self.device} "
                 f"(conf_threshold={self.confidence_threshold})"
@@ -72,6 +88,23 @@ class PhoneDetector:
         except Exception as e:
             logger.error(f"PhoneDetector: failed to load '{model_path}': {e}")
             self._model = None
+
+    def _patch_fused_model(self) -> None:
+        """Make already-fused YOLO Conv blocks safe for Ultralytics fuse calls."""
+        if self._model is None or getattr(self._model, 'model', None) is None:
+            return
+
+        patched = 0
+        for module in self._model.model.modules():
+            if module.__class__.__name__ == 'Conv' and not hasattr(module, 'bn'):
+                def _noop_fuse(conv_self):
+                    return conv_self
+
+                module.fuse = types.MethodType(_noop_fuse, module)
+                patched += 1
+
+        if patched:
+            logger.debug(f"PhoneDetector: patched {patched} already-fused Conv blocks")
 
     @property
     def available(self) -> bool:
@@ -87,13 +120,10 @@ class PhoneDetector:
             return self._no_phone()
 
         try:
-            results = self._model(
-                person_crop,
-                classes=[COCO_PHONE_CLASS_ID],
-                conf=self.confidence_threshold,
-                verbose=False,
-                device=self.device,
-            )
+            # Run without class filter — yolo26 (NMS-free) doesn't support
+            # Ultralytics' classes= kwarg and raises AttributeError: bn.
+            # Filter to COCO class 67 (cell phone) manually below.
+            results = self._predict(person_crop)
 
             h, w = person_crop.shape[:2]
             best_conf = 0.0
@@ -103,6 +133,9 @@ class PhoneDetector:
                 if result.boxes is None:
                     continue
                 for box in result.boxes:
+                    cls_id = int(box.cls[0])
+                    if cls_id != COCO_PHONE_CLASS_ID:
+                        continue
                     conf = float(box.conf[0])
                     if conf > best_conf:
                         best_conf = conf
@@ -121,6 +154,28 @@ class PhoneDetector:
         except Exception as e:
             logger.warning(f"PhoneDetector inference error: {type(e).__name__}: {e}")
             return self._no_phone()
+
+    def _predict(self, person_crop: np.ndarray):
+        try:
+            return self._model(
+                [person_crop],
+                conf=self.confidence_threshold,
+                iou=0.45,
+                verbose=False,
+                device=self.device,
+            )
+        except AttributeError as e:
+            if "'Conv' object has no attribute 'bn'" not in str(e):
+                raise
+            logger.warning("PhoneDetector: repairing fused YOLO model after missing-bn error")
+            self._patch_fused_model()
+            return self._model(
+                [person_crop],
+                conf=self.confidence_threshold,
+                iou=0.45,
+                verbose=False,
+                device=self.device,
+            )
 
     @staticmethod
     def _no_phone() -> Dict:

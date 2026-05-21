@@ -11,6 +11,7 @@ import threading
 import time
 from collections import Counter
 from datetime import datetime
+from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -103,6 +104,23 @@ class CameraEngine:
         self.match_margin = camera_config.get('match_margin', 0.10)
         self.min_face_size = camera_config.get('min_face_size', 60)
         self.blur_threshold = float(camera_config.get('blur_threshold', 30.0))
+        self.identity_min_det_score = float(
+            camera_config.get('identity_min_det_score', 0.65)
+        )
+        self.identity_lock_frames = int(camera_config.get('identity_lock_frames', 7))
+        self.identity_consensus = float(camera_config.get('identity_consensus', 0.80))
+        self.identity_min_window_duration_ms = int(
+            camera_config.get('identity_min_window_duration_ms', 700)
+        )
+        self.gender_age_min_face_size = int(
+            camera_config.get('gender_age_min_face_size', self.min_face_size)
+        )
+        self.gender_age_min_det_score = float(
+            camera_config.get('gender_age_min_det_score', 0.60)
+        )
+        self.gender_age_blur_threshold = float(
+            camera_config.get('gender_age_blur_threshold', self.blur_threshold)
+        )
         self.roi = camera_config.get('roi')
         self.virtual_lines = camera_config.get('virtual_lines', [])
 
@@ -153,9 +171,9 @@ class CameraEngine:
 
         # Identity Manager (temporal voting)
         self.identity_manager = IdentityManager(
-            identity_lock_frames=5,
-            identity_consensus=0.60,
-            min_window_duration_ms=333,
+            identity_lock_frames=self.identity_lock_frames,
+            identity_consensus=self.identity_consensus,
+            min_window_duration_ms=self.identity_min_window_duration_ms,
             similarity_threshold=self.match_threshold
         )
 
@@ -179,6 +197,7 @@ class CameraEngine:
 
         # Best-scoring gender/age per track from InsightFace genderage model
         self.track_gender_age: Dict[int, Dict] = {}
+        self._identity_mismatch_counts: Dict[int, int] = {}
 
         # Frame counter
         self.frame_count = 0
@@ -296,40 +315,14 @@ class CameraEngine:
                 face_image=face_data.get("face_image"),
                 face_detected=face_data.get("face_detected", False),
                 det_score=face_data.get("det_score", 0.0),
+                face_width=face_data.get("face_width", 0),
+                face_height=face_data.get("face_height", 0),
                 track_id=track_id,
             )
 
-            # Accumulate gender/age samples per track; use running average for stable age
-            if face_data.get("face_detected"):
-                gender = face_data.get("gender")
-                age = face_data.get("age")
-                det_score = face_data.get("det_score", 0.0)
-                if gender is not None or age is not None:
-                    current = self.track_gender_age.get(track_id)
-                    if current is None:
-                        self.track_gender_age[track_id] = {
-                            "gender": None,
-                            "age": age if det_score >= 0.55 else None,
-                            "age_samples": [age] if (age is not None and det_score >= 0.55) else [],
-                            "gender_samples": [gender] if gender is not None else [],
-                            "det_score": det_score,
-                        }
-                    else:
-                        # Only accumulate age from reasonably sharp detections
-                        if age is not None and det_score >= 0.55:
-                            current["age_samples"].append(age)
-                            if len(current["age_samples"]) > 20:
-                                current["age_samples"] = current["age_samples"][-20:]
-                            current["age"] = round(sum(current["age_samples"]) / len(current["age_samples"]))
-                        if gender is not None:
-                            current["gender_samples"].append(gender)
-                            if len(current["gender_samples"]) > 30:
-                                current["gender_samples"] = current["gender_samples"][-30:]
-                            # Only set gender after >= 5 samples for reliable majority vote
-                            if len(current["gender_samples"]) >= 5:
-                                current["gender"] = Counter(current["gender_samples"]).most_common(1)[0][0]
-                        if det_score > current.get("det_score", 0.0):
-                            current["det_score"] = det_score
+            # Gender/age are person attributes, not employee-only data. Update
+            # them for every active track with a usable face, including unknowns.
+            self._update_gender_age(track_id, face_data)
 
             prev_state = self.state_manager.get_state(track_id)
             identity: Optional[str] = None
@@ -445,15 +438,37 @@ class CameraEngine:
                     # TIER 2: Consistency check for already-locked identities
                     if result.get("face_detected") and result.get("embedding") is not None:
                         emb = result["embedding"]
-                        self.id_corrector.add_embedding(track_id, emb, identity)
-                        self.id_corrector.check_identity_consistency(
+                        consistent = self.id_corrector.check_identity_consistency(
                             track_id, emb, identity
                         )
+                        if consistent:
+                            self._identity_mismatch_counts.pop(track_id, None)
+                            self.id_corrector.add_embedding(track_id, emb, identity)
+                        else:
+                            misses = self._identity_mismatch_counts.get(track_id, 0) + 1
+                            self._identity_mismatch_counts[track_id] = misses
+                            logger.warning(
+                                f"IDENTITY_UNSTABLE | camera={self.camera_id} "
+                                f"track={track_id} locked='{identity}' mismatch={misses}/2"
+                            )
+                            if misses >= 2:
+                                self.identity_manager.reset_track(track_id)
+                                self.id_corrector.reset_track(track_id)
+                                if prev_state:
+                                    prev_state.identity = None
+                                    prev_state.identity_locked = False
+                                    prev_state.identity_confidence = 0.0
+                                identity = None
+                                identity_locked = False
+                                identity_confidence = 0.0
+                                self._identity_mismatch_counts.pop(track_id, None)
+                                logger.warning(
+                                    f"IDENTITY_UNLOCKED | camera={self.camera_id} "
+                                    f"track={track_id} due to repeated face mismatch"
+                                )
             else:
-                voting = self.identity_manager.get_voting_status(track_id)
-                if voting and voting.get("top_candidate"):
-                    identity = voting["top_candidate"]
-                    identity_confidence = voting.get("top_avg_similarity", 0.0)
+                identity = None
+                identity_confidence = 0.0
 
             # Proof image crop for state manager (tight bbox for face recognition)
             proof_image = None
@@ -489,9 +504,11 @@ class CameraEngine:
             ):
                 self._check_and_queue_action_recognition(
                     track_id=track_id,
-                    identity=identity,
+                    identity=identity if identity_locked else None,
                     proof_image=activity_image,
                     frame_num=frame_num,
+                    person_bbox=bbox,
+                    original_frame=frame,
                 )
 
             if face_image is not None:
@@ -542,6 +559,7 @@ class CameraEngine:
             self.identity_manager.reset_track(track_id)
             self.id_corrector.reset_track(track_id)
             self.track_gender_age.pop(track_id, None)
+            self._identity_mismatch_counts.pop(track_id, None)
 
         # Batch ID correction
         if self.id_corrector.should_run_correction():
@@ -565,12 +583,101 @@ class CameraEngine:
 
         return recognized_persons
 
+    def _update_gender_age(self, track_id: int, face_data: Dict) -> None:
+        """Update gender/age for any tracked person with a quality face sample."""
+        if not face_data.get("face_detected"):
+            return
+
+        det_score = float(face_data.get("det_score", 0.0) or 0.0)
+        if det_score < self.gender_age_min_det_score:
+            return
+
+        face_w = int(face_data.get("face_width") or 0)
+        face_h = int(face_data.get("face_height") or 0)
+        if face_w < self.gender_age_min_face_size or face_h < self.gender_age_min_face_size:
+            return
+
+        face_image = face_data.get("face_image")
+        if not self._face_crop_is_sharp(face_image, self.gender_age_blur_threshold):
+            return
+
+        gender = self._normalize_gender(face_data.get("gender"))
+        age = self._normalize_age(face_data.get("age"))
+        if gender is None and age is None:
+            return
+
+        current = self.track_gender_age.setdefault(
+            track_id,
+            {
+                "gender": None,
+                "age": None,
+                "age_samples": [],
+                "gender_samples": [],
+                "det_score": 0.0,
+            },
+        )
+
+        if age is not None:
+            current["age_samples"].append(age)
+            current["age_samples"] = current["age_samples"][-20:]
+            current["age"] = int(round(median(current["age_samples"])))
+
+        if gender is not None:
+            current["gender_samples"].append(gender)
+            current["gender_samples"] = current["gender_samples"][-30:]
+            if len(current["gender_samples"]) >= 3:
+                current["gender"] = Counter(current["gender_samples"]).most_common(1)[0][0]
+
+        if det_score > current.get("det_score", 0.0):
+            current["det_score"] = det_score
+
+    @staticmethod
+    def _normalize_gender(gender) -> Optional[str]:
+        """Normalize InsightFace gender output to stable string labels."""
+        if gender is None:
+            return None
+        if isinstance(gender, str):
+            value = gender.strip().lower()
+            if value in {"m", "male"}:
+                return "male"
+            if value in {"f", "female"}:
+                return "female"
+            return None
+        if isinstance(gender, (int, float, np.integer, np.floating)):
+            return "male" if int(gender) == 1 else "female"
+        return None
+
+    @staticmethod
+    def _normalize_age(age) -> Optional[int]:
+        """Reject impossible/unstable age outputs before smoothing."""
+        if age is None:
+            return None
+        try:
+            value = int(round(float(age)))
+        except (TypeError, ValueError):
+            return None
+        if value < 5 or value > 90:
+            return None
+        return value
+
+    @staticmethod
+    def _face_crop_is_sharp(face_image: Optional[np.ndarray], threshold: float) -> bool:
+        if face_image is None or face_image.size == 0:
+            return False
+        gray = (
+            cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
+            if len(face_image.shape) == 3 else face_image
+        )
+        return cv2.Laplacian(gray, cv2.CV_64F).var() >= threshold
+
     def _compute_recognition_result(
         self,
         embedding: Optional[np.ndarray],
         face_image: Optional[np.ndarray],
         face_detected: bool,
         det_score: float = 0.0,
+        face_width: int = 0,
+        face_height: int = 0,
         track_id: int = 0,
     ) -> Dict:
         """Build a recognition-result dict from a pre-computed embedding.
@@ -584,6 +691,24 @@ class CameraEngine:
                     camera_id=self.camera_id, local_track_id=track_id
                 )
             return {"face_detected": face_detected, "name": None, "similarity": 0.0}
+
+        if not self._identity_face_is_usable(face_image, det_score, face_width, face_height):
+            if self.global_track_manager:
+                self.global_track_manager.on_face_detected(
+                    camera_id=self.camera_id,
+                    local_track_id=track_id,
+                    quality=det_score,
+                    recognized=False,
+                    identity=None,
+                )
+            return {
+                "face_detected": True,
+                "recognized": False,
+                "name": None,
+                "similarity": 0.0,
+                "embedding": embedding,
+                "face_image": face_image,
+            }
 
         if len(self.face_recognizer.db_embs) == 0:
             if self.global_track_manager:
@@ -643,6 +768,20 @@ class CameraEngine:
                 "embedding": embedding,
                 "face_image": face_image,
             }
+
+    def _identity_face_is_usable(
+        self,
+        face_image: Optional[np.ndarray],
+        det_score: float,
+        face_width: int,
+        face_height: int,
+    ) -> bool:
+        """Gate identity matching harder than gender/age display."""
+        if det_score < self.identity_min_det_score:
+            return False
+        if face_width < self.min_face_size or face_height < self.min_face_size:
+            return False
+        return self._face_crop_is_sharp(face_image, self.blur_threshold)
 
     @staticmethod
     def _clip_bbox(frame: np.ndarray, bbox) -> Tuple[int, int, int, int]:
@@ -743,6 +882,7 @@ class CameraEngine:
         self.state_manager.remove_person(source_track_id)
         self.identity_manager.reset_track(source_track_id)
         self.id_corrector.reset_track(source_track_id)
+        self._identity_mismatch_counts.pop(source_track_id, None)
 
         if source_track_id in self.person_tracker.active_tracks:
             del self.person_tracker.active_tracks[source_track_id]
@@ -753,6 +893,8 @@ class CameraEngine:
         identity: str,
         proof_image: Optional[np.ndarray],
         frame_num: int,
+        person_bbox=None,
+        original_frame=None,
     ) -> None:
         """Check if action recognition is needed and queue request."""
         if proof_image is None or proof_image.size == 0:
@@ -774,6 +916,37 @@ class CameraEngine:
                 del self.last_action_check_per_identity[k]
 
         user_id = self.name_to_id_map.get(identity) if identity else None
+
+        # Extract native-resolution phone focus regions. Calling poses place
+        # the phone near the ear/cheek, while screen-use poses are usually
+        # lower near the hands, so pass both instead of one torso slice.
+        hand_region = None
+        phone_regions = []
+        if person_bbox is not None and original_frame is not None:
+            try:
+                bx1, by1, bx2, by2 = person_bbox[:4]
+                fh, fw = original_frame.shape[:2]
+                bw = bx2 - bx1
+                bh = by2 - by1
+                px = bw * 0.30
+
+                def _crop_region(name: str, y_start: float, y_end: float):
+                    rx1 = max(0, int(bx1 - px))
+                    rx2 = min(fw, int(bx2 + px))
+                    ry1 = max(0, int(by1 + bh * y_start))
+                    ry2 = min(fh, int(by1 + bh * y_end))
+                    if ry2 <= ry1 or rx2 <= rx1:
+                        return None
+                    crop = original_frame[ry1:ry2, rx1:rx2].copy()
+                    phone_regions.append({'name': name, 'image': crop})
+                    return crop
+
+                _crop_region('face_hands', 0.00, 0.68)
+                hand_region = _crop_region('hand', 0.28, 0.96)
+                _crop_region('upper_body', 0.00, 0.90)
+            except Exception:
+                hand_region = None
+                phone_regions = []
 
         request_id = f"cam{self.camera_id}_track{track_id}_frame{frame_num}"
 
@@ -798,6 +971,8 @@ class CameraEngine:
                 'user_name': identity,
                 'camera_id': self.camera_id,
                 'frame_num': frame_num,
+                'hand_region': hand_region,
+                'phone_regions': phone_regions,
             },
         )
 
@@ -836,5 +1011,5 @@ class CameraEngine:
         self.state_manager.reset()
         self.last_action_check_per_identity.clear()
         self.track_gender_age.clear()
+        self._identity_mismatch_counts.clear()
         self.frame_count = 0
-

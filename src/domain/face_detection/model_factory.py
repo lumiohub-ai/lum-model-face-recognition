@@ -79,9 +79,10 @@ class ModelFactory:
         """Get or create phone object detector (lazy initialization)."""
         if self._phone_detector is None:
             logger.debug("Initializing PhoneDetector...")
+            action_config = self.config.get('action_recognition', {})
             self._phone_detector = PhoneDetector(
                 model_path=None,        # auto-resolve from YOLO_CONFIG_DIR
-                confidence_threshold=0.25,
+                confidence_threshold=float(action_config.get('phone_confidence_threshold', 0.15)),
             )
         return self._phone_detector
 

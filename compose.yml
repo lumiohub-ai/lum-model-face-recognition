@@ -66,6 +66,7 @@ services:
       - ./credentials:/app/credentials
       - ./volumes/logs:/app/logs
       - ./volumes/yolo-cache:/app/volumes/yolo-cache
+      - ./volumes/yolo-cache/yolo26s.pt:/app/yolo26s.pt:ro
       - ./volumes/models/insightface:/tmp/.insightface
       - ./volumes/models/huggingface:/app/volumes/hf-cache
       - ./volumes/models/weights:/app/volumes/models/weights
@@ -73,7 +74,7 @@ services:
     networks:
       - person-tracking-network
     ports:
-      - "${SO_METRICS_PORT:-8765}:8765"
+      - "${SO_METRICS_PORT:-8765}:${SO_METRICS_PORT:-8765}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

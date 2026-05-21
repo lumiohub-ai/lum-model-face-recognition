@@ -7,25 +7,33 @@ save_video: true  # Save annotated video output to disk
 output_dir: "volumes/storage/videos"  # Directory for outputs
 use_api_for_cameras: true
 # Recognition settings
-match_threshold: 0.42  # Face similarity threshold for matching (cosine similarity, higher = stricter)
-match_margin: 0.10     # Minimum gap between best and second-best score (open-set: prevents weak matches)
+match_threshold: 0.32  # Raised after multi-embedding enrollment — CCTV+augmented gallery now scores 0.38-0.55
+match_margin: 0.06     # Raised — multi-embedding gallery provides cleaner separation between persons
 person_detection_threshold: 0.3  # Person detection confidence threshold (0.0-1.0)
-min_face_size: 60        # Minimum face crop px (width AND height) to attempt recognition — lower for wide-angle/factory cameras
-blur_threshold: 30.0     # Minimum Laplacian variance to accept a face crop — lower for compressed CCTV video
+min_face_size: 20        # Minimum face crop px — cameras capture 12-40px faces, 80 was blocking all recognition
+blur_threshold: 60.0     # Minimum Laplacian variance before identity matching
+identity_min_det_score: 0.50  # Lowered from 0.65 — CCTV cam4 det scores are 0.53-0.68
+identity_lock_frames: 5
+identity_consensus: 0.75
+identity_min_window_duration_ms: 700
+gender_age_min_face_size: 20       # Attribute estimation for every visible person; keep separate from strict identity gates
+gender_age_min_det_score: 0.50     # Minimum InsightFace detection score before gender/age smoothing
+gender_age_blur_threshold: 30.0    # Minimum sharpness before accepting gender/age samples
 person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
 
 # Feature flags
-enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)
+enable_global_tracking: false  # Enable cross-camera global track IDs (MCMOT ReID)
 face_detection_padding: 20.0  # Padding % around detected faces for better recognition (0-100)
 
 # Action Recognition settings (Activity tracking via Ollama + YOLO phone detector)
 action_recognition:
   enabled: true
-  check_interval_seconds: 8   # Per-person VLM check cadence (~1-2s inference after image resize)
-  max_queue_size: 20
-  async_workers: 2
-  inference_timeout: 30
-  action_ttl_seconds: 10      # Phone labels decay quickly; working/idle last a bit longer
+  check_interval_seconds: 10  # Per-person VLM check cadence — 10s balances freshness vs 3-worker throughput at ~4s/inference
+  phone_confidence_threshold: 0.20  # YOLO phone detector confidence gate — 0.20 catches oblique/partial holds while filtering shadows
+  max_queue_size: 60
+  async_workers: 3            # 3 workers balances throughput vs GPU contention on single 3080 Ti
+  inference_timeout: 25
+  action_ttl_seconds: 12      # Must be > check_interval + inference_time (5+5=10s)
   actions:
     using_phone:
       backend_type: phone_usage
@@ -41,7 +49,7 @@ action_recognition:
 
     working:
       backend_type: working
-      description: "Select this when the person is at or near a workbench, table, machine, tool, or material and appears to be doing a productive task such as examining boards, positioning parts, operating equipment, assembling, measuring, or handling work material. Prefer working over using_phone when no phone-like object is clearly visible."
+      description: "Select this when the person is at or near a workbench, table, machine, tool, or material. Includes: examining/inspecting boards or parts, positioning pieces, operating machinery, assembling, measuring, cutting, sanding, painting, or simply standing still near equipment while observing or supervising. When in doubt, prefer working over idle for anyone who is near work surfaces or materials."
 
     carrying:
       backend_type: carrying
@@ -53,11 +61,11 @@ action_recognition:
 
     idle:
       backend_type: idle
-      description: "Select this when the person is standing still, waiting, or the activity is unclear and no phone-like object is visible. Use idle instead of using_phone when no phone-like object is clearly distinguishable."
+      description: "Select this ONLY when the person is clearly taking a break, resting, eating, or completely disengaged from any work task — for example sitting away from equipment, leaning against a wall with arms crossed and looking away from machinery. Do NOT select idle just because the person is standing still; a still worker near machinery or materials is working."
 # Parallel multi-camera pipeline settings
 pipeline:
-  detection_interval: 2        # run YOLO every N frames (1 = every frame)
-  recognition_interval: 3      # run ArcFace every N detection frames
+  detection_interval: 1        # run YOLO every N frames (1 = every frame)
+  recognition_interval: 3      # run ArcFace/gender-age every 3rd detection frame — frees GPU for Ollama
   async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200
 
 # Monitoring & alerting thresholds

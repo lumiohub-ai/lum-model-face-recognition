@@ -1,11 +1,11 @@
 """Action Recognition using Ollama with Gemma 3 model.
 
 Evidence-based pipeline:
-  1. Resize person crop (≤512 px) for fast inference.
+  1. Resize person crop (≤896 px) for fast inference.
   2. Run phone object detector (YOLO COCO class 67) on the crop.
   3. Build a VLM prompt that includes phone-detector evidence.
   4. Parse the VLM JSON (activity, confidence, phone_visible, phone_location, reason).
-  5. Apply phone-gating: if no phone detected AND VLM confidence < 0.90,
+  5. Apply phone-gating: if no phone detected AND VLM confidence is weak,
      reject using_phone / phone_calling.
   6. Apply action-specific temporal voting (phone actions need 2/4 votes).
   7. Optionally save debug crops for false-positive inspection.
@@ -32,28 +32,31 @@ _PHONE_ACTIONS = frozenset({'using_phone', 'phone_calling'})
 
 # Temporal voting parameters
 _VOTE_WINDOW = 4          # keep last 4 VLM results per track
-_VOTE_REQUIRED_PHONE = 2  # phone labels need 2/4 consensus
+_VOTE_REQUIRED_PHONE = 2  # require 2 consecutive detections to avoid single-frame false positives
 _VOTE_REQUIRED_DEFAULT = 1  # other actions update immediately
+_PHONE_OVERRIDE_CONFIDENCE = 0.30
 
 # If the phone object detector found no phone, require at least this VLM
 # confidence before allowing using_phone / phone_calling.
-_NO_PHONE_VLM_THRESHOLD = 0.90
+# Lowered from 0.90: CCTV camera resolution is too low for reliable YOLO phone detection,
+# so the VLM must be allowed to report phones based on visual evidence alone.
+_NO_PHONE_VLM_THRESHOLD = 0.60
 
 # Per-action minimum confidence (applied AFTER phone-gating)
 _MIN_CONFIDENCE = {
-    'using_phone': 0.70,
-    'phone_calling': 0.70,
+    'using_phone': 0.60,
+    'phone_calling': 0.60,
     'chatting': 0.55,
     'working': 0.45,
     'carrying': 0.50,
     'walking': 0.45,
-    'idle': 0.35,
+    'idle': 0.65,  # require high confidence to mark as idle — factory workers often stand still while working
 }
 
-# Fallback keywords: model outputs not in the action list that map to idle
+# Fallback keywords: model outputs not in the action list that map to idle.
+# Removed 'standing', 'moving', 'passing' — in a workshop these are working postures.
 _IDLE_FALLBACK_KEYWORDS = frozenset({
-    'none', 'other', 'unclear', 'unknown',
-    'not_using_phone', 'handling', 'moving', 'passing', 'standing',
+    'none', 'other', 'unclear', 'unknown', 'not_using_phone', 'handling',
 })
 
 
@@ -234,9 +237,16 @@ class ActionRecognizer:
         global_id = metadata.get('global_id')
         camera_id = metadata.get('camera_id', '?')
 
-        # ── Step 1: resize crop (≤512 px on longest side) ────────────────────
+        # ── Step 1: focus on upper body, then resize (≤896 px on longest side) ─
+        # Phones are almost always in the upper 65% of the person box (hands,
+        # chest, face). Cropping before resize gives the VLM a denser view of
+        # the region where a phone would appear.
         h, w = image.shape[:2]
-        max_dim = 512
+        upper_body = image[:int(h * 0.75), :]
+        image = upper_body
+
+        h, w = image.shape[:2]
+        max_dim = 896
         if max(h, w) > max_dim:
             scale = max_dim / max(h, w)
             image = cv2.resize(
@@ -246,21 +256,79 @@ class ActionRecognizer:
         crop_h, crop_w = image.shape[:2]
 
         # ── Step 2: phone object detection ───────────────────────────────────
+        # Prefer native-resolution focus regions. A fixed "hand" slice misses
+        # calling poses, so the camera pipeline may pass multiple regions:
+        # upper body/face+hands first, then torso/hands, then the person crop.
         phone_info: Dict = {'phone_detected': False, 'phone_confidence': 0.0,
                             'phone_bbox_in_crop': None, 'phone_location_hint': 'none'}
+        hand_region = metadata.get('hand_region')
+        phone_regions = metadata.get('phone_regions') or []
+        if hand_region is not None and hand_region.size > 0 and not phone_regions:
+            phone_regions = [{'name': 'hand', 'image': hand_region}]
+        use_focus_for_vlm = False
+        vlm_region = None
+        vlm_region_name = 'person_crop'
         if self.phone_detector and self.phone_detector.available:
-            phone_info = self.phone_detector.detect(image)
+            for region in phone_regions:
+                region_img = region.get('image') if isinstance(region, dict) else region
+                region_name = region.get('name', 'region') if isinstance(region, dict) else 'region'
+                if region_img is None or region_img.size == 0:
+                    continue
+                candidate_info = self.phone_detector.detect(region_img)
+                if candidate_info['phone_detected']:
+                    phone_info = candidate_info
+                    vlm_region = region_img
+                    vlm_region_name = region_name
+                    if region_name in ('face_hands', 'upper_body'):
+                        phone_info['phone_location_hint'] = self._refine_region_location(
+                            phone_info['phone_location_hint'], region_name
+                        )
+                    use_focus_for_vlm = True
+                    break
+            if not phone_info['phone_detected']:
+                phone_info = self.phone_detector.detect(image)
+                vlm_region = self._build_focus_montage(image, phone_regions)
+                if vlm_region is not None:
+                    vlm_region_name = 'multi_focus'
+                    use_focus_for_vlm = True
+        else:
+            vlm_region = self._build_focus_montage(image, phone_regions)
+            if vlm_region is not None:
+                vlm_region_name = 'multi_focus'
+                use_focus_for_vlm = True
 
         logger.debug(
-            f"PHONE_DETECTION | cam={camera_id} track={track_id} global={global_id} | "
-            f"crop={crop_h}x{crop_w} | phone_det={phone_info['phone_detected']} "
+            f"PHONE_DETECTION | cam={camera_id} track={track_id} | "
+            f"crop={crop_h}x{crop_w} "
+            f"regions={self._describe_regions(phone_regions)} | "
+            f"phone_det={phone_info['phone_detected']} "
             f"conf={phone_info['phone_confidence']:.2f} "
-            f"location={phone_info['phone_location_hint']}"
+            f"vlm_src={vlm_region_name if use_focus_for_vlm else 'person_crop'}"
         )
 
         # ── Step 3: VLM inference ────────────────────────────────────────────
+        # When YOLO found a phone in the hand region, send the hand region to
+        # the VLM — it gives a much clearer view of the phone than the full
+        # person crop. Otherwise send the person crop for activity context.
+        if use_focus_for_vlm and vlm_region is not None and vlm_region.size > 0:
+            hr_h, hr_w = vlm_region.shape[:2]
+            if max(hr_h, hr_w) > max_dim:
+                scale = max_dim / max(hr_h, hr_w)
+                vlm_input = cv2.resize(
+                    vlm_region, (int(hr_w * scale), int(hr_h * scale)),
+                    interpolation=cv2.INTER_AREA,
+                )
+            else:
+                vlm_input = vlm_region
+        else:
+            vlm_input = image
+
         t0 = time.time()
-        vlm_result = self._recognize_via_api(image, phone_info)
+        vlm_result = self._recognize_via_api(
+            vlm_input,
+            phone_info,
+            focus_region_name=vlm_region_name if use_focus_for_vlm else 'person_crop',
+        )
         inference_time = time.time() - t0
 
         self.total_inferences += 1
@@ -280,12 +348,16 @@ class ActionRecognizer:
         # ── Step 4: phone-gating ─────────────────────────────────────────────
         gated_action = raw_action
         rejection_reason = None
+        phone_confirmed = phone_info['phone_detected'] or vlm_phone_visible
+
+        if phone_confirmed and raw_action not in _PHONE_ACTIONS:
+            location = phone_info['phone_location_hint'] or vlm_phone_location
+            if location in ('ear', 'face'):
+                gated_action = 'phone_calling'
+            elif phone_info['phone_confidence'] >= _PHONE_OVERRIDE_CONFIDENCE or vlm_phone_visible:
+                gated_action = 'using_phone'
 
         if raw_action in _PHONE_ACTIONS:
-            phone_confirmed = (
-                phone_info['phone_detected']
-                or vlm_phone_visible
-            )
             if not phone_confirmed:
                 if vlm_confidence < _NO_PHONE_VLM_THRESHOLD:
                     gated_action = 'working' if 'working' in self.actions_config else 'idle'
@@ -301,6 +373,8 @@ class ActionRecognizer:
 
         # ── Step 5: temporal voting ──────────────────────────────────────────
         voted_action = self.get_voted_action(track_id, gated_action)
+        if gated_action in _PHONE_ACTIONS and phone_confirmed and vlm_confidence >= 0.70:
+            voted_action = gated_action
 
         if voted_action in _PHONE_ACTIONS and not (
             phone_info['phone_detected'] or vlm_phone_visible
@@ -327,6 +401,7 @@ class ActionRecognizer:
         if self.debug_save_dir and (
             raw_action in _PHONE_ACTIONS
             or phone_info['phone_detected']
+            or vlm_phone_visible
         ):
             self._save_debug_crop(
                 image, camera_id, track_id,
@@ -365,10 +440,82 @@ class ActionRecognizer:
         if callback:
             callback(result_data)
 
+    @staticmethod
+    def _refine_region_location(location: str, region_name: str) -> str:
+        if region_name == 'face_hands' and location in ('face', 'ear', 'hand'):
+            return location
+        if region_name == 'face_hands' and location == 'body':
+            return 'hand'
+        if region_name == 'upper_body' and location == 'body':
+            return 'hand'
+        return location
+
+    @staticmethod
+    def _describe_regions(regions) -> str:
+        if not regions:
+            return 'none'
+        parts = []
+        for region in regions:
+            if isinstance(region, dict):
+                img = region.get('image')
+                name = region.get('name', 'region')
+            else:
+                img = region
+                name = 'region'
+            if img is not None and getattr(img, 'size', 0) > 0:
+                h, w = img.shape[:2]
+                parts.append(f"{name}:{w}x{h}")
+        return ','.join(parts) if parts else 'none'
+
+    @staticmethod
+    def _build_focus_montage(person_crop: np.ndarray, regions) -> Optional[np.ndarray]:
+        valid_regions = []
+        for region in regions:
+            img = region.get('image') if isinstance(region, dict) else region
+            if img is not None and getattr(img, 'size', 0) > 0:
+                valid_regions.append(img)
+
+        if not valid_regions:
+            return None
+
+        panels = [person_crop] + valid_regions[:3]
+        target_h = 360
+        resized = []
+        for panel in panels:
+            h, w = panel.shape[:2]
+            if h <= 0 or w <= 0:
+                continue
+            scale = target_h / h
+            panel = cv2.resize(
+                panel,
+                (max(1, int(w * scale)), target_h),
+                interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR,
+            )
+            resized.append(panel)
+
+        if len(resized) <= 1:
+            return None
+
+        sep = np.full((target_h, 8, 3), 255, dtype=np.uint8)
+        montage = resized[0]
+        for panel in resized[1:]:
+            montage = np.hstack((montage, sep, panel))
+
+        max_w = 1280
+        if montage.shape[1] > max_w:
+            scale = max_w / montage.shape[1]
+            montage = cv2.resize(
+                montage,
+                (max_w, max(1, int(montage.shape[0] * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        return montage
+
     # ── VLM inference ─────────────────────────────────────────────────────────
 
     def _recognize_via_api(
-        self, image: np.ndarray, phone_info: Dict
+        self, image: np.ndarray, phone_info: Dict, focus_region_name: str = 'person_crop'
     ) -> Optional[Dict]:
         """Send image to Ollama for activity classification.
 
@@ -377,11 +524,11 @@ class ActionRecognizer:
         """
         try:
             _, buffer = cv2.imencode(
-                '.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85]
+                '.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 92]
             )
             image_b64 = base64.b64encode(buffer).decode('utf-8')
 
-            prompt = self._build_dynamic_prompt(phone_info)
+            prompt = self._build_dynamic_prompt(phone_info, focus_region_name=focus_region_name)
 
             response = self._ollama_client.generate(
                 model=self.model_name,
@@ -424,7 +571,7 @@ class ActionRecognizer:
                 logger.warning(f"Ollama API error: {err_name}: {e}")
             return None
 
-    def _build_dynamic_prompt(self, phone_info: Dict) -> str:
+    def _build_dynamic_prompt(self, phone_info: Dict, focus_region_name: str = 'person_crop') -> str:
         """Build a VLM prompt that embeds phone-detector evidence.
 
         When the phone detector found a phone, the VLM is asked to verify
@@ -434,11 +581,19 @@ class ActionRecognizer:
         action_names = list(self.actions_config.keys())
         labels_str = ', '.join(action_names)
 
-        lines = [
-            "You are analyzing a CCTV person crop from a factory or workshop.",
-            f"Choose exactly one activity label from: {labels_str}",
-            "",
-        ]
+        if focus_region_name != 'person_crop':
+            lines = [
+                "You are analyzing a phone-focused CCTV image. It may be a close-up crop or a multi-panel montage.",
+                "Use all panels to verify whether a visible rectangular phone is near the ear/cheek or held in the hand.",
+                f"Choose exactly one activity label from: {labels_str}",
+                "",
+            ]
+        else:
+            lines = [
+                "You are analyzing a CCTV person crop from a factory or workshop.",
+                f"Choose exactly one activity label from: {labels_str}",
+                "",
+            ]
 
         # Embed phone detector evidence
         if phone_info.get('phone_detected'):
@@ -449,6 +604,7 @@ class ActionRecognizer:
                 f"  A phone-like object was detected in this crop "
                 f"(confidence {conf:.2f}, location: {loc}).",
                 "  Use this as evidence when deciding whether using_phone or phone_calling applies.",
+                "  If the person is holding or looking at that device, phone use overrides working.",
                 "  Confirm visually — if you see a rectangular device consistent with the "
                 "phone detector finding, select the appropriate phone label.",
                 "",
@@ -456,11 +612,12 @@ class ActionRecognizer:
         else:
             lines += [
                 "PHONE DETECTION RESULT (YOLO object detector):",
-                "  No phone-like object was detected in this crop.",
-                "  Only choose using_phone or phone_calling if a phone is UNMISTAKABLY "
-                "visible with confidence >= 0.90.",
-                "  If in doubt, do NOT choose using_phone — prefer working, carrying, "
-                "walking, or idle instead.",
+                "  No phone-like object was detected by YOLO in this crop.",
+                "  YOLO can miss phones at CCTV resolution or top-down angles.",
+                "  If you can clearly see a distinct rectangular device held in the hand",
+                "  or near the face, report using_phone or phone_calling.",
+                "  DO NOT report phone use for: dark clothing, shadows, hands near body,",
+                "  tools, wood pieces, or any shape that is not clearly a phone screen or device.",
                 "",
             ]
 
@@ -471,20 +628,27 @@ class ActionRecognizer:
 
         lines += [
             "",
-            "IMPORTANT — do NOT choose using_phone or phone_calling:",
-            "  - because the person is looking down.",
-            "  - because a hand is near the chest, face, or pocket.",
-            "  - for dark shirt areas, shadows, tools, wood pieces, machine parts, or pockets.",
-            "  - when the object in hand is clearly a tool, board, box, or material.",
+            "CONTEXT: This is a furniture manufacturing workshop. Workers frequently stand still",
+            "while inspecting wood, measuring pieces, supervising machinery, or waiting for a",
+            "process to complete — this is WORKING, not idle. Only label as idle if the person",
+            "is clearly resting, taking a break, or completely disengaged from any task.",
+            "But when a visible phone is in the hand or near the face, choose using_phone or",
+            "phone_calling even if the person is standing beside machinery.",
+            "",
+            "PHONE GUIDANCE — avoid false positives but don't over-suppress:",
+            "  - DO choose using_phone: rectangular device clearly in hand, person looking at screen",
+            "  - DO choose phone_calling: device clearly at ear/cheek",
+            "  - Do NOT choose phone: dark shirt areas, shadows, plain tools, wood, machine parts",
+            "  - Do NOT choose phone: hand near pocket with no visible object",
             "",
             "Respond ONLY with valid JSON, no extra text:",
             '{"activity": "...", "confidence": 0.0, '
             '"phone_visible": false, "phone_location": "none", "reason": "..."}',
             "",
             f"Use only these labels: {labels_str}",
-            'If uncertain and no phone is visible, use '
-            '{"activity": "idle", "confidence": 0.5, "phone_visible": false, '
-            '"phone_location": "none", "reason": "uncertain"}',
+            'If uncertain and no phone is visible, default to working: '
+            '{"activity": "working", "confidence": 0.5, "phone_visible": false, '
+            '"phone_location": "none", "reason": "uncertain — defaulting to working in workshop context"}',
         ]
 
         return "\n".join(lines)
@@ -533,7 +697,8 @@ class ActionRecognizer:
             return fallback, confidence, phone_visible, phone_location
 
         if confidence < min_conf:
-            fallback = 'idle' if 'idle' in self.actions_config else None
+            # In a workshop context, low-confidence guesses default to working rather than idle
+            fallback = 'working' if 'working' in self.actions_config else None
             return fallback, confidence, phone_visible, phone_location
 
         return action, confidence, phone_visible, phone_location
@@ -584,6 +749,10 @@ class ActionRecognizer:
 
         if not counts:
             return None
+
+        for phone_action in ('phone_calling', 'using_phone'):
+            if counts.get(phone_action, 0) >= _VOTE_REQUIRED_PHONE:
+                return phone_action
 
         best = max(counts, key=lambda k: counts[k])
         vote_req = (

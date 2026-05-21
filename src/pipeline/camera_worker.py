@@ -376,7 +376,7 @@ class CameraWorker:
             if stale_id not in active_track_ids:
                 del self._face_cache[stale_id]
 
-        person_states = []
+        raw_states = []
         for track in active_tracks:
             track_id = track["track_id"]
             state = state_manager.get_state(track_id)
@@ -403,13 +403,9 @@ class CameraWorker:
             vote_status = identity_manager.get_voting_status(track_id)
             identity = state.identity if state else None
             identity_locked = state.identity_locked if state else False
-            if not identity_locked and not identity:
-                tentative = vote_status.get("top_identity")
-                if tentative and vote_status.get("votes", 0) > 0:
-                    identity = tentative
 
             _ga = self.camera_engine.track_gender_age.get(track_id, {})
-            person_states.append({
+            raw_states.append({
                 "track_id": track_id,
                 "global_id": track.get("global_track_id"),
                 "bbox": track["bbox"],
@@ -428,6 +424,21 @@ class CameraWorker:
                 "gender": _ga.get("gender"),
                 "age": _ga.get("age"),
             })
+
+        # Deduplicate: when multiple local tracks share the same global ID, keep
+        # only the one with the highest face detection score (best frontal view).
+        # This prevents the same person appearing as two overlapping boxes.
+        person_states = []
+        seen_global: dict = {}
+        for s in raw_states:
+            gid = s.get("global_id")
+            if gid is None:
+                person_states.append(s)
+                continue
+            score = s.get("face_det_score") or 0.0
+            if gid not in seen_global or score > (seen_global[gid].get("face_det_score") or 0.0):
+                seen_global[gid] = s
+        person_states.extend(seen_global.values())
 
         virtual_lines_stats = []
         for vl in self.virtual_lines:
