@@ -108,8 +108,16 @@ class GPUInferenceWorker:
         person_rois: List[np.ndarray],
         track_ids: List[int],
     ) -> None:
-        """Submit person ROI crops for ArcFace embedding."""
-        self._face_in_queues[camera_idx].put((person_rois, track_ids))
+        """Submit person ROI crops for ArcFace embedding (non-blocking; drops oldest if full)."""
+        q = self._face_in_queues[camera_idx]
+        try:
+            q.put_nowait((person_rois, track_ids))
+        except queue.Full:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+            q.put_nowait((person_rois, track_ids))
 
     def get_embeddings(
         self, camera_idx: int, timeout: float = 2.0
@@ -137,7 +145,15 @@ class GPUInferenceWorker:
                 all_detections = self._run_yolo_batch(frames)
 
                 for i, cam_id in enumerate(cam_ids):
-                    self._detection_out_queues[cam_id].put(all_detections[i])
+                    q = self._detection_out_queues[cam_id]
+                    try:
+                        q.put_nowait(all_detections[i])
+                    except queue.Full:
+                        try:
+                            q.get_nowait()
+                        except queue.Empty:
+                            pass
+                        q.put_nowait(all_detections[i])
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker YOLO error: {e}")
@@ -174,7 +190,15 @@ class GPUInferenceWorker:
                         cam_results[cam_id][track_id] = face_results[i]
 
                 for cam_id, results in cam_results.items():
-                    self._embedding_out_queues[cam_id].put(results)
+                    q = self._embedding_out_queues[cam_id]
+                    try:
+                        q.put_nowait(results)
+                    except queue.Full:
+                        try:
+                            q.get_nowait()
+                        except queue.Empty:
+                            pass
+                        q.put_nowait(results)
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker ArcFace error: {e}")

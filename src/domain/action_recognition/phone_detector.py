@@ -45,6 +45,11 @@ class PhoneDetector:
         """
         self.confidence_threshold = confidence_threshold
         self._model = None
+        # Serializes detect() across the camera worker threads and recognizer
+        # workers that now share this single detector instance. YOLO predict
+        # isn't documented thread-safe, and the GPU is single-stream regardless.
+        import threading
+        self._inference_lock = threading.Lock()
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -123,7 +128,8 @@ class PhoneDetector:
             # Run without class filter — yolo26 (NMS-free) doesn't support
             # Ultralytics' classes= kwarg and raises AttributeError: bn.
             # Filter to COCO class 67 (cell phone) manually below.
-            results = self._predict(person_crop)
+            with self._inference_lock:
+                results = self._predict(person_crop)
 
             h, w = person_crop.shape[:2]
             best_conf = 0.0

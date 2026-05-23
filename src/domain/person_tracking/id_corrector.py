@@ -22,18 +22,28 @@ class IDSwitchCorrector:
         self,
         embedding_distance_threshold: float = 0.4,
         correction_interval_frames: int = 5,
-        min_embedding_samples: int = 3
+        min_embedding_samples: int = 3,
+        unlock_distance_threshold: Optional[float] = None,
     ):
         """Initialize ID switch corrector.
 
         Args:
-            embedding_distance_threshold: Max cosine distance for same person (0.4 = similar)
+            embedding_distance_threshold: Max cosine distance for same person (0.4 = similar).
+                Used for *matching* a track to a known identity (lock direction).
             correction_interval_frames: How often to run batch correction (every N frames)
             min_embedding_samples: Minimum embeddings needed for reliable comparison
+            unlock_distance_threshold: Distance above which a locked identity is considered
+                a mismatch. Should be > embedding_distance_threshold to provide hysteresis
+                and avoid lock/unlock flapping near the boundary. Defaults to lock+0.15.
         """
         self.embedding_threshold = embedding_distance_threshold
         self.correction_interval = correction_interval_frames
         self.min_samples = min_embedding_samples
+        self.unlock_threshold = (
+            unlock_distance_threshold
+            if unlock_distance_threshold is not None
+            else min(0.95, embedding_distance_threshold + 0.15)
+        )
 
         # Track embeddings: {track_id: [embeddings]}
         self.track_embeddings: Dict[int, List[np.ndarray]] = {}
@@ -129,30 +139,29 @@ class IDSwitchCorrector:
         self,
         track_id: int,
         current_embedding: np.ndarray,
-        locked_identity: str
-    ) -> bool:
+        locked_identity: str,
+        return_distance: bool = False,
+    ):
         """Check if current embedding matches track's historical embeddings (TIER 2).
 
-        Args:
-            track_id: Track identifier
-            current_embedding: Current face embedding
-            locked_identity: Locked identity name
-
-        Returns:
-            True if consistent, False if ID switch detected
+        Returns True if consistent, False if ID switch detected. If
+        return_distance=True, returns (consistent, distance) so callers can log
+        why a mismatch fired.
         """
         avg_embedding = self.get_average_embedding(track_id)
 
         if avg_embedding is None:
             # Not enough samples yet
-            return True
+            return (True, None) if return_distance else True
 
         distance = self.cosine_distance(current_embedding, avg_embedding)
 
-        if distance > self.embedding_threshold:
-            return False
-
-        return True
+        # Hysteresis: a locked identity only counts as mismatched if the distance
+        # exceeds the unlock threshold (≥ lock threshold). This prevents flapping
+        # when CCTV pose/lighting pushes a same-person embedding just over the
+        # lock boundary on a single frame.
+        consistent = distance <= self.unlock_threshold
+        return (consistent, distance) if return_distance else consistent
 
     def find_duplicate_tracks(self) -> List[Tuple[int, int, float]]:
         """Find tracks with same identity but different IDs (TIER 3 - Delayed).

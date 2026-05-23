@@ -92,6 +92,11 @@ def load_cameras_from_db(
     default_match_margin = float(cfg.get('match_margin', 0.10))
     # Global config threshold overrides the DB per-camera value (DB value often left as null/default)
     default_match_threshold = float(cfg.get('match_threshold', 0.42))
+    default_identity_unlock_misses = int(cfg.get('identity_unlock_misses', 4))
+    default_id_switch_threshold = float(cfg.get('id_switch_threshold', 0.55))
+    default_id_unlock_threshold = float(
+        cfg.get('id_unlock_threshold', max(0.85, default_id_switch_threshold + 0.30))
+    )
 
     for application in applications:
         cameras = repository.get_cameras(application=application)
@@ -114,6 +119,9 @@ def load_cameras_from_db(
                 'gender_age_min_face_size': default_gender_age_min_face_size,
                 'gender_age_min_det_score': default_gender_age_min_det_score,
                 'gender_age_blur_threshold': default_gender_age_blur_threshold,
+                'identity_unlock_misses': default_identity_unlock_misses,
+                'id_switch_threshold': default_id_switch_threshold,
+                'id_unlock_threshold': default_id_unlock_threshold,
                 'roi': _parse_roi(cam.get('roi_points')),
                 'virtual_lines': _parse_virtual_lines(cam),
             }

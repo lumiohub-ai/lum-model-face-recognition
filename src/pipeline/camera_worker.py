@@ -220,12 +220,10 @@ class CameraWorker:
             rois = [roi for _, roi, _o in person_rois]
             roi_offsets = {tid: off for tid, _, off in person_rois}
             self.gpu_worker.submit_faces(self.camera_idx, rois, track_ids)
+            embeddings_map = self.gpu_worker.get_embeddings(self.camera_idx)
         else:
             roi_offsets = {}
-            # Always send a submission to keep the GPU worker synchronised
-            self.gpu_worker.submit_faces(self.camera_idx, [], [])
-
-        embeddings_map = self.gpu_worker.get_embeddings(self.camera_idx)
+            embeddings_map = {}
 
         # ── Step 7: CPU identity resolution ───────────────────────────────────
         events = self.camera_engine.finalize_identities(

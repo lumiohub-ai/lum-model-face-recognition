@@ -48,16 +48,19 @@ services:
       context: .
       dockerfile: Dockerfile
     user: "1010:11000"
+    depends_on:
+      ollama:
+        condition: service_healthy
     environment:
       HOME: /tmp
       YOLO_CONFIG_DIR: /app/volumes/yolo-cache
       HF_HOME: /app/volumes/hf-cache
       MPLCONFIGDIR: /tmp/mpl
       SO_LOCAL_IMAGE_DIR: /app/volumes/storage/videos/images
+      SO_OLLAMA_API_URL: http://ollama:11434
+      SO_OLLAMA_MODEL: gemma3:4b
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     restart: unless-stopped
-    depends_on:
-      ollama:
-        condition: service_healthy
     volumes:
       - ./.env:/app/.env:ro
       - ./configs:/app/configs:ro

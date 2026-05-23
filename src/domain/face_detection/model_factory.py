@@ -118,9 +118,19 @@ class ModelFactory:
                 num_workers=action_config.get('async_workers', 2),
                 model_name=model_name,
                 inference_timeout=action_config.get('inference_timeout', 30),
+                max_queue_delay_seconds=float(action_config.get('max_queue_delay_seconds', 12.0)),
                 actions=actions,
                 phone_detector=self.phone_detector if enabled else None,
                 debug_save_dir=debug_save_dir,
+                phone_precheck_interval_seconds=float(
+                    action_config.get('phone_precheck_interval_seconds', 2.0)
+                ),
+                general_poll_interval_seconds=float(
+                    action_config.get('general_poll_interval_seconds', 30.0)
+                ),
+                unknown_poll_interval_seconds=float(
+                    action_config.get('unknown_poll_interval_seconds', 45.0)
+                ),
             )
 
             # Start worker threads if enabled

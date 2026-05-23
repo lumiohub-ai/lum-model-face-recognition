@@ -11,6 +11,7 @@ Evidence-based pipeline:
   7. Optionally save debug crops for false-positive inspection.
 """
 
+import itertools
 import json
 import os
 import queue
@@ -19,7 +20,12 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List, Callable, Deque
+from typing import Optional, Dict, List, Callable, Deque, Hashable, Tuple
+
+# Priority constants for the inference queue. Lower = served first.
+PRIORITY_PHONE = 0     # YOLO already flagged a phone-shaped object in the crop
+PRIORITY_GENERAL = 10  # Periodic activity poll for a locked identity
+PRIORITY_UNKNOWN = 20  # Activity poll for an unrecognized person; evicted first under load
 
 import cv2
 import numpy as np
@@ -32,25 +38,24 @@ _PHONE_ACTIONS = frozenset({'using_phone', 'phone_calling'})
 
 # Temporal voting parameters
 _VOTE_WINDOW = 4          # keep last 4 VLM results per track
-_VOTE_REQUIRED_PHONE = 2  # require 2 consecutive detections to avoid single-frame false positives
+_VOTE_REQUIRED_PHONE = 1  # surface phone events on the first confirmed detection; phone-gating filters false positives
 _VOTE_REQUIRED_DEFAULT = 1  # other actions update immediately
 _PHONE_OVERRIDE_CONFIDENCE = 0.30
 
 # If the phone object detector found no phone, require at least this VLM
-# confidence before allowing using_phone / phone_calling.
-# Lowered from 0.90: CCTV camera resolution is too low for reliable YOLO phone detection,
-# so the VLM must be allowed to report phones based on visual evidence alone.
-_NO_PHONE_VLM_THRESHOLD = 0.60
+# confidence before allowing using_phone. Set high: without YOLO confirmation
+# the VLM alone on CCTV crops produces too many false positives.
+_NO_PHONE_VLM_THRESHOLD = 0.80
 
 # Per-action minimum confidence (applied AFTER phone-gating)
 _MIN_CONFIDENCE = {
-    'using_phone': 0.60,
-    'phone_calling': 0.60,
+    'using_phone': 0.65,  # raised — factory clothing/tools cause false positives at 0.55
+    'phone_calling': 0.65,
     'chatting': 0.55,
-    'working': 0.45,
+    'working': 0.40,  # low threshold — working is the correct default in this environment
     'carrying': 0.50,
     'walking': 0.45,
-    'idle': 0.65,  # require high confidence to mark as idle — factory workers often stand still while working
+    'idle': 0.70,  # high — standing still near machinery is working, not idle
 }
 
 # Fallback keywords: model outputs not in the action list that map to idle.
@@ -81,9 +86,13 @@ class ActionRecognizer:
         num_workers: int = 2,
         model_name: str = 'gemma3:4b',
         inference_timeout: int = 30,
+        max_queue_delay_seconds: float = 12.0,
         actions: Dict = None,
         phone_detector=None,
         debug_save_dir: Optional[str] = None,
+        phone_precheck_interval_seconds: float = 2.0,
+        general_poll_interval_seconds: float = 30.0,
+        unknown_poll_interval_seconds: float = 45.0,
     ):
         self.ollama_api_url = ollama_api_url
         self.client_slug = client_slug
@@ -93,7 +102,11 @@ class ActionRecognizer:
         self.num_workers = num_workers
         self.model_name = model_name
         self.inference_timeout = inference_timeout
+        self.max_queue_delay_seconds = max_queue_delay_seconds
         self.phone_detector = phone_detector
+        self.phone_precheck_interval_seconds = phone_precheck_interval_seconds
+        self.general_poll_interval_seconds = general_poll_interval_seconds
+        self.unknown_poll_interval_seconds = unknown_poll_interval_seconds
 
         self.actions_config = actions or {}
         self.action_mapping = self._build_action_mapping()
@@ -113,12 +126,25 @@ class ActionRecognizer:
             host=self.ollama_api_url, timeout=inference_timeout
         )
 
-        # Async processing queue
-        self.inference_queue = queue.Queue(maxsize=max_queue_size)
+        # Async processing queue (priority-ordered: phone candidates first)
+        self.inference_queue: queue.PriorityQueue = queue.PriorityQueue(maxsize=max_queue_size)
+        self._queue_seq = itertools.count()  # monotonic tiebreaker for FIFO within same priority
         self.result_callbacks: Dict[str, Callable] = {}
 
-        # Temporal voting: action history per track_id
-        self._action_history: Dict[int, Deque] = {}
+        # Deduplication: tracks already sitting in the queue (not yet processed)
+        self._pending_keys: set = set()
+        self._pending_lock = threading.Lock()
+
+        # Temporal voting: action history per (camera_id, track_id). Local track
+        # IDs repeat across cameras, and this recognizer instance is shared.
+        self._action_history: Dict[Hashable, Deque] = {}
+
+        # Activity-session aggregator: collapses a run of identical voted_action
+        # results for the same (camera, track) into a single backend event.
+        # Without this, a 60 s phone session produces 8 separate records.
+        self._activity_sessions: Dict[Hashable, Dict] = {}
+        self._session_idle_close_seconds = 45.0
+        self._session_lock = threading.Lock()
 
         # Worker threads
         self.workers: List[threading.Thread] = []
@@ -130,12 +156,17 @@ class ActionRecognizer:
         self.total_api_errors = 0
         self.total_timeouts = 0
 
+        # Server availability backoff — avoids flooding logs when Gemma starts late
+        self._consecutive_connection_errors = 0
+        self._server_backoff_until = 0.0
+
         phone_det_status = 'available' if (phone_detector and phone_detector.available) else 'disabled'
         logger.info(
             f"ActionRecognizer initialized | enabled={enabled} | "
             f"ollama_api={ollama_api_url} | model={model_name} | "
             f"interval={check_interval_seconds}s | workers={num_workers} | "
-            f"timeout={inference_timeout}s | actions={len(self.actions_config)} | "
+            f"timeout={inference_timeout}s | max_queue_delay={max_queue_delay_seconds}s | "
+            f"actions={len(self.actions_config)} | "
             f"phone_detector={phone_det_status}"
         )
 
@@ -162,9 +193,13 @@ class ActionRecognizer:
             return
         logger.info("Stopping action recognition workers...")
         self.running = False
+        # Sentinel: (-1, seq, {'_shutdown': True}) sorts before any real entry
         for _ in self.workers:
             try:
-                self.inference_queue.put(None, timeout=1.0)
+                self.inference_queue.put(
+                    (-1, next(self._queue_seq), {'_shutdown': True}),
+                    timeout=1.0,
+                )
             except queue.Full:
                 pass
         for t in self.workers:
@@ -178,23 +213,99 @@ class ActionRecognizer:
         request_id: str,
         callback: Optional[Callable] = None,
         metadata: Optional[Dict] = None,
+        priority: int = PRIORITY_GENERAL,
     ) -> bool:
-        """Queue image for async recognition.  Returns False if queue is full."""
+        """Queue image for async recognition. Returns False if rejected.
+
+        priority: PRIORITY_PHONE (0) for YOLO-confirmed phone candidates,
+                  PRIORITY_GENERAL (10) for periodic polls. Lower = served first.
+                  HIGH-priority puts evict the oldest LOW-priority item if the
+                  queue is full.
+        """
         if not self.enabled:
             return False
+
+        meta = metadata or {}
+        meta.setdefault('queued_at', time.time())
+        meta['priority'] = priority
+        # Deduplicate: skip if this (camera, track) is already waiting in the queue
+        cam_id = meta.get('camera_id', '')
+        track_id = meta.get('track_id', -1)
+        pending_key = (cam_id, track_id)
+        with self._pending_lock:
+            if pending_key in self._pending_keys:
+                return False
+            self._pending_keys.add(pending_key)
+
+        item = {'image': image, 'request_id': request_id, 'metadata': meta,
+                'pending_key': pending_key}
+        seq = next(self._queue_seq)
+        entry: Tuple[int, int, Dict] = (priority, seq, item)
+
+        if callback:
+            self.result_callbacks[request_id] = callback
+
         try:
-            if callback:
-                self.result_callbacks[request_id] = callback
-            self.inference_queue.put(
-                {'image': image, 'request_id': request_id, 'metadata': metadata or {}},
-                block=False,
-            )
+            self.inference_queue.put(entry, block=False)
             return True
         except queue.Full:
+            # Evict the most-recent lower-priority entry to make room. Phone
+            # candidates evict either GENERAL or UNKNOWN; GENERAL polls evict
+            # UNKNOWN polls. This protects high-value events under load.
+            if self._evict_lowest_priority(min_priority=priority + 1):
+                try:
+                    self.inference_queue.put(entry, block=False)
+                    return True
+                except queue.Full:
+                    pass
+            with self._pending_lock:
+                self._pending_keys.discard(pending_key)
+            self.result_callbacks.pop(request_id, None)
             logger.warning(
-                f"Action recognition queue full ({self.max_queue_size}), dropping request"
+                f"Action recognition queue full ({self.max_queue_size}), dropping "
+                f"priority={priority} request"
             )
             return False
+
+    def _evict_lowest_priority(self, min_priority: int) -> bool:
+        """Remove one queued entry with priority >= min_priority. Returns True on success.
+
+        Pops the highest-priority-number (lowest-priority) entry; ties broken by newest
+        sequence so older low-priority work is preserved over newer low-priority work.
+        Touches PriorityQueue internals under its mutex.
+        """
+        q = self.inference_queue
+        with q.mutex:
+            if not q.queue:
+                return False
+            # heap not sorted; scan to find a victim with priority >= min_priority
+            victim_idx = -1
+            victim_key = None  # (priority, seq) — we want max
+            for i, entry in enumerate(q.queue):
+                prio, seq, _ = entry
+                if prio < min_priority:
+                    continue
+                key = (prio, seq)
+                if victim_key is None or key > victim_key:
+                    victim_key = key
+                    victim_idx = i
+            if victim_idx < 0:
+                return False
+            _, _, evicted_item = q.queue.pop(victim_idx)
+            # Re-heapify after arbitrary removal
+            import heapq
+            heapq.heapify(q.queue)
+            q.unfinished_tasks -= 1
+            q.not_full.notify()
+        # Cleanup pending-key and callback for the evicted entry (outside the queue mutex)
+        evicted_pending = evicted_item.get('pending_key')
+        evicted_req = evicted_item.get('request_id')
+        if evicted_pending is not None:
+            with self._pending_lock:
+                self._pending_keys.discard(evicted_pending)
+        if evicted_req:
+            self.result_callbacks.pop(evicted_req, None)
+        return True
 
     def get_queue_size(self) -> int:
         return self.inference_queue.qsize()
@@ -218,11 +329,28 @@ class ActionRecognizer:
 
     def _worker_loop(self) -> None:
         while self.running:
+            # Hold off while the server is known unreachable so stale items age
+            # out via max_queue_delay_seconds instead of generating a flood of
+            # connection errors.
+            backoff_remaining = self._server_backoff_until - time.time()
+            if backoff_remaining > 0:
+                time.sleep(min(backoff_remaining, 1.0))
+                continue
             try:
-                item = self.inference_queue.get(timeout=1.0)
-                if item is None:
+                entry = self.inference_queue.get(timeout=1.0)
+                if entry is None:
                     break
-                self._process_inference_request(item)
+                # PriorityQueue: entry is (priority, seq, item_dict)
+                _, _, item = entry
+                if item.get('_shutdown'):
+                    break
+                pending_key = item.get('pending_key')
+                try:
+                    self._process_inference_request(item)
+                finally:
+                    if pending_key is not None:
+                        with self._pending_lock:
+                            self._pending_keys.discard(pending_key)
                 self.inference_queue.task_done()
             except queue.Empty:
                 continue
@@ -236,6 +364,28 @@ class ActionRecognizer:
         track_id = metadata.get('track_id', -1)
         global_id = metadata.get('global_id')
         camera_id = metadata.get('camera_id', '?')
+        queued_at = float(metadata.get('queued_at') or time.time())
+        queue_delay = time.time() - queued_at
+
+        if queue_delay > self.max_queue_delay_seconds:
+            logger.warning(
+                f"ACTION_STALE_QUEUE_DROP | cam={camera_id} track={track_id} | "
+                f"request={request_id} queue_delay={queue_delay:.2f}s "
+                f"> {self.max_queue_delay_seconds:.2f}s"
+            )
+            callback = self.result_callbacks.pop(request_id, None)
+            if callback:
+                callback({
+                    'action': None,
+                    'activity_type': 'unknown',
+                    'confidence': 0.0,
+                    'raw_output': None,
+                    'inference_time': 0.0,
+                    'stale': True,
+                    'stale_reason': 'queue_delay',
+                    'metadata': metadata,
+                })
+            return
 
         # ── Step 1: focus on upper body, then resize (≤896 px on longest side) ─
         # Phones are almost always in the upper 65% of the person box (hands,
@@ -246,7 +396,10 @@ class ActionRecognizer:
         image = upper_body
 
         h, w = image.shape[:2]
-        max_dim = 896
+        # Person-crop is downsampled aggressively — only used for general-activity
+        # context where 512 px is sufficient. Phone-focus regions get their own,
+        # larger budget below so small phones (~12-18 px in the source) stay legible.
+        max_dim = 512
         if max(h, w) > max_dim:
             scale = max_dim / max(h, w)
             image = cv2.resize(
@@ -268,7 +421,16 @@ class ActionRecognizer:
         use_focus_for_vlm = False
         vlm_region = None
         vlm_region_name = 'person_crop'
-        if self.phone_detector and self.phone_detector.available:
+
+        # If the camera engine already ran YOLO, reuse that result and skip a
+        # second YOLO pass here. Saves ~20-50ms per inference and avoids divergent
+        # phone-detector answers between camera_engine and recognizer.
+        precomputed = metadata.get('precomputed_phone_info')
+        if precomputed is not None:
+            phone_info = dict(precomputed)
+            vlm_region, vlm_region_name = self._select_focus_region(phone_regions)
+            use_focus_for_vlm = vlm_region is not None
+        elif self.phone_detector and self.phone_detector.available:
             for region in phone_regions:
                 region_img = region.get('image') if isinstance(region, dict) else region
                 region_name = region.get('name', 'region') if isinstance(region, dict) else 'region'
@@ -287,14 +449,12 @@ class ActionRecognizer:
                     break
             if not phone_info['phone_detected']:
                 phone_info = self.phone_detector.detect(image)
-                vlm_region = self._build_focus_montage(image, phone_regions)
+                vlm_region, vlm_region_name = self._select_focus_region(phone_regions)
                 if vlm_region is not None:
-                    vlm_region_name = 'multi_focus'
                     use_focus_for_vlm = True
         else:
-            vlm_region = self._build_focus_montage(image, phone_regions)
+            vlm_region, vlm_region_name = self._select_focus_region(phone_regions)
             if vlm_region is not None:
-                vlm_region_name = 'multi_focus'
                 use_focus_for_vlm = True
 
         logger.debug(
@@ -307,13 +467,18 @@ class ActionRecognizer:
         )
 
         # ── Step 3: VLM inference ────────────────────────────────────────────
-        # When YOLO found a phone in the hand region, send the hand region to
-        # the VLM — it gives a much clearer view of the phone than the full
-        # person crop. Otherwise send the person crop for activity context.
+        # Asymmetric resolution budget:
+        #   • Phone-focus regions (face_hands / hand / upper_body) → 896 px so
+        #     small phones (12-18 px in source) remain legible at VLM scale.
+        #     This is the case driving most of our work; do not regress it.
+        #   • General person crop → 512 px (set above). Plenty for working /
+        #     walking / idle classification, cheaper inference.
         if use_focus_for_vlm and vlm_region is not None and vlm_region.size > 0:
+            phone_focus = vlm_region_name in ('face_hands', 'hand', 'upper_body', 'multi_focus')
+            focus_max_dim = 896 if phone_focus else max_dim
             hr_h, hr_w = vlm_region.shape[:2]
-            if max(hr_h, hr_w) > max_dim:
-                scale = max_dim / max(hr_h, hr_w)
+            if max(hr_h, hr_w) > focus_max_dim:
+                scale = focus_max_dim / max(hr_h, hr_w)
                 vlm_input = cv2.resize(
                     vlm_region, (int(hr_w * scale), int(hr_h * scale)),
                     interpolation=cv2.INTER_AREA,
@@ -372,7 +537,8 @@ class ActionRecognizer:
                     gated_action = 'using_phone'  # downgrade, not reject entirely
 
         # ── Step 5: temporal voting ──────────────────────────────────────────
-        voted_action = self.get_voted_action(track_id, gated_action)
+        vote_key = (camera_id, track_id)
+        voted_action = self.get_voted_action(vote_key, gated_action)
         if gated_action in _PHONE_ACTIONS and phone_confirmed and vlm_confidence >= 0.70:
             voted_action = gated_action
 
@@ -421,20 +587,30 @@ class ActionRecognizer:
             'phone_detected': phone_info['phone_detected'],
             'phone_confidence': phone_info['phone_confidence'],
             'phone_location': phone_info['phone_location_hint'],
+            'queued_at': queued_at,
+            'completed_at': time.time(),
+            'queue_delay': queue_delay,
             'metadata': metadata,
         }
 
-        if metadata.get('user_id') and metadata.get('camera_id') and voted_action:
-            try:
-                self._post_activity_to_backend(
-                    user_id=metadata['user_id'],
-                    camera_id=metadata['camera_id'],
-                    activity_type=activity_type,
-                    proof_image=image,
-                    metadata=metadata,
-                )
-            except Exception as e:
-                logger.exception(f"Failed to post activity to backend: {e}")
+        if metadata.get('camera_id') and voted_action:
+            should_post = self._begin_or_extend_session(
+                camera_id=metadata['camera_id'],
+                track_id=track_id,
+                user_id=metadata.get('user_id') or 0,
+                activity_type=activity_type,
+            )
+            if should_post:
+                try:
+                    self._post_activity_to_backend(
+                        user_id=metadata.get('user_id') or 0,
+                        camera_id=metadata['camera_id'],
+                        activity_type=activity_type,
+                        proof_image=image,
+                        metadata=metadata,
+                    )
+                except Exception as e:
+                    logger.exception(f"Failed to post activity to backend: {e}")
 
         callback = self.result_callbacks.pop(request_id, None)
         if callback:
@@ -466,6 +642,31 @@ class ActionRecognizer:
                 h, w = img.shape[:2]
                 parts.append(f"{name}:{w}x{h}")
         return ','.join(parts) if parts else 'none'
+
+    @staticmethod
+    def _select_focus_region(regions):
+        """Pick the single best focus region for the VLM.
+
+        Small VLMs anchor on the dominant panel of a montage, which usually drowns
+        out the very region that contained the phone. Send one clean crop instead.
+        Preference order: face_hands → hand → upper_body → first available.
+        """
+        by_name: Dict[str, np.ndarray] = {}
+        first = None
+        for region in regions or []:
+            img = region.get('image') if isinstance(region, dict) else region
+            name = region.get('name', 'region') if isinstance(region, dict) else 'region'
+            if img is None or getattr(img, 'size', 0) == 0:
+                continue
+            by_name.setdefault(name, img)
+            if first is None:
+                first = (img, name)
+        for pref in ('face_hands', 'hand', 'upper_body'):
+            if pref in by_name:
+                return by_name[pref], pref
+        if first is not None:
+            return first
+        return None, 'person_crop'
 
     @staticmethod
     def _build_focus_montage(person_crop: np.ndarray, regions) -> Optional[np.ndarray]:
@@ -535,11 +736,16 @@ class ActionRecognizer:
                 prompt=prompt,
                 images=[image_b64],
                 stream=False,
+                options={'num_predict': 64},  # JSON {activity,confidence,phone_visible,phone_location,reason} fits in ~50 tokens; 64 = margin without paying for unused budget
             )
 
             raw_output = (
                 getattr(response, 'response', None) or response['response']
             ).strip()
+
+            # Server responded — clear any backoff state
+            self._consecutive_connection_errors = 0
+            self._server_backoff_until = 0.0
 
             action, confidence, phone_visible, phone_location = (
                 self._parse_json_response(raw_output)
@@ -561,94 +767,81 @@ class ActionRecognizer:
 
         except Exception as e:
             err_name = type(e).__name__
-            if 'timeout' in err_name.lower():
+            err_str = str(e).lower()
+            is_conn_error = (
+                'connectionerror' in err_name.lower()
+                or 'connecterror' in err_name.lower()
+                or 'failed to connect' in err_str
+                or 'connection refused' in err_str
+                or 'cannot connect' in err_str
+            )
+            if 'timeout' in err_name.lower() or 'timeout' in err_str:
                 self.total_timeouts += 1
+                self._consecutive_connection_errors = 0
                 logger.warning(
                     f"Ollama timeout after {self.inference_timeout}s: {err_name}: {e}"
                 )
+            elif is_conn_error:
+                self.total_api_errors += 1
+                self._consecutive_connection_errors += 1
+                # Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s (cap)
+                backoff = min(30.0, 2.0 ** min(self._consecutive_connection_errors - 1, 4))
+                self._server_backoff_until = time.time() + backoff
+                # Log verbosely on 1st failure, then only every 10th to avoid spam
+                if self._consecutive_connection_errors <= 2 or self._consecutive_connection_errors % 10 == 0:
+                    logger.warning(
+                        f"Ollama server not reachable (attempt "
+                        f"#{self._consecutive_connection_errors}), backing off "
+                        f"{backoff:.0f}s | {e}"
+                    )
+                else:
+                    logger.debug(
+                        f"Ollama connection error #{self._consecutive_connection_errors}: {e}"
+                    )
             else:
                 self.total_api_errors += 1
+                self._consecutive_connection_errors = 0
                 logger.warning(f"Ollama API error: {err_name}: {e}")
             return None
 
     def _build_dynamic_prompt(self, phone_info: Dict, focus_region_name: str = 'person_crop') -> str:
-        """Build a VLM prompt that embeds phone-detector evidence.
-
-        When the phone detector found a phone, the VLM is asked to verify
-        and classify it.  When no phone was found, the VLM is explicitly
-        instructed to raise its evidence bar for phone labels.
-        """
+        """Build a concise VLM prompt with phone-detector evidence."""
         action_names = list(self.actions_config.keys())
         labels_str = ', '.join(action_names)
 
-        if focus_region_name != 'person_crop':
-            lines = [
-                "You are analyzing a phone-focused CCTV image. It may be a close-up crop or a multi-panel montage.",
-                "Use all panels to verify whether a visible rectangular phone is near the ear/cheek or held in the hand.",
-                f"Choose exactly one activity label from: {labels_str}",
-                "",
-            ]
-        else:
-            lines = [
-                "You are analyzing a CCTV person crop from a factory or workshop.",
-                f"Choose exactly one activity label from: {labels_str}",
-                "",
-            ]
+        lines = [
+            "Classify what the person in this image is doing.",
+            f"Choose exactly one label: {labels_str}",
+            "",
+            "Label meanings:",
+        ]
 
-        # Embed phone detector evidence
+        for name, cfg in self.actions_config.items():
+            desc = cfg.get('description', '')
+            lines.append(f"  {name} – {desc}")
+
         if phone_info.get('phone_detected'):
             conf = phone_info.get('phone_confidence', 0.0)
             loc = phone_info.get('phone_location_hint', 'unknown')
             lines += [
-                "PHONE DETECTION RESULT (YOLO object detector):",
-                f"  A phone-like object was detected in this crop "
-                f"(confidence {conf:.2f}, location: {loc}).",
-                "  Use this as evidence when deciding whether using_phone or phone_calling applies.",
-                "  If the person is holding or looking at that device, phone use overrides working.",
-                "  Confirm visually — if you see a rectangular device consistent with the "
-                "phone detector finding, select the appropriate phone label.",
                 "",
+                f"YOLO detected a phone-like object (confidence {conf:.2f}, location: {loc}).",
+                "If you clearly see a distinct rectangular screen in the person's hand, choose using_phone.",
+                "If the object is ambiguous, a shadow, or clothing, choose working instead.",
             ]
         else:
             lines += [
-                "PHONE DETECTION RESULT (YOLO object detector):",
-                "  No phone-like object was detected by YOLO in this crop.",
-                "  YOLO can miss phones at CCTV resolution or top-down angles.",
-                "  If you can clearly see a distinct rectangular device held in the hand",
-                "  or near the face, report using_phone or phone_calling.",
-                "  DO NOT report phone use for: dark clothing, shadows, hands near body,",
-                "  tools, wood pieces, or any shape that is not clearly a phone screen or device.",
                 "",
+                "YOLO found no phone. Do NOT choose using_phone unless a distinct rectangular",
+                "phone screen is unmistakably visible in the hand — not a shadow, tool, or clothing.",
+                "Default to working for anyone near machines, wood, tools, or materials.",
             ]
-
-        lines.append("Activity rules:")
-        for action_name, cfg in self.actions_config.items():
-            desc = cfg.get('description', '')
-            lines.append(f"  - {action_name}: {desc}")
 
         lines += [
             "",
-            "CONTEXT: This is a furniture manufacturing workshop. Workers frequently stand still",
-            "while inspecting wood, measuring pieces, supervising machinery, or waiting for a",
-            "process to complete — this is WORKING, not idle. Only label as idle if the person",
-            "is clearly resting, taking a break, or completely disengaged from any task.",
-            "But when a visible phone is in the hand or near the face, choose using_phone or",
-            "phone_calling even if the person is standing beside machinery.",
-            "",
-            "PHONE GUIDANCE — avoid false positives but don't over-suppress:",
-            "  - DO choose using_phone: rectangular device clearly in hand, person looking at screen",
-            "  - DO choose phone_calling: device clearly at ear/cheek",
-            "  - Do NOT choose phone: dark shirt areas, shadows, plain tools, wood, machine parts",
-            "  - Do NOT choose phone: hand near pocket with no visible object",
-            "",
-            "Respond ONLY with valid JSON, no extra text:",
-            '{"activity": "...", "confidence": 0.0, '
-            '"phone_visible": false, "phone_location": "none", "reason": "..."}',
-            "",
-            f"Use only these labels: {labels_str}",
-            'If uncertain and no phone is visible, default to working: '
-            '{"activity": "working", "confidence": 0.5, "phone_visible": false, '
-            '"phone_location": "none", "reason": "uncertain — defaulting to working in workshop context"}',
+            "Reply with JSON only:",
+            '{"activity": "<label>", "confidence": <0.0-1.0>, "phone_visible": <true/false>, '
+            '"phone_location": "<none|hand|ear|face>", "reason": "<one sentence>"}',
         ]
 
         return "\n".join(lines)
@@ -730,7 +923,7 @@ class ActionRecognizer:
     # ── Temporal voting ───────────────────────────────────────────────────────
 
     def get_voted_action(
-        self, track_id: int, new_action: Optional[str]
+        self, track_id: Hashable, new_action: Optional[str]
     ) -> Optional[str]:
         """Record new result and return the majority from the last N results.
 
@@ -802,6 +995,52 @@ class ActionRecognizer:
             mapping[name] = cfg.get('backend_type', name)
         return mapping
 
+    # ── Session aggregation ───────────────────────────────────────────────────
+
+    def _begin_or_extend_session(
+        self,
+        camera_id,
+        track_id: int,
+        user_id: int,
+        activity_type: str,
+    ) -> bool:
+        """Return True if this is the start of a new activity session (i.e. the
+        caller should post to the backend), False if it merely extends a session
+        that is already open.
+
+        A session is identified by (camera_id, track_id, user_id, activity_type).
+        It stays open while same-activity results arrive at least every
+        _session_idle_close_seconds; the first contradicting activity, or a long
+        gap, closes it and opens a new one on the next call.
+        """
+        key = (camera_id, track_id, user_id)
+        now = time.time()
+        with self._session_lock:
+            sess = self._activity_sessions.get(key)
+            if sess is not None:
+                if (
+                    sess['activity'] == activity_type
+                    and (now - sess['last_seen']) <= self._session_idle_close_seconds
+                ):
+                    sess['last_seen'] = now
+                    sess['hits'] += 1
+                    return False
+                # Activity changed or idle timeout — close old, open new
+            self._activity_sessions[key] = {
+                'activity': activity_type,
+                'started_at': now,
+                'last_seen': now,
+                'hits': 1,
+            }
+
+            # Opportunistic GC: drop sessions idle past 5× idle window
+            cutoff = now - self._session_idle_close_seconds * 5
+            stale = [k for k, s in self._activity_sessions.items() if s['last_seen'] < cutoff]
+            for k in stale:
+                if k != key:
+                    self._activity_sessions.pop(k, None)
+        return True
+
     # ── Backend posting ───────────────────────────────────────────────────────
 
     def _post_activity_to_backend(
@@ -829,10 +1068,14 @@ class ActionRecognizer:
                     logger.warning(f"Failed to upload activity proof: {e}")
 
             ts = _dt.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            uname = metadata.get('user_name')
+            if not uname:
+                gid = metadata.get('global_id') or metadata.get('track_id')
+                uname = f"Unrecognized worker (track {gid})" if gid is not None else "Unrecognized worker"
             task_record_activity.delay(
                 client_slug=self.client_slug,
                 user_id=int(user_id) if user_id else 0,
-                user_name=metadata.get('user_name', 'Unknown'),
+                user_name=uname,
                 activity_type=activity_type,
                 camera_id=camera_id,
                 confidence=None,

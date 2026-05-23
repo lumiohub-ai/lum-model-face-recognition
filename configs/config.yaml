@@ -16,6 +16,7 @@ identity_min_det_score: 0.50  # Lowered from 0.65 — CCTV cam4 det scores are 0
 identity_lock_frames: 5
 identity_consensus: 0.75
 identity_min_window_duration_ms: 700
+identity_unlock_misses: 5   # consecutive mismatches required to drop a locked identity (was hardcoded 2)
 gender_age_min_face_size: 20       # Attribute estimation for every visible person; keep separate from strict identity gates
 gender_age_min_det_score: 0.50     # Minimum InsightFace detection score before gender/age smoothing
 gender_age_blur_threshold: 30.0    # Minimum sharpness before accepting gender/age samples
@@ -24,40 +25,30 @@ person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) o
 # Feature flags
 enable_global_tracking: false  # Enable cross-camera global track IDs (MCMOT ReID)
 face_detection_padding: 20.0  # Padding % around detected faces for better recognition (0-100)
+id_switch_threshold: 0.55     # Lock-side cosine distance: a face within this distance of the locked identity's avg embedding is consistent
+id_unlock_threshold: 0.85     # Unlock-side cosine distance (hysteresis): only counts as mismatch beyond this. CCTV face variance routinely pushes embeddings past 0.70 even for the same person; 0.85 absorbs that without flapping.
 
-# Action Recognition settings (Activity tracking via Ollama + YOLO phone detector)
+# Action Recognition settings (event-driven: YOLO phone pre-filter gates VLM)
 action_recognition:
   enabled: true
-  check_interval_seconds: 10  # Per-person VLM check cadence — 10s balances freshness vs 3-worker throughput at ~4s/inference
-  phone_confidence_threshold: 0.20  # YOLO phone detector confidence gate — 0.20 catches oblique/partial holds while filtering shadows
-  max_queue_size: 60
-  async_workers: 3            # 3 workers balances throughput vs GPU contention on single 3080 Ti
-  inference_timeout: 25
-  action_ttl_seconds: 12      # Must be > check_interval + inference_time (5+5=10s)
+  phone_precheck_interval_seconds: 2
+  general_poll_interval_seconds: 20   # Ollama gemma3:4b is ~2-3s/call — tighter cadence is sustainable
+  unknown_poll_interval_seconds: 30
+  check_interval_seconds: 20
+  phone_confidence_threshold: 0.40  # raised from 0.30 — 0.30 fired on dark pockets/clothing shapes
+  max_queue_size: 50
+  async_workers: 1            # single worker — no lock contention; Ollama queues internally
+  inference_timeout: 30
+  max_queue_delay_seconds: 30
+  action_ttl_seconds: 30
   actions:
     using_phone:
       backend_type: phone_usage
       description: "Select this ONLY when a mobile phone or phone-like rectangular object is clearly visible in the person's hand AND the person appears to be looking at it, typing, scrolling, or holding it for screen use. The object must be distinct from clothing, shadows, tools, wood, pockets, or machinery. Do NOT select this only because the person has a hand near the chest, face, or pocket. Do NOT select this for dark shapes on clothes or ambiguous objects."
 
-    phone_calling:
-      backend_type: phone_calling
-      description: "Select this ONLY when a phone-like rectangular object is clearly visible touching or very near the person's ear, cheek, or mouth area and the person appears to be speaking or listening. Do NOT select this only because the hand is near the face."
-
-    chatting:
-      backend_type: talking
-      description: "Select this ONLY if two or more people are clearly facing each other and visibly interacting, gesturing, or speaking. Do NOT select this just because people are standing near each other."
-
     working:
       backend_type: working
-      description: "Select this when the person is at or near a workbench, table, machine, tool, or material. Includes: examining/inspecting boards or parts, positioning pieces, operating machinery, assembling, measuring, cutting, sanding, painting, or simply standing still near equipment while observing or supervising. When in doubt, prefer working over idle for anyone who is near work surfaces or materials."
-
-    carrying:
-      backend_type: carrying
-      description: "Select this when the person is visibly holding, lifting, or transporting a non-phone object such as a board, box, tool, part, or material with one or both hands."
-
-    walking:
-      backend_type: walking
-      description: "Select this when the person is moving through the space without carrying a visible object and without clearly interacting with a person, machine, tool, material, or phone."
+      description: "Select this for furniture-factory work, not office work. The person may be near a CNC/router, saw, workbench, table, wood panels, boards, tools, parts, dust/chips, or stacked materials. Includes examining or inspecting boards, positioning pieces, measuring, assembling, operating or supervising machinery, cutting, sanding, painting, cleaning the work area, waiting for a machine cycle, or standing still near equipment/materials while observing. Do NOT require a computer, keyboard, desk, or office setup. When in doubt, prefer working over idle for anyone near furniture-production surfaces, machines, tools, wood, or materials."
 
     idle:
       backend_type: idle

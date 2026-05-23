@@ -33,6 +33,11 @@ from domain.person_tracking import (
     IDSwitchCorrector,
 )
 from domain.person_tracking.face_adapter import crop_person_roi
+from domain.action_recognition.recognizer import (
+    PRIORITY_PHONE,
+    PRIORITY_GENERAL,
+    PRIORITY_UNKNOWN,
+)
 
 class GlobalTrackIDGenerator:
     """Thread-safe global track ID generator for cross-camera unique IDs.
@@ -112,6 +117,13 @@ class CameraEngine:
         self.identity_min_window_duration_ms = int(
             camera_config.get('identity_min_window_duration_ms', 700)
         )
+        self.identity_unlock_misses = int(camera_config.get('identity_unlock_misses', 4))
+        self.id_switch_threshold = float(camera_config.get('id_switch_threshold', 0.55))
+        # Hysteresis: only consider a locked identity mismatched if embedding distance
+        # exceeds this (≥ id_switch_threshold). Stops lock/unlock flapping near the boundary.
+        self.id_unlock_threshold = float(
+            camera_config.get('id_unlock_threshold', max(0.70, self.id_switch_threshold + 0.15))
+        )
         self.gender_age_min_face_size = int(
             camera_config.get('gender_age_min_face_size', self.min_face_size)
         )
@@ -129,6 +141,9 @@ class CameraEngine:
         self.face_recognizer = face_recognizer
         self.person_detector = person_detector
         self.action_recognizer = action_recognizer
+        self.action_result_max_age_seconds = float(
+            getattr(action_recognizer, 'max_queue_delay_seconds', 12.0)
+        )
         self.client_slug = client_slug
         self.global_id_generator = global_id_generator
         self.global_track_manager = global_track_manager
@@ -179,9 +194,10 @@ class CameraEngine:
 
         # ID Switch Corrector (face-based correction)
         self.id_corrector = IDSwitchCorrector(
-            embedding_distance_threshold=0.4,  # Cosine distance for "same person"
-            correction_interval_frames=5,  # Check every 5 frames to avoid log spam
-            min_embedding_samples=3  # Need 3+ embeddings for reliable comparison
+            embedding_distance_threshold=self.id_switch_threshold,
+            correction_interval_frames=5,
+            min_embedding_samples=3,
+            unlock_distance_threshold=self.id_unlock_threshold,
         )
 
         # State Manager
@@ -190,10 +206,14 @@ class CameraEngine:
             name_to_id_map=self.name_to_id_map
         )
 
-        # Action recognition timing (track per identity name, not track_id)
+        # Action recognition timing — split into two cadences:
+        #   • last_phone_check_per_track: cheap YOLO pre-filter cadence (frequent)
+        #   • last_action_check_per_identity: full VLM general-poll cadence (sparse)
         # Bounded: old entries pruned in _check_and_queue_action_recognition()
-        self.last_action_check_per_identity: Dict[str, float] = {}
+        self.last_action_check_per_identity: Dict[int, float] = {}
+        self.last_phone_check_per_track: Dict[int, float] = {}
         self._max_action_identity_cache = 500
+        self._last_queue_full_warn: float = 0.0
 
         # Best-scoring gender/age per track from InsightFace genderage model
         self.track_gender_age: Dict[int, Dict] = {}
@@ -438,20 +458,53 @@ class CameraEngine:
                     # TIER 2: Consistency check for already-locked identities
                     if result.get("face_detected") and result.get("embedding") is not None:
                         emb = result["embedding"]
-                        consistent = self.id_corrector.check_identity_consistency(
-                            track_id, emb, identity
+                        consistent, mismatch_distance = self.id_corrector.check_identity_consistency(
+                            track_id, emb, identity, return_distance=True
                         )
-                        if consistent:
+
+                        # TIER 2b: DB re-verification — guards against tracker ID swaps.
+                        # The track-internal consistency check only verifies that the
+                        # current embedding looks like the embeddings *previously*
+                        # attached to this track_id. If BoT-SORT swapped this track to
+                        # a different person, the internal check will pass while the
+                        # locked identity is now wrong. So independently ask the DB:
+                        # who does this face look most like? If a *different* enrolled
+                        # identity wins by a clear margin, treat this frame as a
+                        # mismatch — the regular unlock-misses counter then triggers
+                        # a re-lock on the right identity within a few frames.
+                        db_says_other = False
+                        if (
+                            len(self.face_recognizer.db_embs) > 0
+                            and result.get("recognized") is True
+                            and result.get("name") is not None
+                            and result.get("name") != identity
+                            and result.get("similarity", 0.0) >= self.match_threshold
+                        ):
+                            db_says_other = True
+                            logger.warning(
+                                f"IDENTITY_DB_OVERRIDE | camera={self.camera_id} "
+                                f"track={track_id} locked='{identity}' "
+                                f"db_says='{result.get('name')}' "
+                                f"sim={result.get('similarity', 0.0):.3f}"
+                            )
+
+                        if consistent and not db_says_other:
                             self._identity_mismatch_counts.pop(track_id, None)
                             self.id_corrector.add_embedding(track_id, emb, identity)
                         else:
                             misses = self._identity_mismatch_counts.get(track_id, 0) + 1
                             self._identity_mismatch_counts[track_id] = misses
+                            dist_str = (
+                                f"{mismatch_distance:.3f}"
+                                if mismatch_distance is not None else "n/a"
+                            )
                             logger.warning(
                                 f"IDENTITY_UNSTABLE | camera={self.camera_id} "
-                                f"track={track_id} locked='{identity}' mismatch={misses}/2"
+                                f"track={track_id} locked='{identity}' "
+                                f"dist={dist_str} (unlock>{self.id_unlock_threshold}) "
+                                f"mismatch={misses}/{self.identity_unlock_misses}"
                             )
-                            if misses >= 2:
+                            if misses >= self.identity_unlock_misses:
                                 self.identity_manager.reset_track(track_id)
                                 self.id_corrector.reset_track(track_id)
                                 if prev_state:
@@ -896,32 +949,63 @@ class CameraEngine:
         person_bbox=None,
         original_frame=None,
     ) -> None:
-        """Check if action recognition is needed and queue request."""
+        """Event-driven action recognition queueing.
+
+        Two paths share the same VLM queue, ordered by priority:
+
+          • Phone path (HIGH): cheap YOLO pre-filter runs every
+            ``phone_precheck_interval_seconds``. If a phone-shaped object is
+            detected in the face/hands region, enqueue a VLM request immediately.
+            Most frames produce no detection → no GPU work.
+
+          • General path (LOW): periodic activity sampling at
+            ``general_poll_interval_seconds`` (much sparser). Only locked
+            identities are polled; unidentified tracks burn no GPU on this path.
+
+        This collapses VLM load from "every track every 8s" to "only when YOLO
+        sees something worth classifying," matching Gemma-3n throughput.
+        """
         if proof_image is None or proof_image.size == 0:
             return
 
         current_time = time.time()
-        # Key by track_id so each person gets their own cooldown slot
-        last_check_time = self.last_action_check_per_identity.get(track_id, 0.0)
-        if current_time - last_check_time < self.action_recognizer.check_interval_seconds:
-            return
+        phone_interval = getattr(
+            self.action_recognizer, 'phone_precheck_interval_seconds', 2.0
+        )
+        general_interval = getattr(
+            self.action_recognizer, 'general_poll_interval_seconds', 30.0
+        )
+        unknown_interval = getattr(
+            self.action_recognizer, 'unknown_poll_interval_seconds', 45.0
+        )
 
-        self.last_action_check_per_identity[track_id] = current_time
+        last_phone = self.last_phone_check_per_track.get(track_id, 0.0)
+        last_general = self.last_action_check_per_identity.get(track_id, 0.0)
+        do_phone_check = (current_time - last_phone) >= phone_interval
+        # Poll EVERYONE for general activity (not just locked identities) so
+        # workshop monitoring shows activity labels on visitors/unenrolled
+        # workers too. Unrecognized polls use a longer cadence and lower
+        # priority so locked identities still take precedence under load.
+        active_general_interval = general_interval if identity is not None else unknown_interval
+        do_general_poll = (current_time - last_general) >= active_general_interval
+
+        if not do_phone_check and not do_general_poll:
+            return
 
         # Prune stale entries to prevent unbounded growth
         if len(self.last_action_check_per_identity) > self._max_action_identity_cache:
-            cutoff = current_time - self.action_recognizer.check_interval_seconds * 2
+            cutoff = current_time - general_interval * 2
             stale = [k for k, t in self.last_action_check_per_identity.items() if t < cutoff]
             for k in stale:
                 del self.last_action_check_per_identity[k]
+                self.last_phone_check_per_track.pop(k, None)
 
         user_id = self.name_to_id_map.get(identity) if identity else None
 
-        # Extract native-resolution phone focus regions. Calling poses place
-        # the phone near the ear/cheek, while screen-use poses are usually
-        # lower near the hands, so pass both instead of one torso slice.
+        # Native-resolution focus regions — used by both YOLO pre-filter and VLM.
         hand_region = None
-        phone_regions = []
+        phone_regions: List[Dict] = []
+        face_hands_crop = None
         if person_bbox is not None and original_frame is not None:
             try:
                 bx1, by1, bx2, by2 = person_bbox[:4]
@@ -941,12 +1025,38 @@ class CameraEngine:
                     phone_regions.append({'name': name, 'image': crop})
                     return crop
 
-                _crop_region('face_hands', 0.00, 0.68)
+                face_hands_crop = _crop_region('face_hands', 0.00, 0.68)
                 hand_region = _crop_region('hand', 0.28, 0.96)
                 _crop_region('upper_body', 0.00, 0.90)
             except Exception:
                 hand_region = None
                 phone_regions = []
+                face_hands_crop = None
+
+        # ── YOLO phone pre-filter (cheap, ~20–50 ms on small crop) ──────────
+        precomputed_phone_info = None
+        phone_hit = False
+        phone_detector = getattr(self.action_recognizer, 'phone_detector', None)
+        if do_phone_check and phone_detector and phone_detector.available:
+            self.last_phone_check_per_track[track_id] = current_time
+            try:
+                target = face_hands_crop if face_hands_crop is not None else proof_image
+                precomputed_phone_info = phone_detector.detect(target)
+                phone_hit = bool(precomputed_phone_info.get('phone_detected'))
+            except Exception as e:
+                logger.debug(f"phone pre-filter error track={track_id}: {e}")
+                precomputed_phone_info = None
+                phone_hit = False
+
+        # Decide whether to enqueue and at what priority.
+        if phone_hit:
+            priority = PRIORITY_PHONE
+            self.last_action_check_per_identity[track_id] = current_time
+        elif do_general_poll:
+            priority = PRIORITY_GENERAL if identity is not None else PRIORITY_UNKNOWN
+            self.last_action_check_per_identity[track_id] = current_time
+        else:
+            return  # nothing worth a VLM call right now
 
         request_id = f"cam{self.camera_id}_track{track_id}_frame{frame_num}"
 
@@ -964,6 +1074,7 @@ class CameraEngine:
             image=proof_image,
             request_id=request_id,
             callback=action_result_callback,
+            priority=priority,
             metadata={
                 'track_id': track_id,
                 'identity': identity,
@@ -973,11 +1084,17 @@ class CameraEngine:
                 'frame_num': frame_num,
                 'hand_region': hand_region,
                 'phone_regions': phone_regions,
+                'precomputed_phone_info': precomputed_phone_info,
             },
         )
 
         if not queued:
-            logger.warning("Failed to queue action recognition (queue full)")
+            now = time.time()
+            if now - self._last_queue_full_warn >= 30.0:
+                logger.warning(
+                    f"Failed to queue action recognition (queue full, priority={priority})"
+                )
+                self._last_queue_full_warn = now
 
     def _handle_action_result(
         self,
@@ -993,15 +1110,33 @@ class CameraEngine:
         if not action:
             return
 
+        state = self.state_manager.get_state(track_id)
+        if not state:
+            logger.warning(
+                f"ACTION_STALE_RESULT_DROP | camera={self.camera_id} "
+                f"track={track_id} action={action} reason=track_missing"
+            )
+            return
+
+        completed_at = float(result.get('completed_at') or time.time())
+        result_age = completed_at - timestamp
+        if result_age > self.action_result_max_age_seconds:
+            logger.warning(
+                f"ACTION_STALE_RESULT_DROP | camera={self.camera_id} "
+                f"track={track_id} action={action} age={result_age:.2f}s "
+                f"> {self.action_result_max_age_seconds:.2f}s"
+            )
+            return
+
+        display_identity = identity or (state.identity if state else None) or 'unknown'
         logger.info(
-            f"ACTION DETECTED | {identity}: {action} | "
-            f"time={result.get('inference_time', 0.0):.3f}s | camera={self.camera_name}"
+            f"ACTION DETECTED | {display_identity}: {action} | "
+            f"time={result.get('inference_time', 0.0):.3f}s | "
+            f"age={result_age:.2f}s | camera={self.camera_name}"
         )
 
-        state = self.state_manager.get_state(track_id)
-        if state:
-            state.last_detected_action = action
-            state.last_action_time = time.time()
+        state.last_detected_action = action
+        state.last_action_time = time.time()
 
     def reset(self) -> None:
         """Reset all tracking state."""
@@ -1010,6 +1145,7 @@ class CameraEngine:
         self.identity_manager.reset()
         self.state_manager.reset()
         self.last_action_check_per_identity.clear()
+        self.last_phone_check_per_track.clear()
         self.track_gender_age.clear()
         self._identity_mismatch_counts.clear()
         self.frame_count = 0
