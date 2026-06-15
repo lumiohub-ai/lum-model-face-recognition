@@ -105,6 +105,13 @@ class SmartOfficeEngine:
         else:
             self._annotator = None
 
+        # Homography registry + calibration subscriber (Phase 2: floor positions)
+        from domain.calibration.homography_registry import HomographyRegistry
+        from messaging.calibration_subscriber import CalibrationSubscriber
+        self.homography_registry = HomographyRegistry()
+        self._calibration_subscriber = CalibrationSubscriber(self.homography_registry)
+        self._calibration_subscriber.start()
+
         # Initialize per-camera engines (CPU-only components)
         self.camera_engines = self._init_camera_engines()
 
@@ -181,6 +188,7 @@ class SmartOfficeEngine:
                 name_to_id_map=self.name_to_id_map,
                 global_track_manager=self.models.global_track_manager,
                 action_recognizer=self.models.action_recognizer,
+                homography_registry=self.homography_registry,
             )
             engines.append(engine)
         return engines
@@ -593,6 +601,58 @@ class SmartOfficeEngine:
                 camera_id=camera_id,
                 error=str(e),
             )
+
+    def compute_homography(
+        self,
+        camera_id: int,
+        command_id: str,
+        src_pts: list,
+        dst_pts: list,
+    ) -> None:
+        """Solve a 3x3 image→floor homography from matched point pairs.
+
+        Non-blocking — spawns a daemon thread. Publishes HomographyComputed or
+        HomographyFailed when done.
+        """
+        threading.Thread(
+            target=self._do_compute_homography,
+            args=(camera_id, command_id, src_pts, dst_pts),
+            daemon=True,
+            name=f"homography-{camera_id}",
+        ).start()
+
+    def _do_compute_homography(
+        self,
+        camera_id: int,
+        command_id: str,
+        src_pts: list,
+        dst_pts: list,
+    ) -> None:
+        from domain.calibration.homography import compute_homography
+        from messaging.publisher import MDAPublisher
+
+        publisher = MDAPublisher(self.client_slug)
+
+        try:
+            result = compute_homography(src_pts, dst_pts)
+            publisher.publish_homography_calibrated(
+                command_id=command_id,
+                camera_id=camera_id,
+                src_pts=src_pts,
+                dst_pts=dst_pts,
+                homography_matrix=result["homography_matrix"],
+                reprojection_error=result["reprojection_error"],
+                per_point_errors=result["per_point_errors"],
+            )
+            logger.info(
+                f"ComputeHomography complete: camera={camera_id}, command={command_id}, "
+                f"err={result['reprojection_error']:.3f}, method={result['method']}"
+            )
+        except ValueError as e:
+            publisher.publish_homography_failed(command_id, camera_id, str(e))
+        except Exception as e:
+            logger.exception(f"compute_homography failed for camera {camera_id}: {e}")
+            publisher.publish_homography_failed(command_id, camera_id, str(e))
 
     # ── Metrics reporting ─────────────────────────────────────────────────────
 

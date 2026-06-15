@@ -175,6 +175,9 @@ class CameraWorker:
             active_tracks, removed_tracks, embeddings_map, frame, frame_num
         )
 
+        # ── Step 7b: Emit real-time floor positions (~5Hz/track) ──────────────
+        self.camera_engine.emit_positions(active_tracks)
+
         # ── Step 8: Non-blocking event logging ────────────────────────────────
         for event in events:
             self.async_logger.log_entry(event)

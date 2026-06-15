@@ -17,7 +17,7 @@ face_detection_padding: 20.0  # Padding % around detected faces for better recog
 
 # Action Recognition settings (Activity tracking via Ollama)
 action_recognition:
-  enabled: true  # Enable action recognition
+  enabled: false  # Enable action recognition
   check_interval_seconds: 60  # Check each person every N seconds
   max_queue_size: 50  # Maximum queued inference requests
   async_workers: 1  # Number of background worker threads for inference

@@ -251,6 +251,19 @@ class MDAManager:
             else:
                 logger.warning("Engine not available for test calibration")
 
+        elif command_type == 'ComputeHomography':
+            command_id = payload.get('command_id')
+            src_pts = payload.get('src_pts') or []
+            dst_pts = payload.get('dst_pts') or []
+            logger.info(
+                f"ComputeHomography for camera {camera_id}, command {command_id}, "
+                f"{len(src_pts)} point pairs"
+            )
+            if self.engine:
+                self.engine.compute_homography(camera_id, command_id, src_pts, dst_pts)
+            else:
+                logger.warning("Engine not available for compute_homography")
+
 
 # ============================================================
 # Signal Handling (No Global State)
