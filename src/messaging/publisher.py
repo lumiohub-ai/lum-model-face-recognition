@@ -8,6 +8,7 @@ Events: AI Service → Backend (Redis Pub/Sub)
 Commands: Backend → AI Service (Redis Streams - handled by stream_consumer.py)
 """
 
+import json
 import uuid
 import logging
 from datetime import datetime
@@ -234,6 +235,36 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing UserLocationUpdated: {user_name} at {camera_name}")
         return self.redis.publish(EVENT_CHANNELS['LOCATION'], event)
 
+    def publish_user_location_updated_position(
+        self,
+        camera_id: int,
+        map_id: int,
+        track_id: int,
+        user_id: Optional[int],
+        user_name: Optional[str],
+        x: float,
+        y: float,
+    ) -> bool:
+        """Publish a real-time floor position for an active track.
+
+        Reuses the existing UserLocationUpdated event_type on events:location;
+        dashboard's useLiveTracks filters by presence of the `position` field, so
+        this coexists with the entry/exit variant.
+        """
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['USER_LOCATION_UPDATED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'camera_id': camera_id,
+            'map_id': map_id,
+            'track_id': track_id,
+            'user_id': user_id,
+            'user_name': user_name,
+            'position': {'x': float(x), 'y': float(y)},
+        }
+        return self.redis.publish(EVENT_CHANNELS['LOCATION'], event)
+
     def publish_embedding_created(
         self,
         command_id: str,
@@ -354,6 +385,53 @@ class MDAPublisher:
             'error': error,
         }
         logger.info(f"[Events] Publishing CalibrationFailed: camera {camera_id}")
+        return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+
+    def publish_homography_calibrated(
+        self,
+        command_id,
+        camera_id,
+        src_pts,
+        dst_pts,
+        homography_matrix,
+        reprojection_error,
+        per_point_errors,
+    ):
+        # Backend's eventListener.js does JSON.parse(event.<field>) on the four
+        # complex fields below, so they must be sent as JSON-encoded strings,
+        # not nested objects/arrays.
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['HOMOGRAPHY_CALIBRATED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'src_pts': json.dumps(src_pts),
+            'dst_pts': json.dumps(dst_pts),
+            'homography_matrix': json.dumps(homography_matrix),
+            'calibration_error': json.dumps({
+                'per_point': per_point_errors,
+                'mean': reprojection_error,
+            }),
+        }
+        logger.info(
+            f"[Events] Publishing HomographyCalibrated: camera {camera_id}, "
+            f"mean_err={reprojection_error:.3f}"
+        )
+        return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
+
+    def publish_homography_failed(self, command_id, camera_id, error):
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['HOMOGRAPHY_FAILED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'error': error,
+        }
+        logger.info(f"[Events] Publishing HomographyFailed: camera {camera_id}: {error}")
         return self.redis.publish(EVENT_CHANNELS['CALIBRATION'], event)
 
     def publish_test_calibration_complete(self, command_id, camera_id, image_url):

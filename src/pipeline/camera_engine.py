@@ -78,7 +78,8 @@ class CameraEngine:
         global_id_generator: Optional[GlobalTrackIDGenerator] = None,
         name_to_id_map: Optional[Dict[str, int]] = None,
         global_track_manager: Optional[GlobalTrackManager] = None,
-        action_recognizer: Optional[Any] = None
+        action_recognizer: Optional[Any] = None,
+        homography_registry: Optional[Any] = None,
     ):
         """Initialize camera engine.
 
@@ -114,6 +115,12 @@ class CameraEngine:
 
         # Name mapping for activity tracking
         self.name_to_id_map = name_to_id_map or {}
+
+        # Homography registry + per-track 5Hz throttle for real-time position emit
+        self.homography_registry = homography_registry
+        self._position_last_emit: Dict[int, float] = {}
+        from messaging.publisher import MDAPublisher
+        self._publisher = MDAPublisher(client_slug)
 
         # Initialize per-camera components (tracking, state)
         self._init_components()
@@ -507,6 +514,64 @@ class CameraEngine:
                     )
 
         return recognized_persons
+
+    def emit_positions(self, active_tracks: List[Dict]) -> None:
+        """Publish floor-projected positions for active tracks (~5Hz per track).
+
+        Per-frame call. Skips silently if no homography is cached for this camera
+        (HomographyRegistry caches negative lookups and logs once).
+        """
+        if self.homography_registry is None or not active_tracks:
+            return
+
+        cached = self.homography_registry.get(self.client_slug, self.camera_id)
+        if cached is None:
+            return
+        H, map_id = cached
+
+        now = time.monotonic()
+        cooldown = 0.2  # 5 Hz
+
+        for track in active_tracks:
+            track_id = track.get("track_id")
+            bbox = track.get("bbox")
+            if track_id is None or bbox is None:
+                continue
+            last = self._position_last_emit.get(track_id, 0.0)
+            if now - last < cooldown:
+                continue
+
+            x1, y1, x2, y2 = bbox
+            foot = np.array(
+                [[[(float(x1) + float(x2)) / 2.0, float(y2)]]], dtype=np.float64
+            )
+            projected = cv2.perspectiveTransform(foot, H).reshape(2)
+
+            user_id: Optional[int] = None
+            user_name: Optional[str] = None
+            if self.identity_manager.is_identity_locked(track_id):
+                locked = self.identity_manager.get_locked_identity(track_id)
+                if locked:
+                    user_name = locked.get("name")
+                    if user_name is not None:
+                        user_id = self.name_to_id_map.get(user_name)
+
+            try:
+                self._publisher.publish_user_location_updated_position(
+                    camera_id=self.camera_id,
+                    map_id=map_id,
+                    track_id=int(track_id),
+                    user_id=user_id,
+                    user_name=user_name,
+                    x=float(projected[0]),
+                    y=float(projected[1]),
+                )
+                self._position_last_emit[track_id] = now
+            except Exception as e:
+                logger.exception(
+                    f"emit_positions publish failed for camera {self.camera_id} "
+                    f"track {track_id}: {e}"
+                )
 
     def _compute_recognition_result(
         self,

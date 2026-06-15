@@ -41,6 +41,8 @@ EVENT_TYPES = {
     'CALIBRATION_COMPLETE': 'CalibrationComplete',
     'CALIBRATION_FAILED': 'CalibrationFailed',
     'TEST_CALIBRATION_COMPLETE': 'TestCalibrationComplete',
+    'HOMOGRAPHY_CALIBRATED': 'HomographyCalibrated',
+    'HOMOGRAPHY_FAILED': 'HomographyFailed',
     'SYSTEM_METRICS': 'SystemMetrics',
     'SYSTEM_ALERT': 'SystemAlert',
 }
