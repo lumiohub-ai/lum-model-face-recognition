@@ -56,6 +56,22 @@ class StreamManager:
             )
             self.streams.append(stream)
             self.frame_nums.append(0)
+            if stream.connected:
+                logger.info(
+                    f"Stream ready: {config.get('camera_name', 'Unknown')} "
+                    f"(camera_id={config.get('camera_id')})"
+                )
+            else:
+                logger.warning(
+                    f"Stream unavailable at startup: {config.get('camera_name', 'Unknown')} "
+                    f"(camera_id={config.get('camera_id')}) — reconnecting in background"
+                )
+
+        connected = sum(1 for s in self.streams if s.connected)
+        logger.info(
+            f"Stream init complete: {connected}/{len(self.streams)} connected, "
+            f"{len(self.streams) - connected} reconnecting"
+        )
 
         self._initialized = True
         return self.streams
