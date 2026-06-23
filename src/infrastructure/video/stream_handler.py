@@ -55,27 +55,32 @@ class StreamHandler:
         self.max_delay = 30  # Maximum delay between reconnection attempts
         self.last_gc_time = time.time()
         self.gc_interval = 60  # Run garbage collection every 60 seconds
+        self.connected = False
+        self.ret = False
+        self.frame = None
+        self.thread = None  # Store reference to thread
 
         ret, frame = self.cap.read()
         if not ret:
-            self.logger.warning(f"Unable to read from source: {src}, will try to reconnect")
-            self._reconnect()
-            ret, frame = self.cap.read()
-            if not ret:
-                raise ValueError(f"Unable to read from source after initial reconnection attempts: {src}")
+            self.logger.warning(
+                f"Unable to read from source: {src} — "
+                "will reconnect in background without blocking startup"
+            )
+            if self.cap is not None:
+                self.cap.release()
+            self.cap = None
+        else:
+            self.connected = True
+            self.ret = ret
+            self.frame = frame
 
-        self.ret = ret
-        self.frame = frame
-
-        if self.is_video:
+        if self.is_video and self.connected:
             self.last_frame = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) + 1)
             self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
         else:
             # For streams, these values might not be accurate
             self.last_frame = float('inf')
             self.fps = 30  # Default assumption
-
-        self.thread = None  # Store reference to thread
 
     def _reconnect(self) -> bool:
         """Attempt to reconnect to the video source until successful or stopped.
@@ -112,6 +117,7 @@ class StreamHandler:
 
             ret, _ = self.cap.read()
             if ret:
+                self.connected = True
                 self.logger.warning(f"Successfully reconnected to stream: {self.src}")
                 return True
 
@@ -140,7 +146,7 @@ class StreamHandler:
         Returns:
             Self reference for method chaining
         """
-        if not self.is_video:
+        if not self.is_video and self.thread is None:
             self.thread = threading.Thread(target=self.update, daemon=True)
             self.thread.start()
         return self
@@ -156,6 +162,12 @@ class StreamHandler:
             with self.lock:
                 if self.stopped:
                     break
+
+            if self.cap is None or not self.connected:
+                if self.stopped or not self._reconnect():
+                    break
+                consecutive_failures = 0
+                continue
 
             ret, frame = self.cap.read()
             if not ret:
@@ -190,6 +202,9 @@ class StreamHandler:
             Tuple containing a boolean indicating success and the frame (if successful)
         """
         if self.is_video:
+            if self.cap is None or not self.connected:
+                return False, None
+
             ret, frame = self.cap.read()
             if not ret and not self.stopped:
                 # For video files that reached the end, we can just stop the stream
@@ -218,4 +233,7 @@ class StreamHandler:
             self.thread.join(timeout=5)
             if self.thread.is_alive():
                 self.logger.warning(f"Stream thread did not exit cleanly within 5s: {self.src}")
-        self.cap.release()
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        self.connected = False
