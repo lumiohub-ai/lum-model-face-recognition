@@ -62,6 +62,12 @@ class StreamHandler:
 
         ret, frame = self.cap.read()
         if not ret:
+            if self.is_video:
+                if self.cap is not None:
+                    self.cap.release()
+                    self.cap = None
+                raise ValueError(f"Unable to read from source: {src}")
+
             self.logger.warning(
                 f"Unable to read from source: {src} — "
                 "will reconnect in background without blocking startup"
@@ -88,9 +94,11 @@ class StreamHandler:
         Returns:
             True if reconnection was successful, False if shutdown was requested
         """
+        self.connected = False
         self.logger.warning(f"Reconnecting to stream: {self.src}")
         if self.cap is not None:
             self.cap.release()
+            self.cap = None
 
         current_delay = self.reconnect_delay
         attempt_count = 1
@@ -123,6 +131,7 @@ class StreamHandler:
 
             # Release failed capture before next attempt
             self.cap.release()
+            self.cap = None
 
             attempt_count += 1
             current_delay = min(current_delay * 1.5, self.max_delay)
@@ -229,11 +238,17 @@ class StreamHandler:
                 return
             self.stopped = True
 
-        if self.thread is not None:
+        if self.thread is not None and self.thread.is_alive():
             self.thread.join(timeout=5)
             if self.thread.is_alive():
-                self.logger.warning(f"Stream thread did not exit cleanly within 5s: {self.src}")
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
-        self.connected = False
+                self.logger.warning(
+                    f"Stream thread did not exit cleanly within 5s: {self.src} — "
+                    "skipping capture release to avoid race with background thread"
+                )
+                return
+
+        with self.lock:
+            if self.cap is not None:
+                self.cap.release()
+                self.cap = None
+            self.connected = False
