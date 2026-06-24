@@ -199,6 +199,9 @@ class SmartOfficeEngine:
         args.logger = logger
         args.db_names = self.models.face_recognizer.db_names
         args.production = True
+        args.unrecognized_frontality_min = self.config.get(
+            "unrecognized_frontality_min", 0.6
+        )
         return EntryLogger(args=args)
 
     def _init_camera_workers(self) -> List[CameraWorker]:

@@ -451,7 +451,13 @@ class CameraEngine:
             if face_image is not None:
                 _max_crop_frames = 30
                 crop_history = self.track_manager.track_crop_history.setdefault(track_id, {})
-                crop_history[frame_num] = {"face": face_image, "bbox": bbox, "frame": frame.copy()}
+                crop_history[frame_num] = {
+                    "face": face_image,
+                    "bbox": bbox,
+                    "frame": frame.copy(),
+                    "landmarks": face_data.get("face_landmarks"),
+                    "det_score": face_data.get("det_score", 0.0),
+                }
                 if len(crop_history) > _max_crop_frames:
                     for old_key in sorted(crop_history)[:-_max_crop_frames]:
                         del crop_history[old_key]
@@ -463,6 +469,14 @@ class CameraEngine:
 
             if state and not state.identity_locked:
                 person_image = self._get_best_person_image(track_id)
+
+                # Step 0 (observability): measure best face quality + frontality
+                # for this unrecognized case. Carried on the event so they can be
+                # logged downstream alongside the dashboard image_url. No
+                # filtering yet.
+                face_quality = self._best_person_image_quality(track_id)
+                face_frontality = self._best_face_frontality(track_id)
+
                 if person_image is not None and person_image.size > 0:
                     global_track_id = None
                     if self.global_track_manager and self.global_track_manager.enabled:
@@ -476,6 +490,8 @@ class CameraEngine:
                             "name": None,
                             "recognized": False,
                             "confidence": 0.0,
+                            "face_quality": face_quality,
+                            "face_frontality": face_frontality,
                             "appear_time": state.first_seen,
                             "camera_name": self.camera_name,
                             "camera_id": self.camera_id,
@@ -712,6 +728,84 @@ class CameraEngine:
             return self._read_crop_image(crops[key])
 
         return None
+
+    def _best_person_image_quality(self, track_id: int) -> float:
+        """Best face-quality score across a track's saved crops (0.0 if none).
+
+        Step 0 (observability only): a soft-gated sibling of
+        _get_best_person_image. Uses the SAME size + sharpness scoring but does
+        NOT hard-discard frames below the size/blur bars — it always returns the
+        highest score available so every unrecognized case carries a number.
+
+        Deliberately separate from _get_best_person_image so the recognized /
+        fire-once attendance path (which depends on that method's signature) is
+        untouched. Does not select or return an image.
+        """
+        crops = self.track_manager.track_crop_history.get(track_id, {})
+        if not crops:
+            return 0.0
+
+        min_face_size = getattr(self, 'min_face_size', 150)
+        blur_threshold = 100.0
+
+        best_score = 0.0
+        for crop_data in crops.values():
+            face_crop = crop_data.get('face') if isinstance(crop_data, dict) else crop_data
+            if face_crop is None or face_crop.size == 0:
+                continue
+
+            h, w = face_crop.shape[:2]
+            gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY) if len(face_crop.shape) == 3 else face_crop
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+            size_score = (h * w) / (min_face_size ** 2)
+            sharpness_score = laplacian_var / blur_threshold
+            total_score = size_score * 0.6 + sharpness_score * 0.4
+
+            if total_score > best_score:
+                best_score = total_score
+
+        return best_score
+
+    @staticmethod
+    def _frontality_from_landmarks(kps) -> Optional[float]:
+        """Frontality in [0,1] from 5 InsightFace landmarks (1.0 = frontal).
+
+        kps order: [left_eye, right_eye, nose, left_mouth, right_mouth], each
+        [x, y]. Uses horizontal nose offset from the eye midpoint, normalised by
+        inter-eye distance — a yaw proxy. A frontal face keeps the nose centred
+        between the eyes; a profile shifts it toward one eye. Returns None if the
+        landmarks are missing/degenerate.
+        """
+        if not kps or len(kps) < 3:
+            return None
+        try:
+            le, re, nose = kps[0], kps[1], kps[2]
+            eye_dx = abs(float(re[0]) - float(le[0]))
+            if eye_dx < 1.0:
+                return 0.0
+            eye_mid_x = (float(le[0]) + float(re[0])) / 2.0
+            yaw = abs(float(nose[0]) - eye_mid_x) / eye_dx  # 0 frontal, grows w/ profile
+            return max(0.0, 1.0 - 2.0 * yaw)
+        except (TypeError, IndexError, ValueError):
+            return None
+
+    def _best_face_frontality(self, track_id: int) -> float:
+        """Best (most frontal) face score across a track's crops (0.0 if none).
+
+        Step 0b (observability): a track whose most frontal frame is still a
+        profile/back-of-head scores low. Reads the landmarks now stored in
+        crop history; no image is selected or returned.
+        """
+        crops = self.track_manager.track_crop_history.get(track_id, {})
+        best = 0.0
+        for crop_data in crops.values():
+            if not isinstance(crop_data, dict):
+                continue
+            f = self._frontality_from_landmarks(crop_data.get("landmarks"))
+            if f is not None and f > best:
+                best = f
+        return best
 
     def _find_track_with_identity(
         self, identity_name: str, exclude_track_id: Optional[int] = None

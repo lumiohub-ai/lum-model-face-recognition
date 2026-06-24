@@ -7,6 +7,7 @@ from typing import Dict, Optional
 import numpy as np
 from loguru import logger
 
+
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
 
@@ -20,6 +21,8 @@ class EntryLogger:
         self.client_slug = args.client_slug
         self.recent_entries = deque(maxlen=max_entries)
         self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120)
+        # Min face frontality [0,1] for an unrecognized case to reach the dashboard
+        self.unrecognized_frontality_min = getattr(args, 'unrecognized_frontality_min', 0.6)
 
         # Track last seen location (camera) for each person
         self.person_last_camera: Dict[str, str] = {}
@@ -203,9 +206,24 @@ class EntryLogger:
         face: np.ndarray,
         status: str,
         camera_id: Optional[int] = None,
-        camera_name: Optional[str] = None
+        camera_name: Optional[str] = None,
+        face_quality: float = 0.0,
+        face_frontality: float = 0.0,
+        track_id: Optional[int] = None
     ) -> bool:
         """Send unrecognized face via Celery task."""
+        # Frontality gate: only surface cards with an actual frontal face on the
+        # dashboard. Low-frontality cases (backs of heads, profiles, chairs) are
+        # logged for debugging but never uploaded or persisted.
+        frontality_min = self.unrecognized_frontality_min
+        if face_frontality < frontality_min:
+            logger.info(
+                f"UNRECOGNIZED_DROPPED | camera={camera_id} track={track_id} "
+                f"quality={face_quality:.3f} frontality={face_frontality:.3f} "
+                f"(< {frontality_min} frontality threshold)"
+            )
+            return False
+
         # Upload face image to GCS
         image_url = None
         try:
@@ -215,6 +233,14 @@ class EntryLogger:
                 logger.debug(f"Uploaded unrecognized face to GCS: {image_url}")
         except Exception as e:
             logger.exception(f"Error uploading unrecognized face: {e}")
+
+        # Step 0 (observability): one correlated line tying the measured quality
+        # to the exact image the dashboard shows (image_url). Logged only.
+        logger.info(
+            f"UNRECOGNIZED_QUALITY | camera={camera_id} track={track_id} "
+            f"quality={face_quality:.3f} frontality={face_frontality:.3f} "
+            f"image_url={image_url}"
+        )
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 

@@ -175,6 +175,9 @@ class AsyncLogger:
                         status=status,
                         camera_id=camera_id,
                         camera_name=camera_name,
+                        face_quality=entry.get("face_quality", 0.0),
+                        face_frontality=entry.get("face_frontality", 0.0),
+                        track_id=entry.get("track_id"),
                     )
                     logger.info(
                         f"UNRECOGNIZED | Sent face from camera {camera_id} ({status})"
