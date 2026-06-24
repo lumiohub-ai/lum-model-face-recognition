@@ -151,11 +151,13 @@ class SmartOfficeEngine:
 
         # GPU worker (shared across all cameras)
         n_cameras = len(self.camera_configs)
+        triton_client = self._init_triton_client()
         self.gpu_worker = GPUInferenceWorker(
-            detector=self.models.person_detector,
-            face_detector=self.models.face_detector,
+            detector=self.models.person_detector if triton_client is None else None,
+            face_detector=self.models.face_detector if triton_client is None else None,
             num_cameras=n_cameras,
             metrics_collector=self.metrics,
+            triton_client=triton_client,
         )
 
         # Async logger (non-blocking I/O)
@@ -174,6 +176,27 @@ class SmartOfficeEngine:
         )
 
     # ── Initialisation helpers ────────────────────────────────────────────────
+
+    def _init_triton_client(self):
+        """Create TritonInferenceClient if SO_TRITON_URL is configured, else None."""
+        url = settings.triton_url
+        if not url:
+            logger.info("SO_TRITON_URL not set — using local GPU inference")
+            return None
+        try:
+            from infrastructure.triton_client import TritonInferenceClient
+            pipeline_cfg = self.config.get("pipeline", {})
+            client = TritonInferenceClient(
+                url=url,
+                confidence_threshold=self.config.get("person_detection_threshold", 0.5),
+                face_det_threshold=pipeline_cfg.get("face_det_threshold", 0.5),
+                face_nms_threshold=pipeline_cfg.get("face_nms_threshold", 0.4),
+            )
+            logger.info(f"Triton inference enabled: {url}")
+            return client
+        except Exception as e:
+            logger.error(f"Failed to connect to Triton at {url}: {e} — falling back to local inference")
+            return None
 
     def _init_camera_engines(self) -> List[CameraEngine]:
         engines = []

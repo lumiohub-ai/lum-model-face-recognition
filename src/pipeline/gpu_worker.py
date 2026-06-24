@@ -21,22 +21,30 @@ class GPUInferenceWorker:
 
     YOLO and ArcFace run in separate threads so face embedding for one camera
     never waits on another camera's CPU tracking.
+
+    If a TritonInferenceClient is provided, all GPU inference is routed through
+    the Triton server (gRPC). Local detector/face_detector are used as fallback.
     """
 
     def __init__(
         self,
-        detector,
-        face_detector,
-        num_cameras: int,
+        detector=None,
+        face_detector=None,
+        num_cameras: int = 1,
         metrics_collector=None,
+        triton_client=None,
     ):
         self._detector = detector
         self._face_detector = face_detector
+        self._triton_client = triton_client
         self._num_cameras = num_cameras
         self._running = False
         self._yolo_thread: Optional[threading.Thread] = None
         self._arcface_thread: Optional[threading.Thread] = None
         self._metrics = metrics_collector  # Optional[MetricsCollector]
+
+        backend = "triton" if triton_client is not None else "local"
+        logger.debug(f"GPUInferenceWorker: backend={backend}")
 
         # Per-camera queues indexed by camera_idx (0-based)
         self._frame_in_queues: Dict[int, queue.Queue] = {
@@ -212,29 +220,54 @@ class GPUInferenceWorker:
     # ── Inference helpers ─────────────────────────────────────────────────────
 
     def _run_yolo_batch(self, frames: List[np.ndarray]) -> List[List[Dict]]:
-        """Run YOLO on a batch of frames and return per-frame detections."""
+        """Run YOLO on a batch of frames. Routes to Triton if client is configured."""
         if not frames:
             return []
+        t0 = time.time()
         try:
-            t0 = time.time()
-            results = self._detector.model(
-                frames,
-                conf=self._detector.confidence_threshold,
-                iou=self._detector.iou_threshold,
-                verbose=False,
-                device=self._detector.device,
-            )
+            if self._triton_client is not None:
+                results = self._triton_client.infer_yolo_batch(frames)
+            else:
+                raw = self._detector.model(
+                    frames,
+                    conf=self._detector.confidence_threshold,
+                    iou=self._detector.iou_threshold,
+                    verbose=False,
+                    device=self._detector.device,
+                )
+                results = [self._parse_yolo_result(r) for r in raw]
             duration_ms = (time.time() - t0) * 1000
             if self._metrics is not None:
                 self._metrics.record_yolo_ms(duration_ms)
-            return [self._parse_yolo_result(r) for r in results]
+            return results
         except Exception as e:
             logger.exception(f"YOLO batch inference failed: {e}")
             return [[] for _ in frames]
 
     def _run_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
-        """Detect face and extract embedding for each person ROI."""
+        """Detect face and extract embedding for each person ROI.
+
+        Routes to Triton if client is configured; otherwise uses local InsightFace.
+        """
         t0 = time.time()
+        try:
+            if self._triton_client is not None:
+                results = self._triton_client.infer_arcface_batch(person_rois)
+            else:
+                results = self._run_arcface_local(person_rois)
+        except Exception as e:
+            logger.exception(f"ArcFace batch inference failed: {e}")
+            results = [
+                {"embedding": None, "face_image": None, "face_detected": False, "det_score": 0.0}
+                for _ in person_rois
+            ]
+        duration_ms = (time.time() - t0) * 1000
+        if self._metrics is not None and results:
+            self._metrics.record_arcface_ms(duration_ms)
+        return results
+
+    def _run_arcface_local(self, person_rois: List[np.ndarray]) -> List[Dict]:
+        """Local InsightFace inference path (used when Triton is not configured)."""
         results = []
         for roi in person_rois:
             result: Dict = {
@@ -250,8 +283,6 @@ class GPUInferenceWorker:
                 faces = self._face_detector.detect(roi)
                 if faces:
                     face = faces[0]
-                    # face.bbox / face.kps are in padded-image coordinates.
-                    # Subtract the padding offset to get back to ROI space.
                     roi_h, roi_w = roi.shape[:2]
                     pad_pct = self._face_detector.padding_percent
                     pad_w = int(roi_w * pad_pct / 100)
@@ -269,20 +300,13 @@ class GPUInferenceWorker:
                         "embedding": face.embedding,
                         "face_image": face_crop if face_crop.size > 0 else None,
                         "face_detected": True,
-                        "det_score": (
-                            float(face.det_score)
-                            if hasattr(face, "det_score")
-                            else 0.0
-                        ),
+                        "det_score": float(face.det_score) if hasattr(face, "det_score") else 0.0,
                         "face_bbox": [x1, y1, x2, y2],
                         "face_landmarks": kps,
                     }
             except Exception as e:
                 logger.debug(f"Face detection error on ROI: {e}")
             results.append(result)
-        duration_ms = (time.time() - t0) * 1000
-        if self._metrics is not None and results:
-            self._metrics.record_arcface_ms(duration_ms)
         return results
 
     @staticmethod

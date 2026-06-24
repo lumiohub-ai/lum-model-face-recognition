@@ -10,6 +10,7 @@ from .storage import PgVectorStore, ImageFetcher, EmbeddingSyncService, Reposito
 from .video import StreamHandler, StreamManager, FrameAnnotator
 from .entry_logger import EntryLogger
 from .async_logger import AsyncLogger
+from .triton_client import TritonInferenceClient
 
 __all__ = [
     # Storage
@@ -24,4 +25,5 @@ __all__ = [
     # Services
     "EntryLogger",
     "AsyncLogger",
+    "TritonInferenceClient",
 ]

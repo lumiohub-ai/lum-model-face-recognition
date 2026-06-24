@@ -57,6 +57,9 @@ class Settings:
     ollama_api_url = os.getenv("SO_OLLAMA_API_URL", "http://localhost:11434")
     ollama_model = os.getenv("SO_OLLAMA_MODEL", "gemma3:4b")
 
+    # Triton Inference Server (gRPC)
+    triton_url = os.getenv("SO_TRITON_URL", "")  # e.g. "host.docker.internal:9101"
+
     # Metrics monitoring
     metrics_enabled = os.getenv("SO_METRICS_ENABLED", "true").lower() not in ("false", "0", "no")
     metrics_port = int(os.getenv("SO_METRICS_PORT", 8765))
