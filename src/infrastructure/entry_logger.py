@@ -209,17 +209,22 @@ class EntryLogger:
         camera_name: Optional[str] = None,
         face_quality: float = 0.0,
         face_frontality: float = 0.0,
+        face_pitch: float = 0.0,
+        face_det_score: float = 0.0,
         track_id: Optional[int] = None
     ) -> bool:
         """Send unrecognized face via Celery task."""
         # Frontality gate: only surface cards with an actual frontal face on the
         # dashboard. Low-frontality cases (backs of heads, profiles, chairs) are
         # logged for debugging but never uploaded or persisted.
+        # det_score is logged (not yet gated) to expose false-positive face
+        # detections that score frontal but are not real faces.
         frontality_min = self.unrecognized_frontality_min
         if face_frontality < frontality_min:
             logger.info(
                 f"UNRECOGNIZED_DROPPED | camera={camera_id} track={track_id} "
                 f"quality={face_quality:.3f} frontality={face_frontality:.3f} "
+                f"pitch={face_pitch:.3f} det_score={face_det_score:.3f} "
                 f"(< {frontality_min} frontality threshold)"
             )
             return False
@@ -239,7 +244,7 @@ class EntryLogger:
         logger.info(
             f"UNRECOGNIZED_QUALITY | camera={camera_id} track={track_id} "
             f"quality={face_quality:.3f} frontality={face_frontality:.3f} "
-            f"image_url={image_url}"
+            f"pitch={face_pitch:.3f} det_score={face_det_score:.3f} image_url={image_url}"
         )
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"

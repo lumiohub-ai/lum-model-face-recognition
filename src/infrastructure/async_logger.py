@@ -177,6 +177,8 @@ class AsyncLogger:
                         camera_name=camera_name,
                         face_quality=entry.get("face_quality", 0.0),
                         face_frontality=entry.get("face_frontality", 0.0),
+                        face_pitch=entry.get("face_pitch", 0.0),
+                        face_det_score=entry.get("face_det_score", 0.0),
                         track_id=entry.get("track_id"),
                     )
                     logger.info(

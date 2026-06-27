@@ -80,6 +80,7 @@ class CameraEngine:
         global_track_manager: Optional[GlobalTrackManager] = None,
         action_recognizer: Optional[Any] = None,
         homography_registry: Optional[Any] = None,
+        debug_landmarks: bool = False,
     ):
         """Initialize camera engine.
 
@@ -115,6 +116,9 @@ class CameraEngine:
 
         # Name mapping for activity tracking
         self.name_to_id_map = name_to_id_map or {}
+
+        # Debug: draw face landmarks on unrecognized card images
+        self._debug_landmarks = debug_landmarks
 
         # Homography registry + per-track 5Hz throttle for real-time position emit
         self.homography_registry = homography_registry
@@ -470,12 +474,22 @@ class CameraEngine:
             if state and not state.identity_locked:
                 person_image = self._get_best_person_image(track_id)
 
-                # Step 0 (observability): measure best face quality + frontality
-                # for this unrecognized case. Carried on the event so they can be
-                # logged downstream alongside the dashboard image_url. No
-                # filtering yet.
+                # Observability: best face quality + orientation for this
+                # unrecognized case. Gate stays on yaw (face_frontality); pitch
+                # and det_score are logged for tuning. Carried on the event.
                 face_quality = self._best_person_image_quality(track_id)
-                face_frontality = self._best_face_frontality(track_id)
+                face_frontality, face_det_score, face_pitch, best_crop = (
+                    self._best_face_signals(track_id)
+                )
+
+                # Debug: replace the card image with a landmark-annotated view of
+                # the best-frontality frame so we can see what the detector found.
+                if self._debug_landmarks and best_crop is not None:
+                    annotated = self._annotate_landmarks(
+                        best_crop, face_frontality, face_pitch, face_det_score
+                    )
+                    if annotated is not None and annotated.size > 0:
+                        person_image = annotated
 
                 if person_image is not None and person_image.size > 0:
                     global_track_id = None
@@ -492,6 +506,8 @@ class CameraEngine:
                             "confidence": 0.0,
                             "face_quality": face_quality,
                             "face_frontality": face_frontality,
+                            "face_pitch": face_pitch,
+                            "face_det_score": face_det_score,
                             "appear_time": state.first_seen,
                             "camera_name": self.camera_name,
                             "camera_id": self.camera_id,
@@ -790,22 +806,97 @@ class CameraEngine:
         except (TypeError, IndexError, ValueError):
             return None
 
-    def _best_face_frontality(self, track_id: int) -> float:
-        """Best (most frontal) face score across a track's crops (0.0 if none).
+    @staticmethod
+    def _pitch_from_landmarks(kps) -> Optional[float]:
+        """Pitch (up/down tilt) proxy in [0,1] from 5 landmarks (1.0 = level).
 
-        Step 0b (observability): a track whose most frontal frame is still a
-        profile/back-of-head scores low. Reads the landmarks now stored in
-        crop history; no image is selected or returned.
+        kps: [left_eye, right_eye, nose, left_mouth, right_mouth], each [x, y].
+        Uses the vertical eye->mouth span normalised by inter-eye distance. A
+        level frontal face has span ~1.1-1.4x the eye distance; looking down
+        foreshortens the lower face and shrinks the span. Penalises the shrink.
+        Returns None if landmarks are missing/degenerate. Constants V_DOWN/V_OK
+        are first-guess for the high-mounted desk cameras — tune from the logged
+        yaw/pitch distribution.
+        """
+        if not kps or len(kps) < 5:
+            return None
+        try:
+            le, re_, _nose, lm, rm = kps[0], kps[1], kps[2], kps[3], kps[4]
+            eye_dx = abs(float(re_[0]) - float(le[0]))
+            if eye_dx < 1.0:
+                return 0.0
+            eye_mid_y = (float(le[1]) + float(re_[1])) / 2.0
+            mouth_mid_y = (float(lm[1]) + float(rm[1])) / 2.0
+            vratio = (mouth_mid_y - eye_mid_y) / eye_dx
+            V_DOWN, V_OK = 0.7, 1.1
+            return max(0.0, min(1.0, (vratio - V_DOWN) / (V_OK - V_DOWN)))
+        except (TypeError, IndexError, ValueError):
+            return None
+
+    def _best_face_signals(self, track_id: int) -> Tuple[float, float, float, Optional[dict]]:
+        """Signals for the most-frontal (best-yaw) frame of a track.
+
+        Returns (yaw, det_score, pitch, crop_data):
+          - yaw    : frontality [0,1] — drives the gate (unchanged behaviour)
+          - det    : detector confidence FOR THAT FRAME (exposes false positives)
+          - pitch  : up/down proxy [0,1] — logged for tuning, not yet gated
+          - crop_data: that frame's stored {face,bbox,frame,landmarks,...} for
+                       landmark visualisation
+        Returns (0.0, 0.0, 0.0, None) if no usable landmarks. Selects no image.
         """
         crops = self.track_manager.track_crop_history.get(track_id, {})
-        best = 0.0
+        best_yaw = 0.0
+        best_det = 0.0
+        best_pitch = 0.0
+        best_crop: Optional[dict] = None
         for crop_data in crops.values():
             if not isinstance(crop_data, dict):
                 continue
-            f = self._frontality_from_landmarks(crop_data.get("landmarks"))
-            if f is not None and f > best:
-                best = f
-        return best
+            kps = crop_data.get("landmarks")
+            yaw = self._frontality_from_landmarks(kps)
+            if yaw is None or yaw <= best_yaw:
+                continue
+            best_yaw = yaw
+            best_det = float(crop_data.get("det_score", 0.0) or 0.0)
+            best_pitch = self._pitch_from_landmarks(kps) or 0.0
+            best_crop = crop_data
+        return best_yaw, best_det, best_pitch, best_crop
+
+    def _annotate_landmarks(
+        self, crop_data: dict, yaw: float, pitch: float, det: float
+    ) -> Optional[np.ndarray]:
+        """Debug image: the person ROI with the 5 face landmarks + scores drawn.
+
+        Landmarks are stored in person-ROI space, so we rebuild that exact ROI
+        (crop_person_roi) and draw the points directly — no coordinate mapping.
+        Returns None if the frame/bbox is unavailable.
+        """
+        frame = crop_data.get("frame")
+        bbox = crop_data.get("bbox")
+        if frame is None or bbox is None:
+            return None
+        try:
+            roi, _off = crop_person_roi(frame, np.asarray(bbox, dtype=float), expand=0.1)
+        except Exception:
+            return None
+        if roi is None or roi.size == 0:
+            return None
+        img = roi.copy()
+        kps = crop_data.get("landmarks")
+        names = ["LE", "RE", "N", "LM", "RM"]
+        if kps:
+            for i, p in enumerate(kps):
+                try:
+                    x, y = int(p[0]), int(p[1])
+                except (TypeError, IndexError, ValueError):
+                    continue
+                cv2.circle(img, (x, y), 3, (0, 255, 0), -1)
+                label = names[i] if i < len(names) else str(i)
+                cv2.putText(img, label, (x + 4, y - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, f"yaw={yaw:.2f} pitch={pitch:.2f} det={det:.2f}",
+                    (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+        return img
 
     def _find_track_with_identity(
         self, identity_name: str, exclude_track_id: Optional[int] = None

@@ -189,6 +189,7 @@ class SmartOfficeEngine:
                 global_track_manager=self.models.global_track_manager,
                 action_recognizer=self.models.action_recognizer,
                 homography_registry=self.homography_registry,
+                debug_landmarks=self.config.get("unrecognized_debug_landmarks", False),
             )
             engines.append(engine)
         return engines
