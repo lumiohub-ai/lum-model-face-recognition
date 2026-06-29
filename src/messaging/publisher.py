@@ -356,6 +356,29 @@ class MDAPublisher:
         logger.info(f"[Events] Publishing FrameCaptured: camera {camera_id}, command {command_id}")
         return self.redis.publish(EVENT_CHANNELS['FRAME_CAPTURE'], event)
 
+    def publish_frame_capture_failed(
+        self,
+        command_id: str,
+        camera_id: int,
+        error: str,
+    ) -> bool:
+        """Publish FrameCaptureFailed so the Backend can reject the pending request."""
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['FRAME_CAPTURE_FAILED'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'command_id': command_id,
+            'camera_id': camera_id,
+            'error': error,
+        }
+
+        logger.info(
+            f"[Events] Publishing FrameCaptureFailed: camera {camera_id}, "
+            f"command {command_id}, error={error}"
+        )
+        return self.redis.publish(EVENT_CHANNELS['FRAME_CAPTURE'], event)
+
     def publish_calibration_complete(self, command_id, camera_id, rms_error, camera_matrix, dist_coeffs, img_size, frames_used, model):
         event = {
             'event_id': self._generate_message_id(),
@@ -471,4 +494,31 @@ class MDAPublisher:
         }
         logger.warning(f"[Events] SystemAlert: {alert_type} — {message}")
         self.redis.publish(EVENT_CHANNELS['METRICS'], event)
+
+    def publish_camera_heartbeat(
+        self,
+        camera_id: int,
+        camera_name: Optional[str],
+        state: str,
+        last_frame_at: Optional[str] = None,
+        fps: Optional[float] = None,
+        last_error: Optional[str] = None,
+    ) -> bool:
+        """Publish periodic camera stream health to Backend."""
+        event = {
+            'event_id': self._generate_message_id(),
+            'event_type': EVENT_TYPES['CAMERA_HEARTBEAT'],
+            'timestamp': self._get_timestamp(),
+            'client_slug': self.client_slug,
+            'camera_id': camera_id,
+            'camera_name': camera_name,
+            'state': state,
+            'last_frame_at': last_frame_at,
+            'fps': fps,
+            'last_error': last_error,
+        }
+        logger.debug(
+            f"[Events] CameraHeartbeat: camera {camera_id} ({camera_name}) state={state} fps={fps}"
+        )
+        return self.redis.publish(EVENT_CHANNELS['CAMERA'], event)
 
