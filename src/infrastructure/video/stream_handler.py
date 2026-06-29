@@ -6,7 +6,8 @@ import threading
 import time
 import logging
 import gc
-from typing import Any, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple
 
 
 class StreamHandler:
@@ -67,6 +68,8 @@ class StreamHandler:
         self.ret = False
         self.frame = None
         self.thread = None  # Store reference to thread
+        self._last_frame_at: Optional[float] = None
+        self._reconnecting = False
 
         ret, frame = self.cap.read()
         if not ret:
@@ -87,6 +90,7 @@ class StreamHandler:
             self.connected = True
             self.ret = ret
             self.frame = frame
+            self._mark_frame_received()
 
         if self.is_video and self.connected:
             self.last_frame = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) + 1)
@@ -96,6 +100,69 @@ class StreamHandler:
             self.last_frame = float('inf')
             self.fps = 30  # Default assumption
 
+    def _mark_frame_received(self) -> None:
+        """Record a successful frame read for health reporting."""
+        self._last_frame_at = time.time()
+        self._reconnecting = False
+
+    def _iso_last_frame_at(self) -> Optional[str]:
+        if self._last_frame_at is None:
+            return None
+        return (
+            datetime.fromtimestamp(self._last_frame_at, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    def frame_age_sec(self) -> Optional[float]:
+        """Seconds since the last successful frame read, or None if never received."""
+        if self._last_frame_at is None:
+            return None
+        return time.time() - self._last_frame_at
+
+    def get_health(self, stale_sec: float = 15.0) -> Dict[str, Optional[str]]:
+        """Return stream health for MDA heartbeat publishing."""
+        now = time.time()
+        last_frame_at = self._iso_last_frame_at()
+        has_recent_frame = (
+            self._last_frame_at is not None
+            and (now - self._last_frame_at) < stale_sec
+        )
+
+        if self.stopped:
+            return {
+                "state": "offline",
+                "last_frame_at": last_frame_at,
+                "last_error": "stream_stopped",
+            }
+        if has_recent_frame:
+            return {
+                "state": "streaming",
+                "last_frame_at": last_frame_at,
+                "last_error": None,
+            }
+        reconnect_grace_sec = 45.0
+        if self._reconnecting or (not self.connected and not self.is_video):
+            if (
+                self._last_frame_at is None
+                or (now - self._last_frame_at) > reconnect_grace_sec
+            ):
+                return {
+                    "state": "offline",
+                    "last_frame_at": last_frame_at,
+                    "last_error": "no_recent_frames",
+                }
+            return {
+                "state": "connecting",
+                "last_frame_at": last_frame_at,
+                "last_error": "reconnecting",
+            }
+        return {
+            "state": "offline",
+            "last_frame_at": last_frame_at,
+            "last_error": "no_recent_frames",
+        }
+
     def _reconnect(self) -> bool:
         """Attempt to reconnect to the video source until successful or stopped.
 
@@ -103,6 +170,7 @@ class StreamHandler:
             True if reconnection was successful, False if shutdown was requested
         """
         self.connected = False
+        self._reconnecting = True
         self.logger.warning(f"Reconnecting to stream: {self.src}")
         if self.cap is not None:
             self.cap.release()
@@ -132,9 +200,13 @@ class StreamHandler:
             else:
                 self.cap = cv2.VideoCapture(self.src)
 
-            ret, _ = self.cap.read()
+            ret, frame = self.cap.read()
             if ret:
                 self.connected = True
+                self._mark_frame_received()
+                with self.lock:
+                    self.latest_ret = ret
+                    self.latest_frame = frame
                 self.logger.warning(f"Successfully reconnected to stream: {self.src}")
                 return True
 
@@ -200,6 +272,7 @@ class StreamHandler:
 
             # Reset failure counter on successful read
             consecutive_failures = 0
+            self._mark_frame_received()
 
             # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
             # This prevents jitter by ensuring we never show old frames
@@ -231,6 +304,8 @@ class StreamHandler:
                 self.stop()
                 return False, None
 
+            if ret:
+                self._mark_frame_received()
             return ret, frame
 
         # LATEST FRAME ONLY: Return the most recent frame from background thread
