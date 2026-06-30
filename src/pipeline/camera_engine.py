@@ -119,6 +119,16 @@ class CameraEngine:
         # Homography registry + per-track 5Hz throttle for real-time position emit
         self.homography_registry = homography_registry
         self._position_last_emit: Dict[int, float] = {}
+
+        # Once a track's identity is locked, its embedding is no longer needed
+        # for voting — only for an occasional consistency re-check and proof
+        # image refresh. Re-submitting every recognition cycle anyway was
+        # multiplying the per-cycle Triton round-trip count by however many
+        # tracks happened to be simultaneously locked, for no benefit.
+        self._locked_recheck_last_ts: Dict[int, float] = {}
+        self._locked_recheck_interval_sec = camera_config.get(
+            'locked_identity_recheck_interval_sec', 5.0
+        )
         from messaging.publisher import MDAPublisher
         self._publisher = MDAPublisher(client_slug)
 
@@ -256,6 +266,12 @@ class CameraEngine:
                 keypoints=keypoints,
                 confidence=confidence,
             )
+
+            if self.identity_manager.is_identity_locked(track_id):
+                last_ts = self._locked_recheck_last_ts.get(track_id, 0.0)
+                if time.time() - last_ts < self._locked_recheck_interval_sec:
+                    continue  # already locked and recently rechecked — skip Triton round trip
+                self._locked_recheck_last_ts[track_id] = time.time()
 
             roi, roi_offset = crop_person_roi(frame, bbox, expand=0.1)
             person_rois.append((track_id, roi, roi_offset))
@@ -459,6 +475,7 @@ class CameraEngine:
         # Removed tracks
         for track in removed_tracks:
             track_id = track["track_id"]
+            self._locked_recheck_last_ts.pop(track_id, None)
             state = self.state_manager.get_state(track_id)
 
             if state and not state.identity_locked:

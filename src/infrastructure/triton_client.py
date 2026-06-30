@@ -43,13 +43,17 @@ try:
 except ImportError:
     _TRITON_AVAILABLE = False
 
-# SCRFD (det_10g.onnx) config: 3 FPN strides, 2 anchors per location, fixed 640×640 input
+# SCRFD (scrfd_10g_kps_dynamic_u8) config: 3 FPN strides, 2 anchors/location, 640×640 input
 _SCRFD_STRIDES = [8, 16, 32]
 _SCRFD_NUM_ANCHORS = 2
 _SCRFD_INPUT_SIZE = (640, 640)
 
-# Triton model output names — must match config.pbtxt declarations
-_DET_OUTPUT_NAMES = ["448", "471", "494", "451", "474", "497", "454", "477", "500"]
+# Triton output names — must match arcface_det config.pbtxt (v3 model)
+_DET_OUTPUT_NAMES = [
+    "score_8", "score_16", "score_32",
+    "bbox_8",  "bbox_16",  "bbox_32",
+    "kps_8",   "kps_16",   "kps_32",
+]
 
 
 class TritonInferenceClient:
@@ -98,10 +102,10 @@ class TritonInferenceClient:
             preprocessed.append(img)
             metas.append((scale, pw, ph))
 
-        batch = np.stack(preprocessed, axis=0).astype(np.float32)  # [B,3,640,640]
+        batch = np.stack(preprocessed, axis=0)  # [B,3,640,640] uint8
 
         try:
-            inp = InferInput("images", list(batch.shape), "FP32")
+            inp = InferInput("images", list(batch.shape), "UINT8")
             inp.set_data_from_numpy(batch)
             response = self._client.infer(
                 model_name="yolo_person",
@@ -121,7 +125,11 @@ class TritonInferenceClient:
     def _preprocess_yolo(
         self, frame: np.ndarray, input_size: int = 640
     ) -> Tuple[np.ndarray, float, int, int]:
-        """Letterbox + normalize for YOLO. Returns (img_chw_float32, scale, pad_w, pad_h)."""
+        """Letterbox for YOLO. Returns (img_chw_uint8, scale, pad_w, pad_h).
+
+        /255.0 normalization now happens inside the Triton model graph, not
+        here — sending uint8 instead of float32 cuts the wire payload 4x.
+        """
         h, w = frame.shape[:2]
         scale = min(input_size / h, input_size / w)
         new_h, new_w = int(round(h * scale)), int(round(w * scale))
@@ -132,9 +140,9 @@ class TritonInferenceClient:
         canvas = np.full((input_size, input_size, 3), 114, dtype=np.uint8)
         canvas[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized
 
-        # BGR→RGB, normalize [0,1], HWC→CHW
-        img = canvas[:, :, ::-1].astype(np.float32) / 255.0
-        return img.transpose(2, 0, 1), scale, pad_w, pad_h
+        # BGR→RGB, HWC→CHW (still uint8)
+        img = canvas[:, :, ::-1]
+        return np.ascontiguousarray(img.transpose(2, 0, 1)), scale, pad_w, pad_h
 
     def _postprocess_yolo(
         self, raw: np.ndarray, scale: float, pad_w: int, pad_h: int
@@ -162,81 +170,254 @@ class TritonInferenceClient:
     def infer_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
         """Detect face + extract embedding for each person ROI.
 
-        Matches the result format from the local FaceDetector.detect() path:
+        Fix 1 + Fix 2: all N ROIs are detected in ONE arcface_det call, and
+        all M detected faces are embedded in ONE arcface_rec call, instead of
+        N+M sequential round-trips.
+
+        Returns list of result dicts (one per input ROI):
           {'embedding': np.ndarray[512]|None, 'face_image': ndarray|None,
            'face_detected': bool, 'det_score': float,
            'face_bbox': [x1,y1,x2,y2], 'face_landmarks': [[x,y],...]}
         """
-        results = []
-        for roi in person_rois:
-            result: Dict = {
-                "embedding": None,
-                "face_image": None,
-                "face_detected": False,
-                "det_score": 0.0,
-            }
-            if roi is None or roi.size == 0:
-                results.append(result)
-                continue
+        _empty: Dict = {
+            "embedding": None, "face_image": None,
+            "face_detected": False, "det_score": 0.0,
+        }
+
+        # Skip None/empty ROIs; remember their original positions
+        valid_indices = [
+            i for i, r in enumerate(person_rois)
+            if r is not None and r.size > 0
+        ]
+        if not valid_indices:
+            return [_empty.copy() for _ in person_rois]
+
+        valid_rois = [person_rois[i] for i in valid_indices]
+
+        # ── Fix 2: all face detections in one Triton call ──────────────────
+        try:
+            face_detections = self._detect_faces_batch(valid_rois)
+        except Exception as e:
+            logger.debug(f"Triton arcface_det batch failed: {e}")
+            return [_empty.copy() for _ in person_rois]
+
+        # ── Fix 1: all embeddings in one Triton call ───────────────────────
+        # Collect (roi, kps) pairs for ROIs that have a detected face
+        face_roi_indices: List[int] = []    # index into valid_rois
+        roi_kps_pairs: List[Tuple[np.ndarray, np.ndarray]] = []
+        for i, det in enumerate(face_detections):
+            if det is not None:
+                _bbox, kps, _score = det
+                face_roi_indices.append(i)
+                roi_kps_pairs.append((valid_rois[i], kps))
+
+        embeddings: List[Optional[np.ndarray]] = []
+        if roi_kps_pairs:
             try:
-                face = self._detect_face(roi)
-                if face is None:
-                    results.append(result)
-                    continue
-
-                bbox, kps, det_score = face
-                x1, y1, x2, y2 = bbox.astype(int)
-                face_crop = roi[max(0, y1):y2, max(0, x1):x2]
-
-                embedding = self._get_embedding(roi, kps)
-
-                result = {
-                    "embedding": embedding,
-                    "face_image": face_crop if face_crop.size > 0 else None,
-                    "face_detected": True,
-                    "det_score": float(det_score),
-                    "face_bbox": [int(x1), int(y1), int(x2), int(y2)],
-                    "face_landmarks": kps.reshape(5, 2).tolist(),
-                }
+                embeddings = self._get_embeddings_batch(roi_kps_pairs)
             except Exception as e:
-                logger.debug(f"ArcFace pipeline error on ROI: {e}")
-            results.append(result)
+                logger.debug(f"Triton arcface_rec batch failed: {e}")
+                embeddings = [None] * len(roi_kps_pairs)
+
+        # Map embedding back to valid_roi index
+        emb_by_valid_idx: Dict[int, Optional[np.ndarray]] = {
+            vi: emb for vi, emb in zip(face_roi_indices, embeddings)
+        }
+
+        # Assemble per-valid-roi results
+        det_results = []
+        for i, (roi, det) in enumerate(zip(valid_rois, face_detections)):
+            if det is None:
+                det_results.append(_empty.copy())
+                continue
+            bbox, kps, det_score = det
+            x1, y1, x2, y2 = bbox.astype(int)
+            face_crop = roi[max(0, y1):y2, max(0, x1):x2]
+            det_results.append({
+                "embedding": emb_by_valid_idx.get(i),
+                "face_image": face_crop if face_crop.size > 0 else None,
+                "face_detected": True,
+                "det_score": float(det_score),
+                "face_bbox": [int(x1), int(y1), int(x2), int(y2)],
+                "face_landmarks": kps.reshape(5, 2).tolist(),
+            })
+
+        # Map back to original per-input-roi order
+        results: List[Dict] = [_empty.copy() for _ in person_rois]
+        for orig_idx, det_result in zip(valid_indices, det_results):
+            results[orig_idx] = det_result
         return results
 
-    def _detect_face(
-        self, roi: np.ndarray
-    ) -> Optional[Tuple[np.ndarray, np.ndarray, float]]:
-        """Run SCRFD face detection via Triton arcface_det.
+    # ── internal batch helpers ────────────────────────────────────────────────
 
-        Returns (bbox_xyxy in ROI coords, kps_flat10 in ROI coords, score), or None.
-        Applies the same border padding as local FaceDetector to improve edge-face detection.
+    def _detect_faces_batch(
+        self, rois: List[np.ndarray]
+    ) -> List[Optional[Tuple[np.ndarray, np.ndarray, float]]]:
+        """Run SCRFD on all ROIs in one Triton call.
+
+        Returns list of (bbox_xyxy, kps_flat10, score) per ROI, or None for
+        ROIs with no detected face.  Coordinates are in the original ROI space.
         """
-        # Add padding around the ROI (same as FaceDetector._add_padding)
-        pad_w, pad_h = 0, 0
-        if self.face_padding_percent > 0:
-            h, w = roi.shape[:2]
-            pad_h = int(h * self.face_padding_percent / 100)
-            pad_w = int(w * self.face_padding_percent / 100)
-            roi = cv2.copyMakeBorder(
-                roi, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_REPLICATE
+        blobs, det_scales, pad_ws, pad_hs = [], [], [], []
+        for roi in rois:
+            pad_w, pad_h = 0, 0
+            if self.face_padding_percent > 0:
+                h, w = roi.shape[:2]
+                pad_h = int(h * self.face_padding_percent / 100)
+                pad_w = int(w * self.face_padding_percent / 100)
+                roi = cv2.copyMakeBorder(
+                    roi, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_REPLICATE
+                )
+            blob, det_scale = self._preprocess_det(roi)
+            blobs.append(blob)
+            det_scales.append(det_scale)
+            pad_ws.append(pad_w)
+            pad_hs.append(pad_h)
+
+        batch = np.concatenate(blobs, axis=0)  # [B, 3, 640, 640] uint8
+
+        inp = InferInput("input.1", list(batch.shape), "UINT8")
+        inp.set_data_from_numpy(batch)
+        response = self._client.infer(
+            model_name="arcface_det",
+            inputs=[inp],
+            outputs=[InferRequestedOutput(n) for n in _DET_OUTPUT_NAMES],
+        )
+        net_outs = [response.as_numpy(n) for n in _DET_OUTPUT_NAMES]
+        # net_outs[i] shape: [B, N_anchors, C]
+
+        results = []
+        for b_idx in range(len(rois)):
+            per_img = [out[b_idx] for out in net_outs]  # each [N_anchors, C]
+            scores_all, bboxes_all, kpss_all = self._decode_scrfd(per_img)
+            face = self._pick_best_face(
+                scores_all, bboxes_all, kpss_all,
+                det_scales[b_idx], pad_ws[b_idx], pad_hs[b_idx],
             )
+            results.append(face)
+        return results
 
-        blob, det_scale = self._preprocess_det(roi)
+    def _get_embeddings_batch(
+        self, roi_kps_pairs: List[Tuple[np.ndarray, np.ndarray]]
+    ) -> List[Optional[np.ndarray]]:
+        """Align all faces and extract embeddings in one arcface_rec call.
 
-        try:
-            inp = InferInput("input.1", list(blob.shape), "FP32")
-            inp.set_data_from_numpy(blob)
-            response = self._client.infer(
-                model_name="arcface_det",
-                inputs=[inp],
-                outputs=[InferRequestedOutput(n) for n in _DET_OUTPUT_NAMES],
-            )
-            net_outs = [response.as_numpy(n) for n in _DET_OUTPUT_NAMES]
-        except Exception as e:
-            logger.debug(f"Triton arcface_det infer failed: {e}")
-            return None
+        Args:
+            roi_kps_pairs: list of (roi_bgr, kps_flat10) — original ROI (no padding)
+                           and the 10-element flat keypoints array in ROI coords.
+        Returns:
+            list of L2-normalised [512] embeddings (or None on failure).
+        """
+        crops = []
+        for roi, kps_flat in roi_kps_pairs:
+            aligned = _norm_crop(roi, kps_flat.reshape(5, 2))      # [112,112,3] uint8
+            crops.append(aligned.transpose(2, 0, 1))               # [3,112,112]
 
-        scores_all, bboxes_all, kpss_all = self._decode_scrfd(net_outs)
+        batch = np.ascontiguousarray(np.stack(crops, axis=0))      # [B,3,112,112] uint8
+
+        inp = InferInput("input.1", list(batch.shape), "UINT8")
+        inp.set_data_from_numpy(batch)
+        response = self._client.infer(
+            model_name="arcface_rec",
+            inputs=[inp],
+            outputs=[InferRequestedOutput("683")],
+        )
+        embs = response.as_numpy("683")  # [B, 512]
+
+        results = []
+        for emb in embs:
+            norm = np.linalg.norm(emb)
+            results.append(emb / norm if norm > 0 else emb)
+        return results
+
+    # ── SCRFD pre/postprocessing ──────────────────────────────────────────────
+
+    def _preprocess_det(
+        self, img: np.ndarray
+    ) -> Tuple[np.ndarray, float]:
+        """Preprocess one ROI for SCRFD. Returns (blob [1,3,640,640] uint8, det_scale).
+
+        Aspect-ratio-preserving resize → zero-pad → NCHW. The (x-127.5)/128
+        normalisation happens inside the Triton model graph.
+        """
+        h, w = img.shape[:2]
+        ih, iw = _SCRFD_INPUT_SIZE
+
+        im_ratio = float(h) / w
+        model_ratio = float(ih) / iw
+        if im_ratio > model_ratio:
+            new_h, new_w = ih, int(ih / im_ratio)
+        else:
+            new_w, new_h = iw, int(iw * im_ratio)
+        det_scale = float(new_h) / h
+
+        resized = cv2.resize(img, (new_w, new_h))
+        canvas = np.zeros((ih, iw, 3), dtype=np.uint8)
+        canvas[:new_h, :new_w] = resized
+
+        blob = canvas.transpose(2, 0, 1)[np.newaxis, :]  # [1,3,640,640] uint8
+        return np.ascontiguousarray(blob), det_scale
+
+    def _decode_scrfd(
+        self, net_outs: List[np.ndarray]
+    ) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+        """Decode 9 SCRFD FPN outputs for a single image → (scores, bboxes, kps).
+
+        net_outs ordering matches _DET_OUTPUT_NAMES:
+          [score_8, score_16, score_32, bbox_8, bbox_16, bbox_32, kps_8, kps_16, kps_32]
+        Each tensor has shape [N_anchors, C] (already sliced per-image by caller).
+        """
+        fmc = len(_SCRFD_STRIDES)  # 3
+        ih, iw = _SCRFD_INPUT_SIZE
+        scores_list, bboxes_list, kpss_list = [], [], []
+
+        for idx, stride in enumerate(_SCRFD_STRIDES):
+            scores = net_outs[idx]             # [n_anchors, 1]
+            bbox_preds = net_outs[idx + fmc]   # [n_anchors, 4]
+            kps_preds = net_outs[idx + fmc*2]  # [n_anchors, 10]
+
+            feat_h, feat_w = ih // stride, iw // stride
+            key = (feat_h, feat_w, stride)
+            if key not in self._center_cache:
+                centers = np.stack(
+                    np.mgrid[:feat_h, :feat_w][::-1], axis=-1
+                ).astype(np.float32) * stride
+                centers = centers.reshape(-1, 2)
+                centers = np.stack([centers] * _SCRFD_NUM_ANCHORS, axis=1).reshape(-1, 2)
+                self._center_cache[key] = centers
+            ac = self._center_cache[key]
+
+            bboxes = np.stack([
+                ac[:, 0] - bbox_preds[:, 0] * stride,
+                ac[:, 1] - bbox_preds[:, 1] * stride,
+                ac[:, 0] + bbox_preds[:, 2] * stride,
+                ac[:, 1] + bbox_preds[:, 3] * stride,
+            ], axis=-1)
+
+            kps_parts = []
+            for k in range(0, kps_preds.shape[1], 2):
+                kps_parts.append(ac[:, 0] + kps_preds[:, k] * stride)
+                kps_parts.append(ac[:, 1] + kps_preds[:, k + 1] * stride)
+            kpss = np.stack(kps_parts, axis=-1)
+
+            scores_list.append(scores[:, 0])
+            bboxes_list.append(bboxes)
+            kpss_list.append(kpss)
+
+        return scores_list, bboxes_list, kpss_list
+
+    def _pick_best_face(
+        self,
+        scores_all: List[np.ndarray],
+        bboxes_all: List[np.ndarray],
+        kpss_all: List[np.ndarray],
+        det_scale: float,
+        pad_w: int,
+        pad_h: int,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, float]]:
+        """NMS + pick highest-scoring face. Returns (bbox_xyxy, kps_flat10, score)
+        in original ROI coordinates, or None if no face passes threshold.
+        """
         if not scores_all:
             return None
 
@@ -257,92 +438,12 @@ class TritonInferenceClient:
         bbox = bboxes[best] / det_scale
         kps = kpss[best] / det_scale
 
-        # Remove the padding offset so coordinates are in the original ROI space
         if pad_w or pad_h:
             bbox -= [pad_w, pad_h, pad_w, pad_h]
-            kps[0::2] -= pad_w  # x components
-            kps[1::2] -= pad_h  # y components
+            kps[0::2] -= pad_w
+            kps[1::2] -= pad_h
 
-        return bbox, kps, scores[best]
-
-    def _preprocess_det(
-        self, img: np.ndarray
-    ) -> Tuple[np.ndarray, float]:
-        """Preprocess ROI for SCRFD det_10g. Returns (blob [1,3,640,640], det_scale).
-
-        Matches InsightFace's SCRFD.forward() preprocessing exactly:
-        aspect-ratio-preserving resize → zero-pad → (x-127.5)/128 → NCHW.
-        """
-        h, w = img.shape[:2]
-        ih, iw = _SCRFD_INPUT_SIZE
-
-        im_ratio = float(h) / w
-        model_ratio = float(ih) / iw
-        if im_ratio > model_ratio:
-            new_h, new_w = ih, int(ih / im_ratio)
-        else:
-            new_w, new_h = iw, int(iw * im_ratio)
-        det_scale = float(new_h) / h
-
-        resized = cv2.resize(img, (new_w, new_h))
-        canvas = np.zeros((ih, iw, 3), dtype=np.uint8)
-        canvas[:new_h, :new_w] = resized
-
-        blob = (canvas.astype(np.float32) - 127.5) / 128.0
-        blob = blob.transpose(2, 0, 1)[np.newaxis, :]  # NHWC→NCHW, add batch
-        return blob, det_scale
-
-    def _decode_scrfd(
-        self, net_outs: List[np.ndarray]
-    ) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
-        """Decode 9 SCRFD FPN outputs → (scores, bboxes, keypoints) per FPN level.
-
-        Output tensor ordering matches _DET_OUTPUT_NAMES:
-          [score_s8, score_s16, score_s32, bbox_s8, bbox_s16, bbox_s32,
-           kps_s8, kps_s16, kps_s32]
-        """
-        fmc = len(_SCRFD_STRIDES)  # 3
-        ih, iw = _SCRFD_INPUT_SIZE
-        scores_list, bboxes_list, kpss_list = [], [], []
-
-        for idx, stride in enumerate(_SCRFD_STRIDES):
-            scores = net_outs[idx]             # [n_anchors, 1]
-            bbox_preds = net_outs[idx + fmc]   # [n_anchors, 4]
-            kps_preds = net_outs[idx + fmc*2]  # [n_anchors, 10]
-
-            feat_h, feat_w = ih // stride, iw // stride
-            key = (feat_h, feat_w, stride)
-            if key not in self._center_cache:
-                # mgrid[::-1] → (x_grid, y_grid); each location gets 2 anchors
-                centers = np.stack(
-                    np.mgrid[:feat_h, :feat_w][::-1], axis=-1
-                ).astype(np.float32) * stride
-                centers = centers.reshape(-1, 2)
-                centers = np.stack([centers] * _SCRFD_NUM_ANCHORS, axis=1).reshape(-1, 2)
-                self._center_cache[key] = centers
-            ac = self._center_cache[key]
-
-            # SCRFD predictions are stride-normalized — multiply by stride to get pixels.
-            # distance2bbox: (l,t,r,b) distances from anchor center
-            bboxes = np.stack([
-                ac[:, 0] - bbox_preds[:, 0] * stride,
-                ac[:, 1] - bbox_preds[:, 1] * stride,
-                ac[:, 0] + bbox_preds[:, 2] * stride,
-                ac[:, 1] + bbox_preds[:, 3] * stride,
-            ], axis=-1)
-
-            # distance2kps: (dx,dy) offsets for each of 5 keypoints → flat [n, 10]
-            kps_parts = []
-            for k in range(0, kps_preds.shape[1], 2):
-                kps_parts.append(ac[:, 0] + kps_preds[:, k] * stride)
-                kps_parts.append(ac[:, 1] + kps_preds[:, k + 1] * stride)
-            kpss = np.stack(kps_parts, axis=-1)
-
-            scores_list.append(scores[:, 0])
-            bboxes_list.append(bboxes)
-            kpss_list.append(kpss)
-
-        return scores_list, bboxes_list, kpss_list
+        return bbox, kps, float(scores[best])
 
     @staticmethod
     def _nms(bboxes: np.ndarray, scores: np.ndarray, threshold: float) -> np.ndarray:
@@ -362,30 +463,3 @@ class TritonInferenceClient:
             iou = inter / (areas[i] + areas[order[1:]] - inter)
             order = order[1:][iou <= threshold]
         return np.array(keep, dtype=np.int32)
-
-    def _get_embedding(
-        self, roi: np.ndarray, kps_flat: np.ndarray
-    ) -> Optional[np.ndarray]:
-        """Align face to 112×112 via norm_crop, then get ArcFace embedding from Triton."""
-        # kps_flat is [10] in (x1,y1,x2,y2,...) order — reshape to (5,2) for norm_crop
-        aligned = _norm_crop(roi, kps_flat.reshape(5, 2))
-
-        # InsightFace ArcFace preprocessing: BGR, (x-127.5)/127.5 → [-1,1], NHWC→NCHW
-        blob = (aligned.astype(np.float32) - 127.5) / 127.5
-        blob = blob.transpose(2, 0, 1)[np.newaxis, :]  # [1,3,112,112]
-
-        try:
-            inp = InferInput("input.1", list(blob.shape), "FP32")
-            inp.set_data_from_numpy(blob)
-            response = self._client.infer(
-                model_name="arcface_rec",
-                inputs=[inp],
-                outputs=[InferRequestedOutput("683")],
-            )
-            emb = response.as_numpy("683")[0]  # [512]
-        except Exception as e:
-            logger.debug(f"Triton arcface_rec infer failed: {e}")
-            return None
-
-        norm = np.linalg.norm(emb)
-        return emb / norm if norm > 0 else emb

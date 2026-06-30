@@ -71,6 +71,8 @@ class CameraWorker:
         # Per-camera counters
         self._frame_num: int = 0
         self._detection_frame_num: int = 0
+        # Last stream_handler.frame_seq seen — used to skip duplicate reads
+        self._last_stream_seq: int = -1
 
         # FPS tracking for annotation overlay
         self._fps: float = 0.0
@@ -124,6 +126,15 @@ class CameraWorker:
         if not ret or frame is None:
             time.sleep(0.005)
             return
+
+        # For live streams: skip if the background thread hasn't written a new
+        # frame yet (our loop is faster than the camera source fps).
+        if not self.stream_handler.is_video:
+            seq = self.stream_handler.frame_seq
+            if seq == self._last_stream_seq:
+                time.sleep(0.001)  # yield CPU; new frame arrives every ~33ms at 30fps
+                return
+            self._last_stream_seq = seq
 
         self._frame_num += 1
 

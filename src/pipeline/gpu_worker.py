@@ -264,6 +264,8 @@ class GPUInferenceWorker:
         duration_ms = (time.time() - t0) * 1000
         if self._metrics is not None and results:
             self._metrics.record_arcface_ms(duration_ms)
+        if person_rois and duration_ms > 50:
+            logger.info(f"ArcFace batch: {len(person_rois)} ROI(s) in {duration_ms:.0f}ms")
         return results
 
     def _run_arcface_local(self, person_rois: List[np.ndarray]) -> List[Dict]:

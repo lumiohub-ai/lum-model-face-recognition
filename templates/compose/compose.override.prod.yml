@@ -5,9 +5,11 @@ services:
   person-tracking:
     restart: unless-stopped
     environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
       SO_LOG_LEVEL: INFO
 
   celery-worker:
     restart: unless-stopped
     environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
       SO_LOG_LEVEL: INFO

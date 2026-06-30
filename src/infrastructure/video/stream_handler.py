@@ -33,13 +33,17 @@ class StreamHandler:
 
         # Configure RTSP options for better compatibility and smooth playback
         if isinstance(src, str) and src.startswith('rtsp://'):
-            # Set FFmpeg options BEFORE creating VideoCapture
+            # Set FFmpeg options BEFORE creating VideoCapture.
+            # stimeout: socket read timeout in microseconds — makes OpenCV detect
+            # a dead stream in ~5s instead of the default 30s, so reconnection
+            # starts quickly after a network hiccup or camera reboot.
             os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
                 'rtsp_transport;tcp|'        # Use TCP for reliability
-                'buffer_size;1024000|'       # 1MB buffer for network stability
+                'buffer_size;4096000|'       # 4MB buffer (2560×1440 frames are large)
                 'max_delay;500000|'          # Max 0.5s delay
                 'fflags;nobuffer|'           # Minimize buffering for real-time
-                'flags;low_delay'            # Low latency mode
+                'flags;low_delay|'           # Low latency mode
+                'stimeout;5000000'           # Socket timeout: 5s (default is 30s)
             )
             self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
             # Set buffer size: 3 frames is optimal for real-time playback
@@ -51,6 +55,10 @@ class StreamHandler:
         # NO QUEUE - use latest frame only to prevent jitter and lag
         self.latest_frame = None
         self.latest_ret = False
+        # Monotonically increasing counter — incremented each time the background
+        # thread writes a new frame.  CameraWorker compares against its last seen
+        # value to skip duplicate reads (loop faster than camera source fps).
+        self._frame_seq: int = 0
         self.reconnect_delay = 1  # Initial delay between reconnection attempts
         self.max_delay = 30  # Maximum delay between reconnection attempts
         self.last_gc_time = time.time()
@@ -113,10 +121,11 @@ class StreamHandler:
             if isinstance(self.src, str) and self.src.startswith('rtsp://'):
                 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
                     'rtsp_transport;tcp|'
-                    'buffer_size;1024000|'
+                    'buffer_size;4096000|'
                     'max_delay;500000|'
                     'fflags;nobuffer|'
-                    'flags;low_delay'
+                    'flags;low_delay|'
+                    'stimeout;5000000'
                 )
                 self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
@@ -181,7 +190,7 @@ class StreamHandler:
             ret, frame = self.cap.read()
             if not ret:
                 consecutive_failures += 1
-                if consecutive_failures >= 3:
+                if consecutive_failures >= 2:
                     self.logger.warning(f"Stream timeout triggered. Attempting to reconnect...")
                     if self.stopped or not self._reconnect():
                         break
@@ -197,6 +206,7 @@ class StreamHandler:
             with self.lock:
                 self.latest_ret = ret
                 self.latest_frame = frame
+                self._frame_seq += 1
 
             # Periodically run garbage collection
             current_time = time.time()
@@ -230,6 +240,17 @@ class StreamHandler:
                 self.ret = self.latest_ret
                 self.frame = self.latest_frame
             return self.ret, self.frame
+
+    @property
+    def frame_seq(self) -> int:
+        """Sequence number of the most recently captured frame.
+
+        Incremented by the background thread each time a new frame arrives.
+        CameraWorker uses this to detect duplicate reads (same frame returned
+        twice because the loop is faster than the camera source).
+        """
+        with self.lock:
+            return self._frame_seq
 
     def stop(self) -> None:
         """Stop the frame reading thread and release resources."""
