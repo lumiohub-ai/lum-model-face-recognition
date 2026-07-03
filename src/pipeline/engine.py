@@ -730,7 +730,12 @@ class SmartOfficeEngine:
             from messaging.publisher import MDAPublisher
 
             publisher = MDAPublisher(self.client_slug)
-            for idx, worker in enumerate(self.camera_workers):
+            max_len = min(
+                len(self.camera_workers),
+                len(self.camera_configs),
+                len(self.stream_manager.streams),
+            )
+            for idx in range(max_len):
                 config = self.camera_configs[idx]
                 camera_id = config.get("camera_id")
                 if camera_id is None:
