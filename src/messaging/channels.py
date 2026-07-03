@@ -27,6 +27,7 @@ EVENT_CHANNELS = {
     'FRAME_CAPTURE': 'events:frame_captured',
     'CALIBRATION': 'events:calibration',
     'METRICS': 'events:metrics',
+    'CAMERA': 'events:camera',
 }
 
 # Event types
@@ -38,6 +39,7 @@ EVENT_TYPES = {
     'EMBEDDING_CREATED': 'EmbeddingCreated',
     'EMBEDDING_FAILED': 'EmbeddingFailed',
     'FRAME_CAPTURED': 'FrameCaptured',
+    'FRAME_CAPTURE_FAILED': 'FrameCaptureFailed',
     'CALIBRATION_COMPLETE': 'CalibrationComplete',
     'CALIBRATION_FAILED': 'CalibrationFailed',
     'TEST_CALIBRATION_COMPLETE': 'TestCalibrationComplete',
@@ -45,6 +47,7 @@ EVENT_TYPES = {
     'HOMOGRAPHY_FAILED': 'HomographyFailed',
     'SYSTEM_METRICS': 'SystemMetrics',
     'SYSTEM_ALERT': 'SystemAlert',
+    'CAMERA_HEARTBEAT': 'CameraHeartbeat',
 }
 
 
