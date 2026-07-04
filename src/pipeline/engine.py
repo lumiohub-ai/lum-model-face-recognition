@@ -265,10 +265,12 @@ class SmartOfficeEngine:
 
         pipeline_cfg = self.config.get("pipeline", {})
         metrics_interval: float = float(pipeline_cfg.get("metrics_interval", 30))
+        heartbeat_interval: float = float(pipeline_cfg.get("heartbeat_interval", 15))
 
         last_validation_time = time.time()
         validation_interval = 30.0
         last_metrics_time = time.time()
+        last_heartbeat_time = time.time()
 
         try:
             while self._running:
@@ -286,6 +288,11 @@ class SmartOfficeEngine:
                 if self._metrics_enabled and current_time - last_metrics_time >= metrics_interval:
                     self._report_metrics()
                     last_metrics_time = current_time
+
+                # Periodic camera heartbeat (stream health → backend)
+                if current_time - last_heartbeat_time >= heartbeat_interval:
+                    self._publish_camera_heartbeats()
+                    last_heartbeat_time = current_time
 
         except Exception as e:
             logger.exception(f"SmartOfficeEngine error: {e}")
@@ -395,10 +402,25 @@ class SmartOfficeEngine:
 
     def _do_capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
         """Background: grab latest frame → upload to GCS → save to DB → publish event."""
+        from messaging.publisher import MDAPublisher
+
+        publisher = MDAPublisher(self.client_slug)
+        max_frame_age_sec = 5.0
+
         try:
-            frame = self.stream_manager.get_frame(camera_id)
+            frame = self.stream_manager.get_fresh_frame(
+                camera_id, max_age_sec=max_frame_age_sec
+            )
             if frame is None:
-                logger.warning(f"capture_frame: no frame for camera {camera_id}")
+                error = (
+                    f"No live frame within {max_frame_age_sec:.0f}s for camera {camera_id}"
+                )
+                logger.warning(f"capture_frame: {error}")
+                publisher.publish_frame_capture_failed(
+                    command_id=command_id,
+                    camera_id=camera_id,
+                    error=error,
+                )
                 return
 
             h, w = frame.shape[:2]
@@ -421,8 +443,7 @@ class SmartOfficeEngine:
             )
             logger.info(f"Calibration frame saved to DB: id={record_id}, camera={camera_id}, frame_index={frame_index}")
 
-            from messaging.publisher import MDAPublisher
-            MDAPublisher(self.client_slug).publish_frame_captured(
+            publisher.publish_frame_captured(
                 command_id=command_id,
                 camera_id=camera_id,
                 image_url=image_url,
@@ -432,6 +453,11 @@ class SmartOfficeEngine:
 
         except Exception as e:
             logger.exception(f"capture_frame failed for camera {camera_id}: {e}")
+            publisher.publish_frame_capture_failed(
+                command_id=command_id,
+                camera_id=camera_id,
+                error=str(e),
+            )
 
     def calibrate_camera(self, camera_id: int, command_id: str) -> None:
         """Run Charuco calibration on stored frames for a camera.
@@ -698,6 +724,41 @@ class SmartOfficeEngine:
             )
         except Exception as e:
             logger.debug(f"Metrics publish failed: {e}")
+
+    def _publish_camera_heartbeats(self) -> None:
+        """Publish per-camera stream health to Backend via MDA."""
+        if not self.camera_workers:
+            return
+
+        try:
+            from messaging.publisher import MDAPublisher
+
+            publisher = MDAPublisher(self.client_slug)
+            max_len = min(
+                len(self.camera_workers),
+                len(self.camera_configs),
+                len(self.stream_manager.streams),
+            )
+            for idx in range(max_len):
+                config = self.camera_configs[idx]
+                camera_id = config.get("camera_id")
+                if camera_id is None:
+                    continue
+
+                stream = self.stream_manager.streams[idx]
+                health = stream.get_health()
+                fps = self.metrics.get_fps(idx) if self.metrics else 0.0
+
+                publisher.publish_camera_heartbeat(
+                    camera_id=camera_id,
+                    camera_name=config.get("camera_name"),
+                    state=health["state"],
+                    last_frame_at=health.get("last_frame_at"),
+                    fps=round(fps, 2),
+                    last_error=health.get("last_error"),
+                )
+        except Exception as e:
+            logger.debug(f"Camera heartbeat publish failed: {e}")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
