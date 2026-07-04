@@ -170,7 +170,7 @@ class AsyncLogger:
         else:
             if "unrecognized" in application and face_image is not None:
                 if isinstance(face_image, np.ndarray) and face_image.size > 0:
-                    self._entry_logger.send_unrecognized_face(
+                    sent = self._entry_logger.send_unrecognized_face(
                         face=face_image,
                         status=status,
                         camera_id=camera_id,
@@ -181,9 +181,10 @@ class AsyncLogger:
                         face_det_score=entry.get("face_det_score", 0.0),
                         track_id=entry.get("track_id"),
                     )
-                    logger.info(
-                        f"UNRECOGNIZED | Sent face from camera {camera_id} ({status})"
-                    )
+                    if sent:
+                        logger.info(
+                            f"UNRECOGNIZED | Sent face from camera {camera_id} ({status})"
+                        )
 
     def _process_gcs_upload(self, data: dict) -> None:
         image = data.get("image")
