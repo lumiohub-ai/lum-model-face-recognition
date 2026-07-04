@@ -6,7 +6,8 @@ import threading
 import time
 import logging
 import gc
-from typing import Any, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple
 
 
 class StreamHandler:
@@ -55,19 +56,35 @@ class StreamHandler:
         self.max_delay = 30  # Maximum delay between reconnection attempts
         self.last_gc_time = time.time()
         self.gc_interval = 60  # Run garbage collection every 60 seconds
+        self.connected = False
+        self.ret = False
+        self.frame = None
+        self.thread = None  # Store reference to thread
+        self._last_frame_at: Optional[float] = None
+        self._reconnecting = False
 
         ret, frame = self.cap.read()
         if not ret:
-            self.logger.warning(f"Unable to read from source: {src}, will try to reconnect")
-            self._reconnect()
-            ret, frame = self.cap.read()
-            if not ret:
-                raise ValueError(f"Unable to read from source after initial reconnection attempts: {src}")
+            if self.is_video:
+                if self.cap is not None:
+                    self.cap.release()
+                    self.cap = None
+                raise ValueError(f"Unable to read from source: {src}")
 
-        self.ret = ret
-        self.frame = frame
+            self.logger.warning(
+                f"Unable to read from source: {src} — "
+                "will reconnect in background without blocking startup"
+            )
+            if self.cap is not None:
+                self.cap.release()
+            self.cap = None
+        else:
+            self.connected = True
+            self.ret = ret
+            self.frame = frame
+            self._mark_frame_received()
 
-        if self.is_video:
+        if self.is_video and self.connected:
             self.last_frame = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) + 1)
             self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
         else:
@@ -75,7 +92,68 @@ class StreamHandler:
             self.last_frame = float('inf')
             self.fps = 30  # Default assumption
 
-        self.thread = None  # Store reference to thread
+    def _mark_frame_received(self) -> None:
+        """Record a successful frame read for health reporting."""
+        self._last_frame_at = time.time()
+        self._reconnecting = False
+
+    def _iso_last_frame_at(self) -> Optional[str]:
+        if self._last_frame_at is None:
+            return None
+        return (
+            datetime.fromtimestamp(self._last_frame_at, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    def frame_age_sec(self) -> Optional[float]:
+        """Seconds since the last successful frame read, or None if never received."""
+        if self._last_frame_at is None:
+            return None
+        return time.time() - self._last_frame_at
+
+    def get_health(self, stale_sec: float = 15.0) -> Dict[str, Optional[str]]:
+        """Return stream health for MDA heartbeat publishing."""
+        now = time.time()
+        last_frame_at = self._iso_last_frame_at()
+        has_recent_frame = (
+            self._last_frame_at is not None
+            and (now - self._last_frame_at) < stale_sec
+        )
+
+        if self.stopped:
+            return {
+                "state": "offline",
+                "last_frame_at": last_frame_at,
+                "last_error": "stream_stopped",
+            }
+        if has_recent_frame:
+            return {
+                "state": "streaming",
+                "last_frame_at": last_frame_at,
+                "last_error": None,
+            }
+        reconnect_grace_sec = 45.0
+        if self._reconnecting or (not self.connected and not self.is_video):
+            if (
+                self._last_frame_at is None
+                or (now - self._last_frame_at) > reconnect_grace_sec
+            ):
+                return {
+                    "state": "offline",
+                    "last_frame_at": last_frame_at,
+                    "last_error": "no_recent_frames",
+                }
+            return {
+                "state": "connecting",
+                "last_frame_at": last_frame_at,
+                "last_error": "reconnecting",
+            }
+        return {
+            "state": "offline",
+            "last_frame_at": last_frame_at,
+            "last_error": "no_recent_frames",
+        }
 
     def _reconnect(self) -> bool:
         """Attempt to reconnect to the video source until successful or stopped.
@@ -83,9 +161,12 @@ class StreamHandler:
         Returns:
             True if reconnection was successful, False if shutdown was requested
         """
+        self.connected = False
+        self._reconnecting = True
         self.logger.warning(f"Reconnecting to stream: {self.src}")
         if self.cap is not None:
             self.cap.release()
+            self.cap = None
 
         current_delay = self.reconnect_delay
         attempt_count = 1
@@ -110,13 +191,19 @@ class StreamHandler:
             else:
                 self.cap = cv2.VideoCapture(self.src)
 
-            ret, _ = self.cap.read()
+            ret, frame = self.cap.read()
             if ret:
+                self.connected = True
+                self._mark_frame_received()
+                with self.lock:
+                    self.latest_ret = ret
+                    self.latest_frame = frame
                 self.logger.warning(f"Successfully reconnected to stream: {self.src}")
                 return True
 
             # Release failed capture before next attempt
             self.cap.release()
+            self.cap = None
 
             attempt_count += 1
             current_delay = min(current_delay * 1.5, self.max_delay)
@@ -140,7 +227,7 @@ class StreamHandler:
         Returns:
             Self reference for method chaining
         """
-        if not self.is_video:
+        if not self.is_video and self.thread is None:
             self.thread = threading.Thread(target=self.update, daemon=True)
             self.thread.start()
         return self
@@ -157,6 +244,12 @@ class StreamHandler:
                 if self.stopped:
                     break
 
+            if self.cap is None or not self.connected:
+                if self.stopped or not self._reconnect():
+                    break
+                consecutive_failures = 0
+                continue
+
             ret, frame = self.cap.read()
             if not ret:
                 consecutive_failures += 1
@@ -170,6 +263,7 @@ class StreamHandler:
 
             # Reset failure counter on successful read
             consecutive_failures = 0
+            self._mark_frame_received()
 
             # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
             # This prevents jitter by ensuring we never show old frames
@@ -190,6 +284,9 @@ class StreamHandler:
             Tuple containing a boolean indicating success and the frame (if successful)
         """
         if self.is_video:
+            if self.cap is None or not self.connected:
+                return False, None
+
             ret, frame = self.cap.read()
             if not ret and not self.stopped:
                 # For video files that reached the end, we can just stop the stream
@@ -197,6 +294,8 @@ class StreamHandler:
                 self.stop()
                 return False, None
 
+            if ret:
+                self._mark_frame_received()
             return ret, frame
 
         # LATEST FRAME ONLY: Return the most recent frame from background thread
@@ -214,8 +313,17 @@ class StreamHandler:
                 return
             self.stopped = True
 
-        if self.thread is not None:
+        if self.thread is not None and self.thread.is_alive():
             self.thread.join(timeout=5)
             if self.thread.is_alive():
-                self.logger.warning(f"Stream thread did not exit cleanly within 5s: {self.src}")
-        self.cap.release()
+                self.logger.warning(
+                    f"Stream thread did not exit cleanly within 5s: {self.src} — "
+                    "skipping capture release to avoid race with background thread"
+                )
+                return
+
+        with self.lock:
+            if self.cap is not None:
+                self.cap.release()
+                self.cap = None
+            self.connected = False

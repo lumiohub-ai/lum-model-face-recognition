@@ -56,6 +56,22 @@ class StreamManager:
             )
             self.streams.append(stream)
             self.frame_nums.append(0)
+            if stream.connected:
+                logger.info(
+                    f"Stream ready: {config.get('camera_name', 'Unknown')} "
+                    f"(camera_id={config.get('camera_id')})"
+                )
+            else:
+                logger.warning(
+                    f"Stream unavailable at startup: {config.get('camera_name', 'Unknown')} "
+                    f"(camera_id={config.get('camera_id')}) — reconnecting in background"
+                )
+
+        connected = sum(1 for s in self.streams if s.connected)
+        logger.info(
+            f"Stream init complete: {connected}/{len(self.streams)} connected, "
+            f"{len(self.streams) - connected} reconnecting"
+        )
 
         self._initialized = True
         return self.streams
@@ -230,7 +246,25 @@ class StreamManager:
         """
         for i, config in enumerate(self.camera_configs):
             if config.get('camera_id') == camera_id and i < len(self.streams):
-                _, frame = self.streams[i].read()
+                ret, frame = self.streams[i].read()
+                if not ret or frame is None:
+                    return None
+                return frame
+        return None
+
+    def get_fresh_frame(
+        self, camera_id: int, max_age_sec: float = 5.0
+    ) -> Optional[np.ndarray]:
+        """Return a recent frame only if it was received within max_age_sec."""
+        for i, config in enumerate(self.camera_configs):
+            if config.get('camera_id') == camera_id and i < len(self.streams):
+                stream = self.streams[i]
+                ret, frame = stream.read()
+                if not ret or frame is None:
+                    return None
+                age = stream.frame_age_sec()
+                if age is None or age > max_age_sec:
+                    return None
                 return frame
         return None
 
