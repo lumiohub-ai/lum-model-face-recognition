@@ -70,7 +70,7 @@ cards. **Frontality cleanly separates** non-faces (≈0.0) from real faces (≈1
 | Stage / Attribute | Original Proposal | Implemented |
 |---|---|---|
 | **`_get_best_person_image`** | Rewritten (soft-score, tuple return, fallback removed) | **Untouched** — protects the recognized/fire-once attendance path |
-| **New logic location** | Inside the shared method | **Separate sibling methods** (`_best_person_image_quality`, `_best_face_frontality`) |
+| **New logic location** | Inside the shared method | **Separate sibling methods** (`_best_person_image_quality`, `_best_face_signals`) |
 | **Primary signal** | Blended `quality = w·size + w·sharp + w·frontality + w·det` | **Frontality alone** gates; quality is logged for context only |
 | **Scoring inputs** | size + sharpness + frontality + det_score (one score) | size+sharpness (observability) and frontality (gate) kept **separate** |
 | **Routing** | Review vs Debug buckets in the dashboard (read-time threshold) | **Hard gate at write-time**; dropped cases logged, not persisted |
@@ -112,7 +112,7 @@ frontality = max(0, 1 − 2·yaw)                  # [0,1], 1 = frontal
 | Step | Description | Status |
 |---|---|---|
 | **0 — Quality logging** | `_best_person_image_quality` (size+sharpness); log-only, no behavior change | ✅ Done |
-| **0b — Frontality logging** | Store landmarks+det_score in crop history; `_frontality_from_landmarks` / `_best_face_frontality`; log alongside quality + `image_url` | ✅ Done |
+| **0b — Frontality logging** | Store landmarks+det_score in crop history; `_frontality_from_landmarks` / `_best_face_signals`; log alongside quality + `image_url` | ✅ Done |
 | **Gate — Frontality filter** | Drop cards below `unrecognized_frontality_min` (config 0.6) at write-time; dropped cases logged | ✅ Done |
 | **1 — Persistence** | Persist `frontality`/`quality` to the `unrecognized_faces` row | ⏳ Deferred |
 | **2 — Dashboard bucketing** | True Review vs Debug split in the dashboard (needs backend + DB column) | ⏳ Deferred |
@@ -131,7 +131,7 @@ frontality = max(0, 1 − 2·yaw)                  # [0,1], 1 = frontal
 | Recognized fire-once edge (calls `_get_best_person_image`) | `src/pipeline/camera_engine.py` |
 | `_get_best_person_image` (unchanged; card/proof image) | `src/pipeline/camera_engine.py` |
 | `_best_person_image_quality` (size+sharpness, soft) | `src/pipeline/camera_engine.py` |
-| `_frontality_from_landmarks` / `_best_face_frontality` | `src/pipeline/camera_engine.py` |
+| `_frontality_from_landmarks` / `_best_face_signals` | `src/pipeline/camera_engine.py` |
 | Crop history stores face/bbox/frame/landmarks/det_score | `src/pipeline/camera_engine.py` |
 | Forward quality+frontality on the event | `src/infrastructure/async_logger.py` |
 | Frontality gate + `UNRECOGNIZED_QUALITY` / `UNRECOGNIZED_DROPPED` logs | `src/infrastructure/entry_logger.py` |

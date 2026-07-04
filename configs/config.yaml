@@ -11,7 +11,7 @@ match_threshold: 0.3  # Face similarity threshold for matching
 person_detection_threshold: 0.45  # Person detection confidence threshold (0.0-1.0)
 person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
 unrecognized_frontality_min: 0.6  # Min face frontality [0,1] for an unrecognized case to reach the dashboard (below = logged but dropped)
-unrecognized_debug_landmarks: true  # DEBUG: draw face landmarks + yaw/pitch/det on unrecognized card images
+unrecognized_debug_landmarks: false  # DEBUG: draw face landmarks + yaw/pitch/det on unrecognized card images
 
 # Feature flags
 enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)
