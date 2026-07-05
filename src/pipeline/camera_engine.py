@@ -834,17 +834,18 @@ class CameraEngine:
             return None
 
     def _best_face_signals(self, track_id: int) -> Tuple[float, float, float, Optional[dict]]:
-        """Signals for the most-frontal (best-yaw) frame of a track.
+        """Signals for the clearest (best yaw×pitch) frame of a track.
 
         Returns (yaw, det_score, pitch, crop_data):
-          - yaw    : frontality [0,1] — drives the gate (unchanged behaviour)
+          - yaw    : frontality [0,1] — not sideways
           - det    : detector confidence FOR THAT FRAME (exposes false positives)
-          - pitch  : up/down proxy [0,1] — logged for tuning, not yet gated
+          - pitch  : up/down proxy [0,1] — not looking down
           - crop_data: that frame's stored {face,bbox,frame,landmarks,...} for
                        landmark visualisation
-        Returns (0.0, 0.0, 0.0, None) if no usable landmarks. Selects no image.
+        Returns (0.0, 0.0, 0.0, None) if no usable landmarks.
         """
         crops = self.track_manager.track_crop_history.get(track_id, {})
+        best_score = 0.0
         best_yaw = 0.0
         best_det = 0.0
         best_pitch = 0.0
@@ -854,11 +855,16 @@ class CameraEngine:
                 continue
             kps = crop_data.get("landmarks")
             yaw = self._frontality_from_landmarks(kps)
-            if yaw is None or yaw <= best_yaw:
+            if yaw is None:
                 continue
+            pitch = self._pitch_from_landmarks(kps) or 0.0
+            score = yaw * pitch
+            if score <= best_score:
+                continue
+            best_score = score
             best_yaw = yaw
+            best_pitch = pitch
             best_det = float(crop_data.get("det_score", 0.0) or 0.0)
-            best_pitch = self._pitch_from_landmarks(kps) or 0.0
             best_crop = crop_data
         return best_yaw, best_det, best_pitch, best_crop
 
@@ -867,8 +873,7 @@ class CameraEngine:
     ) -> Optional[np.ndarray]:
         """Debug image: the person ROI with the 5 face landmarks + scores drawn.
 
-        Landmarks are stored in person-ROI space, so we rebuild that exact ROI
-        (crop_person_roi) and draw the points directly — no coordinate mapping.
+        Landmarks are in full-frame coords; subtract the ROI origin before drawing.
         Returns None if the frame/bbox is unavailable.
         """
         frame = crop_data.get("frame")
@@ -876,18 +881,19 @@ class CameraEngine:
         if frame is None or bbox is None:
             return None
         try:
-            roi, _off = crop_person_roi(frame, np.asarray(bbox, dtype=float), expand=0.1)
+            roi, roi_off = crop_person_roi(frame, np.asarray(bbox, dtype=float), expand=0.1)
         except Exception:
             return None
         if roi is None or roi.size == 0:
             return None
         img = roi.copy()
+        ox, oy = roi_off
         kps = crop_data.get("landmarks")
         names = ["LE", "RE", "N", "LM", "RM"]
         if kps:
             for i, p in enumerate(kps):
                 try:
-                    x, y = int(p[0]), int(p[1])
+                    x, y = int(p[0]) - ox, int(p[1]) - oy
                 except (TypeError, IndexError, ValueError):
                     continue
                 cv2.circle(img, (x, y), 3, (0, 255, 0), -1)
