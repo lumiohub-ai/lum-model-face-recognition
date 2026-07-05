@@ -10,7 +10,11 @@ output_dir: "volumes/storage/person-tracking"  # Directory for outputs
 match_threshold: 0.3  # Face similarity threshold for matching
 person_detection_threshold: 0.45  # Person detection confidence threshold (0.0-1.0)
 person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
-unrecognized_frontality_min: 0.6  # Min face frontality [0,1] for an unrecognized case to reach the dashboard (below = logged but dropped)
+# Unrecognized cases only reach the dashboard when a clear, full, frontal face
+# was seen. A case must pass ALL three (else logged as UNRECOGNIZED_DROPPED):
+unrecognized_frontality_min: 0.6  # min yaw frontality [0,1] (frontal, not profile)
+unrecognized_pitch_min: 0.4       # min pitch [0,1] (level, not looking down)
+unrecognized_det_min: 0.5         # min face-detector confidence (real face, not false positive)
 unrecognized_debug_landmarks: false  # DEBUG: draw face landmarks + yaw/pitch/det on unrecognized card images
 
 # Feature flags

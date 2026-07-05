@@ -203,6 +203,9 @@ class SmartOfficeEngine:
         args.unrecognized_frontality_min = self.config.get(
             "unrecognized_frontality_min", 0.6
         )
+        args.unrecognized_pitch_min = self.config.get(
+            "unrecognized_pitch_min", 0.4
+        )
         return EntryLogger(args=args)
 
     def _init_camera_workers(self) -> List[CameraWorker]:

@@ -23,6 +23,8 @@ class EntryLogger:
         self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120)
         # Min face frontality [0,1] for an unrecognized case to reach the dashboard
         self.unrecognized_frontality_min = getattr(args, 'unrecognized_frontality_min', 0.6)
+        # Min pitch [0,1] (1.0 = level, 0.0 = looking straight down)
+        self.unrecognized_pitch_min = getattr(args, 'unrecognized_pitch_min', 0.4)
 
         # Track last seen location (camera) for each person
         self.person_last_camera: Dict[str, str] = {}
@@ -220,12 +222,21 @@ class EntryLogger:
         # det_score is logged (not yet gated) to expose false-positive face
         # detections that score frontal but are not real faces.
         frontality_min = self.unrecognized_frontality_min
+        pitch_min = self.unrecognized_pitch_min
         if face_frontality < frontality_min:
             logger.info(
                 f"UNRECOGNIZED_DROPPED | camera={camera_id} track={track_id} "
                 f"quality={face_quality:.3f} frontality={face_frontality:.3f} "
                 f"pitch={face_pitch:.3f} det_score={face_det_score:.3f} "
                 f"(< {frontality_min} frontality threshold)"
+            )
+            return False
+        if face_pitch < pitch_min:
+            logger.info(
+                f"UNRECOGNIZED_DROPPED | camera={camera_id} track={track_id} "
+                f"quality={face_quality:.3f} frontality={face_frontality:.3f} "
+                f"pitch={face_pitch:.3f} det_score={face_det_score:.3f} "
+                f"(< {pitch_min} pitch threshold)"
             )
             return False
 
