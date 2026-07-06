@@ -475,4 +475,5 @@ class MetricsDashboardServer:
             self._store.stop()
         if self._server:
             self._server.shutdown()
+            self._server.server_close()
         logger.info("Metrics dashboard stopped")

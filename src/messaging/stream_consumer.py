@@ -132,6 +132,8 @@ class StreamConsumer:
         self.redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
         self.consumer_name = consumer_name or settings.hostname
         self.client_slug = client_slug
+        # Per-org consumer group so each service receives its own copy of every message
+        self.consumer_group = f'ai-service-group:{client_slug}' if client_slug else CONSUMER_GROUP
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._camera_handler: Optional[Callable] = None
@@ -139,7 +141,7 @@ class StreamConsumer:
         # Initialize Dead-Letter Queue
         self.dlq = MessageDLQ(self.redis)
 
-        logger.debug(f"Initialized: {self.consumer_name}")
+        logger.debug(f"Initialized: {self.consumer_name} group={self.consumer_group}")
 
     def set_camera_handler(self, handler: Callable[[str, str, Dict], None]) -> None:
         """
@@ -154,7 +156,7 @@ class StreamConsumer:
         """Create consumer groups if they don't exist."""
         for name, stream in COMMAND_STREAMS.items():
             try:
-                self.redis.xgroup_create(stream, CONSUMER_GROUP, id='0', mkstream=True)
+                self.redis.xgroup_create(stream, self.consumer_group, id='0', mkstream=True)
                 logger.info(f"Created consumer group for {stream}")
             except redis.ResponseError as e:
                 if 'BUSYGROUP' not in str(e):
@@ -182,7 +184,7 @@ class StreamConsumer:
         while self._running:
             try:
                 results = self.redis.xreadgroup(
-                    CONSUMER_GROUP,
+                    self.consumer_group,
                     self.consumer_name,
                     streams,
                     count=10,
@@ -369,7 +371,7 @@ class StreamConsumer:
     def _ack(self, stream: str, message_id: str) -> None:
         """Acknowledge a message."""
         try:
-            self.redis.xack(stream, CONSUMER_GROUP, message_id)
+            self.redis.xack(stream, self.consumer_group, message_id)
             logger.debug(f"ACKed {message_id} on {stream}")
         except Exception as e:
             logger.exception(f"Failed to ACK {message_id}: {e}")
