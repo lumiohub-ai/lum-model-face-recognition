@@ -121,15 +121,17 @@ class StreamConsumer:
     - Graceful shutdown
     """
 
-    def __init__(self, consumer_name: str = None):
+    def __init__(self, consumer_name: str = None, client_slug: str = None):
         """
         Initialize the stream consumer.
 
         Args:
             consumer_name: Unique name for this consumer (default: hostname)
+            client_slug: This service's org slug — commands for other orgs are ignored
         """
         self.redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
         self.consumer_name = consumer_name or settings.hostname
+        self.client_slug = client_slug
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._camera_handler: Optional[Callable] = None
@@ -288,6 +290,12 @@ class StreamConsumer:
 
         Uses lazy imports to avoid circular import with celery_app.py.
         """
+        client_slug = payload.get('client_slug')
+
+        if self.client_slug and client_slug and client_slug != self.client_slug:
+            logger.debug(f"Ignoring {command_type} for {client_slug} (we are {self.client_slug})")
+            return
+
         # Lazy import to avoid circular imports
         from workers.embedding_tasks import (
             process_add_user,
@@ -295,7 +303,6 @@ class StreamConsumer:
             process_delete_user,
         )
 
-        client_slug = payload.get('client_slug')
         user_id = payload.get('user_id')
         full_name = payload.get('full_name', 'Unknown')
         image_urls = payload.get('image_urls', [])
