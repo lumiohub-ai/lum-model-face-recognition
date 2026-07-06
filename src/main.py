@@ -115,7 +115,7 @@ class MDAManager:
             sys.exit(1)
 
         # Start stream consumer for Backend commands
-        self.stream_consumer = StreamConsumer()
+        self.stream_consumer = StreamConsumer(client_slug=self.client_slug)
         self.stream_consumer.set_camera_handler(self._handle_camera_command)
         self.stream_consumer.start()
         logger.debug("StreamConsumer started")
@@ -195,7 +195,11 @@ class MDAManager:
             logger.warning("Engine not available")
 
     def _handle_camera_command(self, command_type: str, client_slug: str, payload: dict) -> None:
-        """Handle camera config commands from Backend (multi-tenant)."""
+        """Handle camera config commands from Backend."""
+        if client_slug and client_slug != self.client_slug:
+            logger.debug(f"Ignoring {command_type} for {client_slug} (we are {self.client_slug})")
+            return
+
         camera_id = payload.get('camera_id')
         if camera_id is not None:
             try:
@@ -203,7 +207,6 @@ class MDAManager:
             except (ValueError, TypeError):
                 pass
 
-        # Process commands for ALL tenants (multi-tenant support)
         if command_type in ('ConfigureCamera', 'StartCamera'):
             if self.engine:
                 success = self.engine.reload_camera_configs()
