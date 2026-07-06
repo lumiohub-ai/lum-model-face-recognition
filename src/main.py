@@ -184,7 +184,7 @@ class MDAManager:
             self.engine.reload_embeddings()
             logger.info("Embeddings reloaded")
         else:
-            logger.warning("Engine not available")
+            logger.warning("Engine not available for embedding reload")
 
     def _handle_status_reload(self, data: dict) -> None:
         """Handle status reload notification."""
@@ -222,7 +222,7 @@ class MDAManager:
         elif command_type == 'StopCamera':
             logger.info(f"StopCamera for camera {camera_id}")
             if self.engine:
-                self.engine.reload_camera_configs()
+                self.engine.reload_camera_configs(allow_empty=True)
 
         elif command_type == 'CaptureFrame':
             command_id = payload.get('command_id')
@@ -365,17 +365,28 @@ def main() -> None:
             break
 
         logger.info("Reinitializing engine with updated camera set...")
-        try:
-            engine = SmartOfficeEngine(
-                client_slug=client_slug,
-                applications=['attendance'],
-                model_factory=models,
-                **config
-            )
-            mda_manager.set_engine(engine)
-        except Exception as e:
-            logger.exception(f"Failed to reinitialize engine: {e}")
+        engine = None
+        mda_manager.set_engine(None)  # clear stale ref so next camera command signals _camera_ready
+        while lifecycle.is_running and engine is None:
+            try:
+                engine = SmartOfficeEngine(
+                    client_slug=client_slug,
+                    applications=['attendance'],
+                    model_factory=models,
+                    **config
+                )
+            except ValueError:
+                logger.info("No cameras configured — waiting for camera")
+                mda_manager._camera_ready.wait()
+                mda_manager._camera_ready.clear()
+            except Exception as e:
+                logger.exception(f"Failed to reinitialize engine: {e}")
+                break
+
+        if engine is None:
             break
+
+        mda_manager.set_engine(engine)
 
     lifecycle.shutdown()
 

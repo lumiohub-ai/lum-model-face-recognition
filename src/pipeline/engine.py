@@ -298,11 +298,12 @@ class SmartOfficeEngine:
 
     # ── Config reload (unchanged from original) ───────────────────────────────
 
-    def reload_camera_configs(self) -> bool:
+    def reload_camera_configs(self, allow_empty: bool = False) -> bool:
         """Reload camera configurations from database.
 
         Called when camera config changes are received via MDA.
         Returns True if reload was successful, False otherwise.
+        allow_empty: if True, treat 0 cameras as a valid new state (e.g. StopCamera).
         """
         try:
             logger.info("Reloading camera configurations...")
@@ -311,7 +312,7 @@ class SmartOfficeEngine:
                 client_slug=self.client_slug,
                 applications=self.applications,
             )
-            if not new_configs:
+            if not new_configs and not allow_empty:
                 logger.warning("No cameras found after reload — keeping existing config")
                 return False
 
