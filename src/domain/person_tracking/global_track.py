@@ -16,6 +16,7 @@ Memory Management:
 """
 
 import os
+import functools
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
@@ -142,6 +143,27 @@ class LRUCache:
             }
 
 
+def _synchronized(method):
+    """Serialize a GlobalTrackManager method on the instance's reentrant lock.
+
+    The manager is a single instance shared by every camera thread plus the
+    periodic-validation thread, and it mutates/iterates ``global_tracks``,
+    ``local_to_global`` and ``global_id_counter``. Without this, concurrent
+    inserts during a validation sweep raise "dictionary changed size during
+    iteration" and ``counter += 1`` races produce duplicate global IDs.
+
+    The lock is reentrant (RLock), so a decorated method may freely call other
+    decorated methods on the same thread.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class GlobalTrackManager:
     """
     Assigns global IDs across cameras using Body ReID (post-processing layer).
@@ -157,6 +179,11 @@ class GlobalTrackManager:
             config_path: Path to global_tracking.yaml config file
             app_config: Optional app config dict (from config.yaml)
         """
+        # Reentrant lock guarding all shared mutable state (global_tracks,
+        # local_to_global, global_id_counter, per-track camera_tracks). Created
+        # first so any decorated method is safe the moment the instance exists.
+        self._lock = threading.RLock()
+
         # Load configuration
         self.config = self._load_config(config_path)
 
@@ -168,6 +195,14 @@ class GlobalTrackManager:
             self.enabled = app_config.get('enable_global_tracking', True)
         elif self.config.get('enabled') is not None:
             self.enabled = self.config.get('enabled', False)
+        else:
+            env_val = os.getenv('ENABLE_GLOBAL_TRACKING')
+            if env_val is not None:
+                self.enabled = env_val.strip().lower() in ('1', 'true', 'yes', 'on')
+            else:
+                # No signal anywhere — default off rather than crash on a missing
+                # attribute later.
+                self.enabled = False
 
         # Global tracks
         self.global_tracks: Dict[int, GlobalTrack] = {}
@@ -386,6 +421,7 @@ class GlobalTrackManager:
             self._body_reid_model = None
             raise
 
+    @_synchronized
     def assign_global_id(
         self,
         camera_id: int,
@@ -565,12 +601,8 @@ class GlobalTrackManager:
         best_similarity = 0.0
 
         for candidate in candidates:
-            # Hard rejection: same camera too recently
-            if camera_id in candidate.camera_tracks:
-                last_seen = candidate.camera_tracks[camera_id].last_seen
-                time_since = (datetime.now() - last_seen).total_seconds()
-                if time_since < self.min_reentry_gap_sec:
-                    continue  # Skip: too recent on this camera
+            # Same-camera re-entry gating already applied in
+            # _get_candidate_tracks (Gate 2); no need to re-check here.
 
             # Compute body similarity
             if candidate.body_prototype is not None:
@@ -765,7 +797,6 @@ class GlobalTrackManager:
                 quality=quality,
                 timestamp=datetime.now()
             ))
-            self.metrics.cache_hit_rate = 0  # Reset on update
 
             # Update global track prototype
             global_id = self.local_to_global[camera_id].get(local_track_id)
@@ -826,195 +857,6 @@ class GlobalTrackManager:
         except Exception as e:
             logger.exception(f"Failed to extract body embedding: {e}")
             return None
-
-    def _batch_extract_embeddings(
-        self,
-        crops: List[np.ndarray]
-    ) -> List[Optional[np.ndarray]]:
-        """
-        Extract body ReID embeddings in batch for GPU efficiency.
-
-        Args:
-            crops: List of person crop images (H, W, C) in BGR format
-
-        Returns:
-            List of normalized embedding vectors (or None for failed extractions)
-        """
-        if not crops:
-            return []
-
-        if self._body_reid_model is None:
-            try:
-                self._init_body_reid_model()
-            except Exception:
-                return [None] * len(crops)
-
-        if self._body_reid_model is None:
-            return [None] * len(crops)
-
-        try:
-            start_time = time.time()
-
-            # Preprocessing constants (same as boxmot)
-            resize_dims = (128, 256)
-            mean_array = np.array([0.485, 0.456, 0.406])
-            std_array = np.array([0.229, 0.224, 0.225])
-
-            # Preprocess all crops
-            tensors = []
-            valid_indices = []
-
-            for i, crop in enumerate(crops):
-                if crop is None or crop.size == 0:
-                    continue
-
-                # Resize
-                crop_resized = cv2.resize(crop, resize_dims, interpolation=cv2.INTER_LINEAR)
-
-                # BGR to RGB
-                crop_rgb = cv2.cvtColor(crop_resized, cv2.COLOR_BGR2RGB)
-
-                # To tensor and normalize
-                tensor = torch.from_numpy(crop_rgb).float() / 255.0
-
-                # Standardize
-                tensor = (tensor - torch.tensor(mean_array)) / torch.tensor(std_array)
-
-                # Permute to (C, H, W)
-                tensor = tensor.permute(2, 0, 1)
-
-                tensors.append(tensor)
-                valid_indices.append(i)
-
-            if not tensors:
-                return [None] * len(crops)
-
-            # Stack into batch and move to device
-            batch = torch.stack(tensors, dim=0)
-            batch = batch.to(
-                dtype=torch.half if self.reid_half_precision else torch.float,
-                device=self._device
-            )
-
-            # Extract features in batch
-            with torch.no_grad():
-                embeddings = self._body_reid_model.forward(batch)
-
-            # Convert to numpy
-            embeddings = embeddings.cpu().numpy()
-
-            # Normalize each embedding
-            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-            norms = np.where(norms > 0, norms, 1.0)  # Avoid division by zero
-            embeddings = embeddings / norms
-
-            # Build result list with None for invalid crops
-            results = [None] * len(crops)
-            for idx, emb in zip(valid_indices, embeddings):
-                results[idx] = emb
-
-            # Record extraction time
-            extraction_time_ms = (time.time() - start_time) * 1000
-            avg_per_crop = extraction_time_ms / len(tensors) if tensors else 0
-            self.metrics.avg_extraction_time_ms = (
-                self.metrics.avg_extraction_time_ms * 0.9 +
-                avg_per_crop * 0.1
-            )
-
-            logger.debug(
-                f"BATCH_EXTRACT | count={len(tensors)} total_time={extraction_time_ms:.1f}ms "
-                f"avg_per_crop={avg_per_crop:.1f}ms"
-            )
-
-            return results
-
-        except Exception as e:
-            logger.exception(f"Failed to batch extract embeddings: {e}")
-            return [None] * len(crops)
-
-    def batch_assign_global_ids(
-        self,
-        camera_id: int,
-        tracks: List[Dict],
-        frame_num: int
-    ) -> Dict[int, int]:
-        """
-        Batch process tracks for efficiency.
-
-        Args:
-            camera_id: Camera identifier
-            tracks: List of track dicts with keys:
-                - track_id: Local track ID
-                - crop: Person crop image (np.ndarray)
-                - confidence: Detection confidence
-                - identity: Optional face identity
-                - identity_locked: Whether identity is locked
-            frame_num: Current frame number
-
-        Returns:
-            Dict mapping local_track_id -> global_track_id
-        """
-        if not self.enabled or not tracks:
-            return {t['track_id']: t['track_id'] for t in tracks}
-
-        result = {}
-
-        # Step 1: Identify tracks needing embedding extraction
-        tracks_to_extract = []
-        tracks_with_cache = []
-
-        for track in tracks:
-            local_id = track['track_id']
-            key = (camera_id, local_id)
-
-            # Check if already assigned and cache is fresh
-            if local_id in self.local_to_global[camera_id]:
-                cached = self.embedding_cache.get(key)
-                if cached is not None:
-                    if (frame_num - cached.frame_num) < self.extract_interval_frames:
-                        # Cache is fresh, no extraction needed
-                        tracks_with_cache.append(track)
-                        continue
-
-            # Needs extraction (new track or stale cache)
-            if self._validate_crop_quality(track.get('crop')):
-                tracks_to_extract.append(track)
-            else:
-                tracks_with_cache.append(track)
-
-        # Step 2: Batch extract embeddings for tracks that need it
-        if tracks_to_extract:
-            crops = [t.get('crop') for t in tracks_to_extract]
-            embeddings = self._batch_extract_embeddings(crops)
-
-            # Update cache with new embeddings
-            for track, emb in zip(tracks_to_extract, embeddings):
-                if emb is not None:
-                    key = (camera_id, track['track_id'])
-                    self.embedding_cache.put(key, CachedEmbedding(
-                        embedding=emb,
-                        frame_num=frame_num,
-                        quality=track.get('confidence', 0.0),
-                        timestamp=datetime.now()
-                    ))
-
-        # Step 3: Assign global IDs using cached embeddings
-        all_tracks = tracks_to_extract + tracks_with_cache
-
-        for track in all_tracks:
-            global_id = self.assign_global_id(
-                camera_id=camera_id,
-                local_track_id=track['track_id'],
-                person_crop=track.get('crop'),
-                face_embedding=track.get('face_embedding'),
-                detection_confidence=track.get('confidence', 0.0),
-                frame_num=frame_num,
-                identity=track.get('identity'),
-                identity_locked=track.get('identity_locked', False)
-            )
-            result[track['track_id']] = global_id
-
-        return result
 
     def _validate_crop_quality(self, person_crop: np.ndarray) -> bool:
         """
@@ -1097,6 +939,7 @@ class GlobalTrackManager:
     # Track Removal Handling (Phase 3)
     # =========================================================================
 
+    @_synchronized
     def on_track_removed(
         self,
         camera_id: int,
@@ -1150,6 +993,14 @@ class GlobalTrackManager:
         # Clean up embedding cache
         cache_key = (camera_id, local_track_id)
         self.embedding_cache.delete(cache_key)
+
+        # Drop the local→global mapping for the ended local track. The local id
+        # will never be reused by the tracker; a re-entry gets a fresh local id
+        # that re-links via ReID/identity. Without this the mapping grows
+        # unbounded and get_global_id can return a stale (archived) global id.
+        cam_map = self.local_to_global.get(camera_id)
+        if cam_map is not None:
+            cam_map.pop(local_track_id, None)
 
         # Log baseline stats (Phase 0 compatibility)
         track_key = (camera_id, local_track_id)
@@ -1242,6 +1093,7 @@ class GlobalTrackManager:
     # Safety Mechanisms
     # =========================================================================
 
+    @_synchronized
     def detect_impossible_merges(self) -> List[Dict]:
         """
         Detect if same global ID appears on multiple non-overlapping cameras.
@@ -1251,7 +1103,7 @@ class GlobalTrackManager:
         """
         conflicts = []
 
-        for global_id, track in self.global_tracks.items():
+        for global_id, track in list(self.global_tracks.items()):
             active_cameras = track.get_active_cameras(recency_threshold_sec=5.0)
 
             if len(active_cameras) > 1:
@@ -1282,6 +1134,7 @@ class GlobalTrackManager:
                 return True
         return False
 
+    @_synchronized
     def split_global_track(self, global_id: int) -> None:
         """Split incorrectly merged global track."""
         if global_id not in self.global_tracks:
@@ -1345,6 +1198,7 @@ class GlobalTrackManager:
             primary_camera: track.camera_tracks[primary_camera]
         }
 
+    @_synchronized
     def periodic_validation(self) -> Dict[str, int]:
         """
         Run periodic validation checks for data consistency.
@@ -1399,6 +1253,7 @@ class GlobalTrackManager:
     # Cache Management (Phase 2)
     # =========================================================================
 
+    @_synchronized
     def cleanup_embedding_cache(self, max_age_sec: float = 300.0) -> int:
         """
         Remove stale cache entries to prevent memory leaks.
@@ -1433,6 +1288,7 @@ class GlobalTrackManager:
 
         return len(stale_keys)
 
+    @_synchronized
     def cleanup_inactive_global_tracks(self, max_inactive_min: float = 10.0) -> int:
         """
         Archive global tracks that have been inactive too long.
@@ -1449,7 +1305,8 @@ class GlobalTrackManager:
         cutoff_time = datetime.now() - timedelta(minutes=max_inactive_min)
         inactive_tracks = []
 
-        for global_id, track in self.global_tracks.items():
+        # Snapshot: we mutate global_tracks in the loop below.
+        for global_id, track in list(self.global_tracks.items()):
             if track.last_seen < cutoff_time:
                 # All camera tracks inactive for too long
                 if all(not ct.active for ct in track.camera_tracks.values()):
@@ -1457,6 +1314,13 @@ class GlobalTrackManager:
 
         for global_id in inactive_tracks:
             track = self.global_tracks.pop(global_id)
+            # Purge local→global mappings that pointed at this archived track,
+            # otherwise get_global_id keeps returning a dead global id and the
+            # mapping leaks for the life of the process.
+            for cam_id, cam_track in track.camera_tracks.items():
+                cam_map = self.local_to_global.get(cam_id)
+                if cam_map is not None and cam_map.get(cam_track.local_track_id) == global_id:
+                    del cam_map[cam_track.local_track_id]
             duration = (track.last_seen - track.first_seen).total_seconds()
             logger.info(
                 f"ARCHIVE_TRACK | global_id={global_id} duration={duration:.1f}s "
@@ -1465,6 +1329,7 @@ class GlobalTrackManager:
 
         return len(inactive_tracks)
 
+    @_synchronized
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics for monitoring."""
         return {
@@ -1477,6 +1342,7 @@ class GlobalTrackManager:
     # Phase 0 Compatibility Methods
     # =========================================================================
 
+    @_synchronized
     def on_track_created(
         self,
         camera_id: int,
@@ -1506,6 +1372,7 @@ class GlobalTrackManager:
             f"frame={frame_num}"
         )
 
+    @_synchronized
     def on_face_detected(
         self,
         camera_id: int,
@@ -1524,6 +1391,7 @@ class GlobalTrackManager:
 
         self.total_faces_detected += 1
 
+    @_synchronized
     def on_face_not_visible(
         self,
         camera_id: int,
@@ -1539,6 +1407,7 @@ class GlobalTrackManager:
 
         self.total_faces_not_visible += 1
 
+    @_synchronized
     def on_track_update(
         self,
         camera_id: int,
@@ -1552,6 +1421,7 @@ class GlobalTrackManager:
         if track_key in self.track_stats:
             self.track_stats[track_key]['total_frames'] += 1
 
+    @_synchronized
     def get_baseline_metrics(self) -> Dict[str, Any]:
         """Get baseline metrics for analysis."""
         if not self.enabled:
@@ -1590,6 +1460,7 @@ class GlobalTrackManager:
             'conflicts_detected': self.metrics.conflicts_detected
         }
 
+    @_synchronized
     def log_baseline_summary(self) -> None:
         """Log a summary of baseline metrics."""
         if not self.enabled:
@@ -1609,10 +1480,12 @@ class GlobalTrackManager:
     # Utility Methods
     # =========================================================================
 
+    @_synchronized
     def get_global_id(self, camera_id: int, local_track_id: int) -> Optional[int]:
         """Get global ID for a local track."""
         return self.local_to_global[camera_id].get(local_track_id)
 
+    @_synchronized
     def find_global_track_by_identity(self, identity: str) -> Optional[GlobalTrack]:
         """
         Find an active global track by face identity.
@@ -1626,11 +1499,15 @@ class GlobalTrackManager:
         if not identity:
             return None
 
-        for global_id, track in self.global_tracks.items():
-            if track.active and track.identity == identity:
+        # Every track still in global_tracks is live (archived ones are popped),
+        # so identity alone is the match key. The old `track.active` guard was a
+        # dead condition — GlobalTrack.active is only ever set True.
+        for track in self.global_tracks.values():
+            if track.identity == identity:
                 return track
         return None
 
+    @_synchronized
     def update_global_track_identity(
         self,
         global_id: int,
@@ -1655,6 +1532,7 @@ class GlobalTrackManager:
         logger.debug(f"GLOBAL_IDENTITY | global_id={global_id} identity='{identity}' locked={locked}")
         return True
 
+    @_synchronized
     def reassign_local_track(
         self,
         camera_id: int,

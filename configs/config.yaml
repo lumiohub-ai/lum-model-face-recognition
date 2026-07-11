@@ -15,7 +15,7 @@ person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) o
 unrecognized_frontality_min: 0.6  # min yaw frontality [0,1] (frontal, not profile)
 unrecognized_pitch_min: 0.4       # min pitch [0,1] (level, not looking down)
 unrecognized_det_min: 0.5         # min face-detector confidence (real face, not false positive)
-unrecognized_debug_landmarks: false  # DEBUG: draw face landmarks + yaw/pitch/det on unrecognized card images
+unrecognized_debug_landmarks: true  # DEBUG: draw face landmarks + yaw/pitch/det on unrecognized card images
 
 # Feature flags
 enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)

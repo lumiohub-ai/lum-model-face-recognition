@@ -461,6 +461,7 @@ class CameraEngine:
                     "frame": frame.copy(),
                     "landmarks": face_data.get("face_landmarks"),
                     "det_score": face_data.get("det_score", 0.0),
+                    "face_bbox": face_data.get("face_bbox"),
                 }
                 if len(crop_history) > _max_crop_frames:
                     for old_key in sorted(crop_history)[:-_max_crop_frames]:
@@ -873,7 +874,9 @@ class CameraEngine:
     ) -> Optional[np.ndarray]:
         """Debug image: the person ROI with the 5 face landmarks + scores drawn.
 
-        Landmarks are in full-frame coords; subtract the ROI origin before drawing.
+        face_bbox and landmarks are stored in ROI-local coordinates (gpu_worker
+        outputs ROI-local; full-frame conversion happens only for video annotation).
+        Draw them directly on the ROI image without any offset adjustment.
         Returns None if the frame/bbox is unavailable.
         """
         frame = crop_data.get("frame")
@@ -888,12 +891,32 @@ class CameraEngine:
             return None
         img = roi.copy()
         ox, oy = roi_off
+        # Person bbox — full-frame coords, subtract ROI origin to draw on ROI image
+        try:
+            px1, py1, px2, py2 = (
+                int(bbox[0]) - ox, int(bbox[1]) - oy,
+                int(bbox[2]) - ox, int(bbox[3]) - oy,
+            )
+            cv2.rectangle(img, (px1, py1), (px2, py2), (255, 0, 0), 1)
+        except (TypeError, IndexError, ValueError):
+            pass
+        # Face bbox — ROI-local coords, draw directly
+        face_bbox = crop_data.get("face_bbox")
+        if face_bbox is not None:
+            try:
+                fx1, fy1, fx2, fy2 = (
+                    int(face_bbox[0]), int(face_bbox[1]),
+                    int(face_bbox[2]), int(face_bbox[3]),
+                )
+                cv2.rectangle(img, (fx1, fy1), (fx2, fy2), (0, 255, 0), 1)
+            except (TypeError, IndexError, ValueError):
+                pass
         kps = crop_data.get("landmarks")
         names = ["LE", "RE", "N", "LM", "RM"]
         if kps:
             for i, p in enumerate(kps):
                 try:
-                    x, y = int(p[0]) - ox, int(p[1]) - oy
+                    x, y = int(p[0]), int(p[1])
                 except (TypeError, IndexError, ValueError):
                     continue
                 cv2.circle(img, (x, y), 3, (0, 255, 0), -1)
