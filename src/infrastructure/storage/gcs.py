@@ -122,19 +122,35 @@ class URLValidator:
         # Check if hostname is an IP address
         try:
             ip = ipaddress.ip_address(hostname)
-            # Check against blocked IP ranges
-            for blocked_range in cls.BLOCKED_IP_RANGES:
-                if ip in ipaddress.ip_network(blocked_range, strict=False):
-                    return False, f"Blocked IP range: {hostname}"
         except ValueError:
-            # Not an IP address, check domain whitelist
-            if cls.ALLOWED_HTTP_DOMAINS:
-                domain_allowed = any(
-                    hostname_lower == domain or hostname_lower.endswith('.' + domain)
-                    for domain in cls.ALLOWED_HTTP_DOMAINS
-                )
-                if not domain_allowed:
-                    return False, f"Domain not in allowlist: {hostname}"
+            ip = None
+
+        if ip is not None:
+            # Unwrap IPv4-mapped IPv6 literals (e.g. ::ffff:169.254.169.254) so
+            # they're checked against the IPv4 ranges too, not just the IPv6 ones.
+            candidates = [ip]
+            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+                candidates.append(ip.ipv4_mapped)
+
+            for candidate in candidates:
+                for blocked_range in cls.BLOCKED_IP_RANGES:
+                    network = ipaddress.ip_network(blocked_range, strict=False)
+                    if candidate.version == network.version and candidate in network:
+                        return False, f"Blocked IP range: {hostname}"
+
+            # This is a whitelist-based validator (ALLOWED_HTTP_DOMAINS); a raw IP
+            # literal can never match a domain name, so it can't be judged safe
+            # purely by *not* being in the blocklist above.
+            return False, f"Raw IP literals are not allowed: {hostname}"
+
+        # Not an IP address, check domain whitelist
+        if cls.ALLOWED_HTTP_DOMAINS:
+            domain_allowed = any(
+                hostname_lower == domain or hostname_lower.endswith('.' + domain)
+                for domain in cls.ALLOWED_HTTP_DOMAINS
+            )
+            if not domain_allowed:
+                return False, f"Domain not in allowlist: {hostname}"
 
         return True, "URL is safe"
 
@@ -171,17 +187,30 @@ class ImageFetcher:
     - Local file paths (for testing)
     """
 
-    def __init__(self, allowed_gcs_buckets: List[str] = None, allowed_http_domains: List[str] = None):
+    def __init__(
+        self,
+        allowed_gcs_buckets: List[str] = None,
+        allowed_http_domains: List[str] = None,
+        allow_local_fallback: bool = False,
+    ):
         """Initialize image fetcher with GCS credentials if available.
 
         Args:
             allowed_gcs_buckets: Optional list of allowed GCS bucket names
             allowed_http_domains: Optional list of allowed HTTP domains
+            allow_local_fallback: SECURITY: whether to treat a URL that isn't
+                gs://, http://, or https:// as a local file path to read.
+                Off by default — production `image_url` values come from
+                external/DB data, and enabling this turns any string that
+                happens to resolve to a real path on this host into a local
+                file-read oracle with no allowlist. Only enable for local
+                testing/dev scripts that intentionally pass file paths.
         """
         from config.settings import settings
         self.gcs_credentials = settings.gcs_credentials_path
         self.gcs_bucket = settings.gcs_bucket
         self.gcs_client = None
+        self.allow_local_fallback = allow_local_fallback
 
         # Configure URL validator
         if allowed_gcs_buckets:
@@ -234,7 +263,7 @@ class ImageFetcher:
                 return self._fetch_from_gcs(url)
             elif url.startswith('http://') or url.startswith('https://'):
                 return self._fetch_from_http(url)
-            elif os.path.exists(url):
+            elif self.allow_local_fallback and os.path.exists(url):
                 return self._fetch_from_local(url)
             else:
                 logger.error(f"Unsupported URL format or file not found: {url}")
@@ -274,7 +303,7 @@ class ImageFetcher:
 
         try:
             # Parse gs://bucket/path format
-            parts = gs_url.replace('gs://', '').split('/', 1)
+            parts = gs_url[len('gs://'):].split('/', 1)
             bucket_name = parts[0]
             blob_path = parts[1] if len(parts) > 1 else ''
 

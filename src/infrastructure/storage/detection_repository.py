@@ -36,14 +36,31 @@ class DetectionRepository:
         timestamp: datetime,
         status: str,
         proof_image_url: Optional[str] = None,
+        external_id: Optional[str] = None,
     ) -> int:
         """Insert an attendance record.
 
+        Args:
+            external_id: Deterministic idempotency key (e.g. the Celery task
+                id). If a row with this external_id already exists — which
+                happens when Celery redelivers a task after a worker crashes
+                post-commit but pre-ack (task_acks_late/task_reject_on_worker_lost) —
+                the existing row's id is returned instead of inserting a
+                duplicate attendance record. Defaults to a random UUID (no
+                dedup) for callers that don't have a stable retry key.
+
         Returns:
-            New record ID
+            New (or existing, on a duplicate retry) record ID
         """
-        external_id = str(uuid.uuid4())
+        external_id = external_id or str(uuid.uuid4())
         with self._db.get_connection() as conn:
+            existing = conn.execute(text(f"""
+                SELECT id FROM {self.schema}.attendance_records WHERE external_id = :external_id
+            """), {'external_id': external_id}).fetchone()
+            if existing:
+                logger.info(f"Attendance record already exists for external_id={external_id}, skipping duplicate insert")
+                return existing[0]
+
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.attendance_records
                 (external_id, user_id, camera_id, timestamp, status, proof_image_url, source)
@@ -107,14 +124,27 @@ class DetectionRepository:
         timestamp: datetime,
         proof_image_url: Optional[str] = None,
         confidence: Optional[float] = None,
+        external_id: Optional[str] = None,
     ) -> int:
         """Insert an activity record.
 
+        Args:
+            external_id: Deterministic idempotency key (e.g. the Celery task
+                id) — see record_attendance() for why this matters. Defaults
+                to a random UUID (no dedup) if not provided.
+
         Returns:
-            New record ID
+            New (or existing, on a duplicate retry) record ID
         """
-        external_id = str(uuid.uuid4())
+        external_id = external_id or str(uuid.uuid4())
         with self._db.get_connection() as conn:
+            existing = conn.execute(text(f"""
+                SELECT id FROM {self.schema}.activity_records WHERE external_id = :external_id
+            """), {'external_id': external_id}).fetchone()
+            if existing:
+                logger.info(f"Activity record already exists for external_id={external_id}, skipping duplicate insert")
+                return existing[0]
+
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.activity_records
                 (external_id, user_id, camera_id, activity_type, timestamp, proof_image_url, confidence_score, created_at)

@@ -16,6 +16,9 @@ class StreamHandler:
     This class manages video capture from files, cameras or network streams, providing a
     reliable and thread-safe interface for reading frames even with unreliable sources.
     """
+
+    STALE_FRAME_SEC = 15.0  # matches get_health()'s default staleness threshold
+
     def __init__(self, src: Any, logger: logging.Logger) -> None:
         """Initialize the stream handler with a video source.
 
@@ -40,7 +43,14 @@ class StreamHandler:
                 'buffer_size;1024000|'       # 1MB buffer for network stability
                 'max_delay;500000|'          # Max 0.5s delay
                 'fflags;nobuffer|'           # Minimize buffering for real-time
-                'flags;low_delay'            # Low latency mode
+                'flags;low_delay|'           # Low latency mode
+                'stimeout;10000000|'         # 10s socket I/O timeout (microseconds) — without
+                                              # this, a camera that keeps the TCP connection open
+                                              # but stops sending data hangs cap.read() forever
+                                              # instead of returning False, so reconnect logic
+                                              # (which relies on read() failing) never triggers.
+                'rw_timeout;10000000'        # 10s read/write timeout (newer FFmpeg builds use this
+                                              # instead of/alongside stimeout)
             )
             self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
             # Set buffer size: 3 frames is optimal for real-time playback
@@ -184,7 +194,9 @@ class StreamHandler:
                     'buffer_size;1024000|'
                     'max_delay;500000|'
                     'fflags;nobuffer|'
-                    'flags;low_delay'
+                    'flags;low_delay|'
+                    'stimeout;10000000|'
+                    'rw_timeout;10000000'
                 )
                 self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
@@ -304,7 +316,17 @@ class StreamHandler:
             if self.latest_frame is not None:
                 self.ret = self.latest_ret
                 self.frame = self.latest_frame
-            return self.ret, self.frame
+            ret, frame = self.ret, self.frame
+
+        # If the background update thread has stopped producing frames (dead
+        # stream, hung/stuck thread), don't keep handing out the last frame
+        # forever as if it were live — callers that don't separately check
+        # frame_age_sec() (unlike get_health()) would otherwise treat a feed
+        # that died minutes ago as still streaming.
+        age = self.frame_age_sec()
+        if age is not None and age > self.STALE_FRAME_SEC:
+            return False, None
+        return ret, frame
 
     def stop(self) -> None:
         """Stop the frame reading thread and release resources."""

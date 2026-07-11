@@ -15,6 +15,7 @@ import time
 from typing import Optional, Dict, List, Callable
 import base64
 
+import httpx
 import numpy as np
 import cv2
 from loguru import logger
@@ -292,7 +293,12 @@ class ActionRecognizer:
                 'raw_output': raw_output
             }
 
-        except TimeoutError as e:
+        except (TimeoutError, httpx.TimeoutException) as e:
+            # ollama's client (built on httpx) doesn't wrap timeout errors
+            # into its own exception type — httpx.TimeoutException (and its
+            # subclasses like ReadTimeout) propagate raw, and that type does
+            # NOT inherit from builtin TimeoutError, so `except TimeoutError`
+            # alone never actually caught a real Ollama timeout.
             self.total_timeouts += 1
             logger.warning(f"Ollama API timeout after {self.inference_timeout}s: {e}")
             return None
@@ -315,13 +321,25 @@ class ActionRecognizer:
                 return 'idle'
             return None
 
-        # Check each configured action
+        # Prefer an exact match first: dict-order prefix matching alone would
+        # let a shorter action name that happens to be a prefix of another
+        # (e.g. "idle" vs "idle_talking") steal the match depending on which
+        # was declared first in config.yaml, regardless of which one the VLM
+        # actually said.
         for action_name in self.actions_config.keys():
-            action_lower = action_name.lower()
-            if raw_output.startswith(action_lower) or raw_output == action_lower:
+            if raw_output == action_name.lower():
                 return action_name
 
-        return None
+        # Fall back to prefix matching, preferring the longest (most
+        # specific) match rather than whichever comes first in config.
+        best_match: Optional[str] = None
+        for action_name in self.actions_config.keys():
+            action_lower = action_name.lower()
+            if raw_output.startswith(action_lower):
+                if best_match is None or len(action_lower) > len(best_match.lower()):
+                    best_match = action_name
+
+        return best_match
 
     def _post_activity_to_backend(
         self,
@@ -399,16 +417,19 @@ class ActionRecognizer:
             return False
 
         try:
-            # Register callback if provided
-            if callback:
-                self.result_callbacks[request_id] = callback
-
-            # Queue inference request
+            # Queue inference request first — only register the callback
+            # once the item is actually queued, so a queue.Full here doesn't
+            # leave an orphaned entry in result_callbacks (which _process_
+            # inference_request, the only place that ever removes one, will
+            # never run for a request that was never queued).
             self.inference_queue.put({
                 'image': image,
                 'request_id': request_id,
                 'metadata': metadata or {}
             }, block=False)
+
+            if callback:
+                self.result_callbacks[request_id] = callback
 
             return True
 

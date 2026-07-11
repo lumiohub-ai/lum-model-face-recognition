@@ -38,7 +38,7 @@ class StreamManager:
         self.frame_nums: List[int] = []
         self._initialized = False
         self._last_write_time: List[float] = []
-        self._write_interval: float = 1.0 / 20
+        self._write_intervals: List[float] = []
 
     def init_streams(self) -> List[StreamHandler]:
         """Initialize stream handlers for all cameras.
@@ -104,6 +104,7 @@ class StreamManager:
             return self.video_writers
 
         self._last_write_time = []
+        self._write_intervals = []
 
         for i, config in enumerate(self.camera_configs):
             camera_name = config['camera_name'].replace(' ', '_')
@@ -128,8 +129,12 @@ class StreamManager:
             writer = self._create_video_writer(filename, w, h, fps)
             self.video_writers.append(writer)
             self._last_write_time.append(0.0)
+            # Per-camera throttle interval — each writer was created with its
+            # own fps above, so a single shared interval (previously derived
+            # from whichever camera happened to be last in this loop) would
+            # mis-throttle every other camera's recording speed.
+            self._write_intervals.append(1.0 / (fps if fps > 0 else 20))
 
-        self._write_interval = 1.0 / (fps if fps > 0 else 20)
         return self.video_writers
 
     def _create_video_writer(
@@ -212,8 +217,14 @@ class StreamManager:
             writer = self.video_writers[camera_idx]
             if writer is None:
                 continue
-            # Skip if not enough time has passed since last write
-            if now - self._last_write_time[camera_idx] < self._write_interval:
+            # Skip if not enough time has passed since last write (per-camera
+            # interval, since each writer can have a different declared fps)
+            interval = (
+                self._write_intervals[camera_idx]
+                if camera_idx < len(self._write_intervals)
+                else 1.0 / 20
+            )
+            if now - self._last_write_time[camera_idx] < interval:
                 continue
             writer.write(frame)
             self._last_write_time[camera_idx] = now

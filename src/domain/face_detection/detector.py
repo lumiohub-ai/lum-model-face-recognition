@@ -109,17 +109,33 @@ class FaceDetector:
         faces = self.detect(image)
         face_features = []
 
+        # detect() ran the model on a padded image (see _add_padding), so
+        # face.bbox/face.kps come back in padded-image coordinate space.
+        # Shift them back to the original image's coordinates — the same
+        # correction pipeline/gpu_worker.py already applies for its own
+        # face.bbox/face.kps usage, which this method was missing, so any
+        # bbox/landmarks stored from here (e.g. embedding_sync.py's DB
+        # metadata) were off by (pad_w, pad_h) whenever padding is enabled.
+        h, w = image.shape[:2]
+        pad_h = int(h * self.padding_percent / 100)
+        pad_w = int(w * self.padding_percent / 100)
+
         for face in faces:
             # Extract bounding box
             x1, y1, x2, y2 = face.bbox.astype(int)
+            x1 -= pad_w
+            y1 -= pad_h
+            x2 -= pad_w
+            y2 -= pad_h
             conf = face.det_score
 
             # Extract and normalize embedding
             embedding = face.embedding
-            embedding = embedding / np.linalg.norm(embedding)
+            norm = np.linalg.norm(embedding)
+            embedding = embedding / norm if norm > 0 else embedding
 
             # Extract facial landmarks (5 keypoints: left eye, right eye, nose, left mouth, right mouth)
-            landmarks = face.kps.astype(int)  # Shape: (5, 2)
+            landmarks = face.kps.astype(int) - [pad_w, pad_h]  # Shape: (5, 2)
 
             face_features.append({
                 'bbox': [x1, y1, x2, y2, conf, 0],  # class id 0 for faces

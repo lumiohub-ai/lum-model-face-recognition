@@ -24,24 +24,35 @@ except ImportError:
     pass
 
 
+def _int_env(name: str, default: int) -> int:
+    """int(os.getenv(name, default)) crashes if the var is SET but blank
+    (e.g. `SO_POSTGRES_PORT=` left over in a .env template) — os.getenv's
+    default only applies when the var is unset, not when it's empty.
+    """
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return int(value)
+
+
 class Settings:
     # PostgreSQL
     postgres_host = os.getenv("SO_POSTGRES_HOST", "localhost")
-    postgres_port = int(os.getenv("SO_POSTGRES_PORT", 5433))
+    postgres_port = _int_env("SO_POSTGRES_PORT", 5433)
     postgres_user = os.getenv("SO_POSTGRES_USER", "face_recognition")
     postgres_password = os.getenv("SO_POSTGRES_PASSWORD")
     postgres_db = os.getenv("SO_POSTGRES_DB", "face_embeddings")
 
     # Redis
     redis_host = os.getenv("SO_REDIS_HOST", "localhost")
-    redis_port = int(os.getenv("SO_REDIS_PORT", 6379))
-    redis_db = int(os.getenv("SO_REDIS_DB", 0))
+    redis_port = _int_env("SO_REDIS_PORT", 6379)
+    redis_db = _int_env("SO_REDIS_DB", 0)
     redis_url = os.getenv("SO_REDIS_URL", f"redis://{redis_host}:{redis_port}")
 
     # Celery
     celery_broker_url = os.getenv("SO_CELERY_BROKER_URL", f"redis://{redis_host}:{redis_port}/0")
     celery_result_backend = os.getenv("SO_CELERY_RESULT_BACKEND", f"redis://{redis_host}:{redis_port}/1")
-    celery_concurrency = int(os.getenv("SO_CELERY_CONCURRENCY", 2))
+    celery_concurrency = _int_env("SO_CELERY_CONCURRENCY", 2)
 
     # Google Cloud Storage
     gcs_credentials_path = os.getenv("SO_GCS_CREDENTIALS_PATH", "")
@@ -59,7 +70,11 @@ class Settings:
 
     # Metrics monitoring
     metrics_enabled = os.getenv("SO_METRICS_ENABLED", "true").lower() not in ("false", "0", "no")
-    metrics_port = int(os.getenv("SO_METRICS_PORT", 8765))
+    metrics_port = _int_env("SO_METRICS_PORT", 8765)
+    # Optional shared-secret query token (?token=...) required to view the
+    # metrics dashboard. Empty by default (matches prior open-by-default
+    # behavior) — set this to actually require auth.
+    metrics_auth_token = os.getenv("SO_METRICS_AUTH_TOKEN", "")
 
 
 # Module-level singleton — created once at import time after .env is loaded

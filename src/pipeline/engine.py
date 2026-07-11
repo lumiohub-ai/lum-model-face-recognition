@@ -60,6 +60,8 @@ class SmartOfficeEngine:
         self._running = False
         self._start_time = 0.0
         self.needs_reinit = False
+        self._cleanup_done = False
+        self._cleanup_lock = threading.Lock()
 
         # Pipeline config (with defaults)
         pipeline_cfg = kwargs.get("pipeline", {})
@@ -230,8 +232,17 @@ class SmartOfficeEngine:
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def stop(self) -> None:
-        """Signal the engine to stop (signal-handler callback)."""
+        """Signal the engine to stop and block until it has (signal-handler callback).
+
+        Synchronously runs the same cleanup run()'s finally block would run,
+        so callers (e.g. main.py's shutdown sequence, which tears down shared
+        GPU models right after calling this) can rely on camera/GPU worker
+        threads actually being stopped before they free anything those
+        threads might still be using. _cleanup() is idempotent, so run()'s
+        own finally block calling it again afterward is a safe no-op.
+        """
         self._running = False
+        self._cleanup()
 
     def run(self) -> None:
         """Start all threads and block until stopped."""
@@ -328,10 +339,29 @@ class SmartOfficeEngine:
                                     engine.application = new_config.get(
                                         "application", ["attendance"]
                                     )
-                                    logger.info(
-                                        f"Updated camera {engine.camera_id} "
-                                        f"applications: {engine.application}"
+                                    # ROI/threshold/line-points/etc are pure
+                                    # per-frame config reads — safe to hot-swap
+                                    # without restarting the engine, unlike
+                                    # stream_url (would need reconnecting the
+                                    # actual capture, not handled here).
+                                    engine.roi = new_config.get("roi")
+                                    engine.match_threshold = new_config.get(
+                                        "match_threshold", engine.match_threshold
                                     )
+                                    engine.line_points = new_config.get("line_points")
+                                    engine.min_face_size = new_config.get(
+                                        "min_face_size", engine.min_face_size
+                                    )
+                                    logger.info(
+                                        f"Updated camera {engine.camera_id}: "
+                                        f"applications={engine.application} "
+                                        f"roi={engine.roi} "
+                                        f"match_threshold={engine.match_threshold}"
+                                    )
+                            for worker in self.camera_workers:
+                                if worker.camera_config.get("camera_id") == new_config.get("camera_id"):
+                                    worker.camera_config = new_config
+                                    worker.roi = new_config.get("roi")
                             break
                 logger.info(
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
@@ -759,7 +789,18 @@ class SmartOfficeEngine:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _cleanup(self) -> None:
+        with self._cleanup_lock:
+            if self._cleanup_done:
+                return
+            self._cleanup_done = True
+
         logger.info("Shutting down SmartOfficeEngine...")
+
+        # Stop the calibration subscriber thread (started in __init__ but
+        # previously never stopped anywhere)
+        if getattr(self, "_calibration_subscriber", None) is not None:
+            self._calibration_subscriber.stop()
+            self._calibration_subscriber.join(timeout=3.0)
 
         # Stop camera workers
         for worker in self.camera_workers:

@@ -15,6 +15,7 @@ Memory Management:
 - Periodic cleanup of stale entries
 """
 
+import functools
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
@@ -142,6 +143,20 @@ class LRUCache:
             }
 
 
+def _synchronized(method):
+    """Serialize calls to a GlobalTrackManager method via self._lock.
+
+    self._lock is a threading.RLock, so a synchronized method calling another
+    synchronized method on the same thread (e.g. assign_global_id ->
+    _create_new_global_track) re-enters cleanly instead of deadlocking.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class GlobalTrackManager:
     """
     Assigns global IDs across cameras using Body ReID (post-processing layer).
@@ -168,6 +183,13 @@ class GlobalTrackManager:
             self.enabled = app_config.get('enable_global_tracking', True)
         elif self.config.get('enabled') is not None:
             self.enabled = self.config.get('enabled', False)
+
+        # Guards global_tracks/local_to_global/global_id_counter/track_stats/
+        # metrics counters below — this manager is called concurrently from
+        # every camera worker thread plus the main engine's periodic_validation().
+        # Re-entrant because e.g. assign_global_id() calls other locked methods
+        # (_create_new_global_track, etc.) on the same thread.
+        self._lock = threading.RLock()
 
         # Global tracks
         self.global_tracks: Dict[int, GlobalTrack] = {}
@@ -386,6 +408,7 @@ class GlobalTrackManager:
             self._body_reid_model = None
             raise
 
+    @_synchronized
     def assign_global_id(
         self,
         camera_id: int,
@@ -442,6 +465,20 @@ class GlobalTrackManager:
 
                 # Update identity if now locked (and track doesn't have one)
                 if identity_locked and identity and not track.identity:
+                    # Another global track may already own this identity (e.g.
+                    # it was first seen/locked on a different camera) — merge
+                    # into that one instead of letting two global IDs both end
+                    # up claiming the same identity, mirroring the STEP 0 check
+                    # done for brand-new local tracks above.
+                    existing = self.find_global_track_by_identity(identity)
+                    if existing is not None and existing.global_id != global_id:
+                        self.reassign_local_track(camera_id, local_track_id, existing.global_id)
+                        logger.debug(
+                            f"GLOBAL_IDENTITY_MERGE | camera={camera_id} local={local_track_id} "
+                            f"identity='{identity}' {global_id} -> {existing.global_id}"
+                        )
+                        return existing.global_id
+
                     track.set_identity(identity, locked=True)
                     logger.debug(
                         f"GLOBAL_IDENTITY_UPDATE | global_id={global_id} "
@@ -932,6 +969,7 @@ class GlobalTrackManager:
             logger.exception(f"Failed to batch extract embeddings: {e}")
             return [None] * len(crops)
 
+    @_synchronized
     def batch_assign_global_ids(
         self,
         camera_id: int,
@@ -1097,6 +1135,7 @@ class GlobalTrackManager:
     # Track Removal Handling (Phase 3)
     # =========================================================================
 
+    @_synchronized
     def on_track_removed(
         self,
         camera_id: int,
@@ -1242,6 +1281,7 @@ class GlobalTrackManager:
     # Safety Mechanisms
     # =========================================================================
 
+    @_synchronized
     def detect_impossible_merges(self) -> List[Dict]:
         """
         Detect if same global ID appears on multiple non-overlapping cameras.
@@ -1282,6 +1322,7 @@ class GlobalTrackManager:
                 return True
         return False
 
+    @_synchronized
     def split_global_track(self, global_id: int) -> None:
         """Split incorrectly merged global track."""
         if global_id not in self.global_tracks:
@@ -1345,6 +1386,7 @@ class GlobalTrackManager:
             primary_camera: track.camera_tracks[primary_camera]
         }
 
+    @_synchronized
     def periodic_validation(self) -> Dict[str, int]:
         """
         Run periodic validation checks for data consistency.
@@ -1399,6 +1441,7 @@ class GlobalTrackManager:
     # Cache Management (Phase 2)
     # =========================================================================
 
+    @_synchronized
     def cleanup_embedding_cache(self, max_age_sec: float = 300.0) -> int:
         """
         Remove stale cache entries to prevent memory leaks.
@@ -1433,6 +1476,7 @@ class GlobalTrackManager:
 
         return len(stale_keys)
 
+    @_synchronized
     def cleanup_inactive_global_tracks(self, max_inactive_min: float = 10.0) -> int:
         """
         Archive global tracks that have been inactive too long.
@@ -1463,8 +1507,18 @@ class GlobalTrackManager:
                 f"cameras={list(track.camera_tracks.keys())}"
             )
 
+            # Also drop the local_to_global mapping(s) that pointed at this
+            # archived track — otherwise local_to_global grows unboundedly
+            # over a long-running deployment (unlike global_tracks/
+            # embedding_cache, which are properly bounded/archived).
+            for camera_id, cam_track in track.camera_tracks.items():
+                local_id = cam_track.local_track_id
+                if self.local_to_global.get(camera_id, {}).get(local_id) == global_id:
+                    del self.local_to_global[camera_id][local_id]
+
         return len(inactive_tracks)
 
+    @_synchronized
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics for monitoring."""
         return {
@@ -1477,6 +1531,7 @@ class GlobalTrackManager:
     # Phase 0 Compatibility Methods
     # =========================================================================
 
+    @_synchronized
     def on_track_created(
         self,
         camera_id: int,
@@ -1506,6 +1561,7 @@ class GlobalTrackManager:
             f"frame={frame_num}"
         )
 
+    @_synchronized
     def on_face_detected(
         self,
         camera_id: int,
@@ -1524,6 +1580,7 @@ class GlobalTrackManager:
 
         self.total_faces_detected += 1
 
+    @_synchronized
     def on_face_not_visible(
         self,
         camera_id: int,
@@ -1539,6 +1596,7 @@ class GlobalTrackManager:
 
         self.total_faces_not_visible += 1
 
+    @_synchronized
     def on_track_update(
         self,
         camera_id: int,
@@ -1552,6 +1610,7 @@ class GlobalTrackManager:
         if track_key in self.track_stats:
             self.track_stats[track_key]['total_frames'] += 1
 
+    @_synchronized
     def get_baseline_metrics(self) -> Dict[str, Any]:
         """Get baseline metrics for analysis."""
         if not self.enabled:
@@ -1609,10 +1668,12 @@ class GlobalTrackManager:
     # Utility Methods
     # =========================================================================
 
+    @_synchronized
     def get_global_id(self, camera_id: int, local_track_id: int) -> Optional[int]:
         """Get global ID for a local track."""
         return self.local_to_global[camera_id].get(local_track_id)
 
+    @_synchronized
     def find_global_track_by_identity(self, identity: str) -> Optional[GlobalTrack]:
         """
         Find an active global track by face identity.
@@ -1631,6 +1692,7 @@ class GlobalTrackManager:
                 return track
         return None
 
+    @_synchronized
     def update_global_track_identity(
         self,
         global_id: int,
@@ -1655,6 +1717,7 @@ class GlobalTrackManager:
         logger.debug(f"GLOBAL_IDENTITY | global_id={global_id} identity='{identity}' locked={locked}")
         return True
 
+    @_synchronized
     def reassign_local_track(
         self,
         camera_id: int,
@@ -1690,6 +1753,14 @@ class GlobalTrackManager:
         if target_track is None:
             logger.warning(f"Cannot reassign: target global track {new_global_id} not found")
             return False
+
+        # Mark the old (abandoned) track's presence on this camera inactive,
+        # otherwise it keeps looking "active" here indefinitely — which can
+        # both trigger false IMPOSSIBLE_MERGE conflicts against it and keep
+        # blocking this camera as a re-match candidate in _get_candidate_tracks.
+        old_track = self.global_tracks.get(old_global_id)
+        if old_track is not None:
+            old_track.mark_camera_inactive(camera_id)
 
         # Update mapping
         self.local_to_global[camera_id][local_track_id] = new_global_id

@@ -11,6 +11,7 @@ Endpoints:
     GET /api/dates          — list of dates that have data
 """
 
+import hmac
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,6 +19,8 @@ from typing import List, Optional
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
+
+from config.settings import settings
 
 # ── Embedded HTML dashboard ───────────────────────────────────────────────────
 _DASHBOARD_HTML = r"""<!DOCTYPE html>
@@ -364,9 +367,27 @@ class _Handler(BaseHTTPRequestHandler):
     _store = None
     _camera_indices: List[int] = []
 
+    def _authorized(self, parsed) -> bool:
+        """Check the ?token= query param against SO_METRICS_AUTH_TOKEN.
+
+        Open by default (empty token = no auth configured) to preserve prior
+        behavior for deployments that haven't set one — but this dashboard
+        exposes per-camera operational telemetry with zero auth otherwise,
+        to anything that can route to this port.
+        """
+        expected = settings.metrics_auth_token
+        if not expected:
+            return True
+        provided = (parse_qs(parsed.query).get("token") or [""])[0]
+        return hmac.compare_digest(provided, expected)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        if not self._authorized(parsed):
+            self._err(401, "Unauthorized")
+            return
 
         if path in ("/", "/index.html"):
             self._ok("text/html; charset=utf-8", _DASHBOARD_HTML.encode())

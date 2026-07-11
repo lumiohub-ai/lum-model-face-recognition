@@ -28,7 +28,15 @@ class RedisClient:
             host=settings.redis_host,
             port=settings.redis_port,
             db=settings.redis_db,
-            decode_responses=True
+            decode_responses=True,
+            # Without these, a half-dead connection (Redis overloaded, network
+            # black-holing packets) makes publish()/ping() block on OS-level
+            # TCP retransmission — which can be minutes, not seconds — and
+            # publish() is called synchronously from the per-camera frame
+            # processing loop, so that would stall video/tracking for that
+            # camera the whole time.
+            socket_timeout=5,
+            socket_connect_timeout=5,
         )
         logger.info(f"Redis client initialized: {settings.redis_host}:{settings.redis_port}")
 

@@ -165,9 +165,8 @@ class MetricsCollector:
 
         Returns a dict with keys: timestamp, cpu_percent, memory, gpu, cameras, inference.
         """
-        indices = camera_indices if camera_indices is not None else list(self._frame_ts.keys())
-
         with self._lock:
+            indices = camera_indices if camera_indices is not None else list(self._frame_ts.keys())
             yolo_avg = sum(self._yolo_ms) / len(self._yolo_ms) if self._yolo_ms else 0.0
             arcface_avg = sum(self._arcface_ms) / len(self._arcface_ms) if self._arcface_ms else 0.0
 

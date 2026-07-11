@@ -17,10 +17,15 @@ IMPORTANT: Tasks use BaseTaskWithRetry for:
 - Automatic DLQ on permanent failures
 """
 
-from typing import Dict, Any, Optional
-from workers.celery_app import celery
+import time
+import uuid
+from contextlib import contextmanager
+from typing import Any, Dict, Optional
+
 from celery.exceptions import SoftTimeLimitExceeded
 from loguru import logger
+
+from workers.celery_app import celery
 
 # Import from task_base to avoid circular imports
 from .task_base import (
@@ -33,11 +38,76 @@ from .task_base import (
     ModelInferenceError,
 )
 
+# Cache the (multi-second-to-load, GPU-resident) FaceDetector per worker
+# process instead of constructing a fresh one on every single task
+# invocation — Celery worker processes are long-lived, so this is safe to
+# reuse across many task calls within the same process.
+_detector_cache: Dict[tuple, Any] = {}
+
+
+def _get_cached_detector(gpu_id: int = 0, padding_percent: float = 20.0):
+    key = (gpu_id, padding_percent)
+    if key not in _detector_cache:
+        from domain.face_detection import FaceDetector
+        _detector_cache[key] = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
+    return _detector_cache[key]
+
 
 def get_embedding_sync_service(client_slug: str):
-    """Lazy import to avoid circular imports and ensure proper initialization."""
+    """Lazy import to avoid circular imports and ensure proper initialization.
+
+    Reuses the process-cached FaceDetector (see _get_cached_detector) rather
+    than letting EmbeddingSyncService.__init__ build a brand new one.
+    """
     from infrastructure.storage import EmbeddingSyncService
-    return EmbeddingSyncService(client_slug)
+    return EmbeddingSyncService(client_slug, detector=_get_cached_detector())
+
+
+@contextmanager
+def _user_embedding_lock(client_slug: str, user_id: Any, timeout: float = 30.0):
+    """Distributed lock (Redis SET NX EX) serializing add/update/delete
+    embedding tasks for the same user.
+
+    Celery's default (prefork) pool runs tasks in separate OS processes, so
+    an in-process threading.Lock would NOT prevent two different worker
+    processes from handling, say, an UpdateEmbedding and a DeleteEmbedding
+    for the same user concurrently — which can resurrect a just-deleted
+    user's embeddings if the update's write lands after the delete.
+
+    Yields True if the lock was acquired, False otherwise. Fails open (logs
+    and yields True) on a Redis error, since blocking all embedding writes
+    on Redis availability would be worse than the rare race this guards
+    against.
+    """
+    from messaging.redis_client import RedisClient
+
+    key = f"embedding_lock:{client_slug}:{user_id}"
+    token = str(uuid.uuid4())
+    acquired = False
+    client = None
+    try:
+        client = RedisClient.get_instance().client
+        # Brief wait-and-retry rather than failing immediately, since the
+        # holder is expected to release within a normal task's runtime.
+        for _ in range(int(timeout)):
+            if client.set(key, token, nx=True, ex=int(timeout)):
+                acquired = True
+                break
+            time.sleep(1)
+    except Exception as e:
+        logger.warning(f"[embedding lock] Redis error acquiring lock for {key}, proceeding without it: {e}")
+        yield True
+        return
+
+    try:
+        yield acquired
+    finally:
+        if acquired and client is not None:
+            try:
+                if client.get(key) == token:
+                    client.delete(key)
+            except Exception as e:
+                logger.warning(f"[embedding lock] Failed to release lock {key}: {e}")
 
 
 def validate_embedding_request(client_slug: str, user_data: Dict[str, Any]) -> None:
@@ -73,24 +143,40 @@ def get_event_publisher(client_slug: str):
 
 
 def notify_embedding_reload(client_slug: str, user_id: int, action: str):
-    """Notify camera engine to reload embeddings via Redis Pub/Sub."""
-    try:
-        from messaging.redis_client import RedisClient
-        from messaging.channels import INTERNAL_CHANNELS
-        import json
+    """Notify camera engine to reload embeddings via Redis Pub/Sub.
 
-        message = {
-            'client_slug': client_slug,
-            'user_id': user_id,
-            'action': action,
-        }
-        RedisClient.get_instance().client.publish(
-            INTERNAL_CHANNELS['EMBEDDING_RELOAD'],
-            json.dumps(message)
-        )
-        logger.info(f"[Celery] Notified camera engine to reload embeddings for {client_slug}")
-    except Exception as e:
-        logger.warning(f"[Celery] Failed to notify embedding reload: {e}")
+    Best-effort: the embedding write itself already committed successfully
+    by the time this runs, so a failure here doesn't undo that — it just
+    means the live camera engine's in-memory cache won't refresh until the
+    next unrelated reload event. One retry after a short delay covers the
+    common transient-Redis-blip case; a persistent failure is still just
+    logged rather than failing the whole (already-successful) task.
+    """
+    from messaging.redis_client import RedisClient
+    from messaging.channels import INTERNAL_CHANNELS
+    import json
+
+    message = json.dumps({
+        'client_slug': client_slug,
+        'user_id': user_id,
+        'action': action,
+    })
+
+    for attempt in range(2):
+        try:
+            RedisClient.get_instance().client.publish(
+                INTERNAL_CHANNELS['EMBEDDING_RELOAD'], message
+            )
+            logger.info(f"[Celery] Notified camera engine to reload embeddings for {client_slug}")
+            return
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(f"[Celery] Embedding reload notify failed, retrying once: {e}")
+                time.sleep(1)
+            else:
+                logger.warning(
+                    f"[Celery] Failed to notify embedding reload after retry: {e}"
+                )
 
 
 @celery.task(
@@ -131,12 +217,20 @@ def process_add_user(self, command_id: str, client_slug: str, user_data: Dict[st
         # STEP 1: Validate inputs (non-retryable errors)
         validate_embedding_request(client_slug, user_data)
 
-        # STEP 2: Get embedding sync service
-        service = get_embedding_sync_service(client_slug)
+        # Serialize against a concurrent DeleteEmbedding for the same user —
+        # see _user_embedding_lock.
+        with _user_embedding_lock(client_slug, user_id) as locked:
+            if not locked:
+                raise RetryableError(
+                    f"Could not acquire embedding lock for user {user_id}, retrying"
+                )
 
-        # STEP 3: Process user embeddings
-        result = service.handle_user_created(user_data)
-        embeddings_created = result.get('embeddings_added', 0)
+            # STEP 2: Get embedding sync service
+            service = get_embedding_sync_service(client_slug)
+
+            # STEP 3: Process user embeddings
+            result = service.handle_user_created(user_data)
+            embeddings_created = result.get('embeddings_added', 0)
 
         logger.info(f"[Celery] CreateEmbedding completed: {embeddings_created} embeddings task_id={task_id}")
 
@@ -229,16 +323,25 @@ def process_update_user(self, command_id: str, client_slug: str, user_data: Dict
         # Validate inputs
         validate_embedding_request(client_slug, user_data)
 
-        # Get embedding sync service
-        service = get_embedding_sync_service(client_slug)
+        # Serialize against a concurrent DeleteEmbedding for the same user
+        # (see _user_embedding_lock) — otherwise a delete landing between
+        # this delete-old/add-new pair can be silently undone.
+        with _user_embedding_lock(client_slug, user_id) as locked:
+            if not locked:
+                raise RetryableError(
+                    f"Could not acquire embedding lock for user {user_id}, retrying"
+                )
 
-        # Delete old embeddings first
-        if user_id:
-            service.store.delete_all_for_user(str(user_id))
+            # Get embedding sync service
+            service = get_embedding_sync_service(client_slug)
 
-        # Process new embeddings
-        result = service.handle_user_created(user_data)
-        embeddings_created = result.get('embeddings_added', 0)
+            # Delete old embeddings first
+            if user_id:
+                service.store.delete_all_for_user(str(user_id))
+
+            # Process new embeddings
+            result = service.handle_user_created(user_data)
+            embeddings_created = result.get('embeddings_added', 0)
 
         logger.info(f"[Celery] UpdateEmbedding completed: {embeddings_created} embeddings task_id={task_id}")
 
@@ -313,11 +416,20 @@ def process_delete_user(self, command_id: str, client_slug: str, user_data: Dict
         if not user_id:
             raise ValidationError("user_id is required")
 
-        # Get embedding sync service
-        service = get_embedding_sync_service(client_slug)
+        # Serialize against a concurrent UpdateEmbedding for the same user —
+        # see _user_embedding_lock.
+        with _user_embedding_lock(client_slug, user_id) as locked:
+            if not locked:
+                raise RetryableError(
+                    f"Could not acquire embedding lock for user {user_id}, retrying"
+                )
 
-        # Delete all embeddings for user
-        deleted_count = service.store.delete_all_for_user(str(user_id))
+            # Delete only ever needs the pgvector store — go straight to it
+            # instead of get_embedding_sync_service(), which would load the
+            # (multi-second, GPU-resident) FaceDetector this task never uses.
+            from infrastructure.storage import PgVectorStore
+            store = PgVectorStore(client_slug)
+            deleted_count = store.delete_all_for_user(str(user_id))
 
         logger.info(f"[Celery] DeleteEmbedding completed: {deleted_count} embeddings deleted task_id={task_id}")
 

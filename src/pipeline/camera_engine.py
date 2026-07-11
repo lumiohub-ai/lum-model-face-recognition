@@ -98,7 +98,16 @@ class CameraEngine:
         self.camera_name = camera_config['camera_name']
         self.cam_type = camera_config['cam_type']  # IN or OUT
         self.stream_url = camera_config['stream_url']
-        self.application = camera_config.get('application', ['attendance'])
+        # Normalize to a list regardless of whether the DB/loader handed us a
+        # list (JSONB decoded natively), a JSON-array string, or a bare
+        # comma-separated/single string (e.g. a non-JSONB `application`
+        # column) — `"activity" in self.application` below must do a real
+        # membership test, not an accidental substring check on a raw string.
+        raw_application = camera_config.get('application') or ['attendance']
+        if isinstance(raw_application, str):
+            self.application = [a.strip() for a in raw_application.split(',') if a.strip()]
+        else:
+            self.application = list(raw_application)
         self.match_threshold = camera_config.get('match_threshold', 0.3)
         self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
         self.roi = camera_config.get('roi')
@@ -417,9 +426,14 @@ class CameraEngine:
                         )
             else:
                 voting = self.identity_manager.get_voting_status(track_id)
-                if voting and voting.get("top_candidate"):
-                    identity = voting["top_candidate"]
-                    identity_confidence = voting.get("top_avg_similarity", 0.0)
+                # get_voting_status() returns 'top_identity'/'consensus' (see
+                # identity.py, and camera_worker.py's correct usage of the
+                # same keys) — this previously read 'top_candidate'/
+                # 'top_avg_similarity', which never exist in that dict, so
+                # this tentative-identity branch never actually ran.
+                if voting and voting.get("top_identity"):
+                    identity = voting["top_identity"]
+                    identity_confidence = voting.get("consensus", 0.0)
 
             # Proof image crop for state manager
             proof_image = None
@@ -593,7 +607,11 @@ class CameraEngine:
                 )
             return {"face_detected": face_detected, "name": None, "similarity": 0.0}
 
-        if len(self.face_recognizer.db_embs) == 0:
+        best_idx, name, best_similarity = self.face_recognizer.identify_best_match(
+            np.array([embedding])
+        )
+
+        if best_idx is None:
             if self.global_track_manager:
                 self.global_track_manager.on_face_detected(
                     camera_id=self.camera_id,
@@ -611,13 +629,7 @@ class CameraEngine:
                 "face_image": face_image,
             }
 
-        similarities = self.face_recognizer.compute_similarities(
-            np.array([embedding])
-        )
-        best_idx, best_similarity = self.face_recognizer.get_best_match(similarities)
-
         if best_similarity >= self.match_threshold:
-            name = self.face_recognizer.db_names[best_idx]
             if self.global_track_manager:
                 self.global_track_manager.on_face_detected(
                     camera_id=self.camera_id,

@@ -12,7 +12,7 @@ Flow:
 """
 
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from workers.celery_app import celery
 from loguru import logger
 
@@ -22,6 +22,21 @@ def _parse_timestamp(iso_str: Optional[str]) -> datetime:
     if iso_str:
         return datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
     return datetime.utcnow()
+
+
+def _iso_z(dt: datetime) -> str:
+    """Format a datetime as ISO-8601 UTC with a trailing 'Z'.
+
+    dt may be naive (from datetime.utcnow(), the default in _parse_timestamp)
+    or timezone-aware (from parsing an explicit '...Z'/'+00:00' timestamp).
+    dt.isoformat() on an aware datetime already includes a UTC offset, so
+    naively appending 'Z' after it produced malformed strings like
+    "2026-01-01T00:00:00+00:00Z". Normalize to naive UTC first so the 'Z'
+    suffix is always correct.
+    """
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.isoformat() + 'Z'
 
 
 # =============================================================================
@@ -54,6 +69,10 @@ def task_record_attendance(
             timestamp=timestamp,
             status=status,
             proof_image_url=proof_image_url,
+            # Celery keeps the same task id across retry()/worker-lost
+            # redelivery, so this dedupes writes if the DB commit succeeded
+            # but the worker died before acking (task_acks_late).
+            external_id=self.request.id,
         )
         logger.info(f"[Celery] Attendance recorded: id={record_id} user={user_id} {status}")
 
@@ -65,7 +84,7 @@ def task_record_attendance(
             camera_id=camera_id,
             camera_name=camera_name,
             proof_image_url=proof_image_url,
-            recorded_at=timestamp.isoformat() + 'Z'
+            recorded_at=_iso_z(timestamp)
         )
 
         return {'status': 'success', 'record_id': record_id, 'user_id': user_id, 'attendance_status': status}
@@ -113,7 +132,7 @@ def task_save_unrecognized_face(
             camera_id=camera_id,
             camera_name=camera_name,
             image_url=image_url,
-            detected_at=timestamp.isoformat() + 'Z'
+            detected_at=_iso_z(timestamp)
         )
 
         return {'status': 'success', 'record_id': record_id, 'camera_id': camera_id}
@@ -154,6 +173,8 @@ def task_record_activity(
             timestamp=timestamp,
             proof_image_url=proof_image_url,
             confidence=confidence,
+            # See task_record_attendance for why this dedupes retries.
+            external_id=self.request.id,
         )
         logger.info(f"[Celery] Activity recorded: id={record_id} user={user_id} - {activity_type}")
 
@@ -165,7 +186,7 @@ def task_record_activity(
             camera_id=camera_id,
             confidence=confidence,
             proof_image_url=proof_image_url,
-            detected_at=timestamp.isoformat() + 'Z'
+            detected_at=_iso_z(timestamp)
         )
 
         return {'status': 'success', 'record_id': record_id, 'user_id': user_id, 'activity_type': activity_type}
@@ -212,7 +233,7 @@ def task_update_user_location(
             camera_id=camera_id,
             camera_name=camera_name,
             status=status,
-            updated_at=timestamp.isoformat() + 'Z'
+            updated_at=_iso_z(timestamp)
         )
 
         return {'status': 'success', 'record_id': record_id, 'user_name': user_name, 'camera_name': camera_name}

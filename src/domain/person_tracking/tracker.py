@@ -319,18 +319,29 @@ class PersonTracker:
 
                     tracked.append(tracked_det)
 
-                    # Update track data
+                    # Update track data. Only a real YOLO detection (det_idx
+                    # >= 0) may advance hits/reset age — a pure Kalman-predicted
+                    # continuation (det_idx == -1, no matching detection this
+                    # frame) must not let a track satisfy min_hits early, and
+                    # must not keep resetting age (that would fight
+                    # _age_tracks' increment-based removal below, since it
+                    # runs after this on every frame and would otherwise
+                    # never let age exceed 1 for a track that's never really
+                    # re-detected).
+                    is_detected = det_idx is not None and det_idx >= 0
                     if our_track_id not in self.active_tracks:
                         self.active_tracks[our_track_id] = {
                             'track_id': our_track_id,
                             'age': 0,
-                            'hits': 1,
+                            'hits': 1 if is_detected else 0,
                             'first_frame': self.frame_count,
                             'bbox': bbox
                         }
-                    else:
+                    elif is_detected:
                         self.active_tracks[our_track_id]['age'] = 0
                         self.active_tracks[our_track_id]['hits'] += 1
+                        self.active_tracks[our_track_id]['bbox'] = bbox
+                    else:
                         self.active_tracks[our_track_id]['bbox'] = bbox
 
                     # Phase 0: Update track frame counter

@@ -91,7 +91,23 @@ class EmbeddingSyncService:
                 logger.warning(f"⚠️  No face detected in: {original_url}")
                 return None
 
-            face = features[0]
+            if len(features) > 1:
+                # Multiple faces in an enrollment photo (e.g. someone in the
+                # background) — picking features[0] (detector order, not
+                # meaningful) risked silently enrolling the wrong face with
+                # no warning. Assume the largest face is the intended
+                # subject (standard heuristic for headshot-style enrollment
+                # photos) and log so it's visible if that assumption is wrong.
+                logger.warning(
+                    f"⚠️  {len(features)} faces detected in {original_url}, "
+                    "using the largest one as the enrollment subject"
+                )
+
+            def _bbox_area(f: Dict) -> float:
+                x1, y1, x2, y2 = f['bbox'][:4]
+                return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+            face = max(features, key=_bbox_area)
             return {
                 'user_id': user_id,
                 'user_name': user_name,
@@ -148,7 +164,7 @@ class EmbeddingSyncService:
                         results['failed_images'].append(original_url)
                         continue
 
-                    self.store.add_embedding(
+                    inserted_id = self.store.add_embedding(
                         user_id=result['user_id'],
                         user_name=result['user_name'],
                         image_url=result['image_url'],
@@ -156,7 +172,14 @@ class EmbeddingSyncService:
                         external_id=result['external_id'],
                         metadata=result['metadata'],
                     )
-                    results['embeddings_added'] += 1
+                    # add_embedding is idempotent (ON CONFLICT DO NOTHING)
+                    # and returns None when the row already existed — only
+                    # count it if a row was actually inserted, otherwise a
+                    # retried/duplicate task run reports N embeddings added
+                    # to Backend a second time even though zero new rows
+                    # were written.
+                    if inserted_id is not None:
+                        results['embeddings_added'] += 1
 
                 except Exception as e:
                     logger.exception(f"❌ Error saving embedding for {original_url}: {e}")

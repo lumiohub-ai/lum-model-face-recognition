@@ -8,7 +8,6 @@ runtime position-streaming pipeline to project bbox foot points to floor coords.
 import json
 from typing import List, Optional, Tuple
 
-from loguru import logger
 from sqlalchemy import text
 
 from .db_config import DatabaseConfig
@@ -28,33 +27,40 @@ class HomographyRepository:
     ) -> Optional[Tuple[List[List[float]], int]]:
         """Return (matrix_3x3, map_id) for the given camera, or None if not calibrated.
 
-        Returns None when no row exists OR the row's homography_matrix is NULL.
+        Returns None ONLY when no row exists OR the row's homography_matrix is
+        NULL — a genuine "not calibrated" state that HomographyRegistry caches
+        as a (long-lived) negative result. Any other failure (DB connection
+        error, malformed map_id, etc.) raises instead of returning None, so a
+        transient DB error can't get permanently cached as "not calibrated"
+        and silently disable position streaming for a camera that's actually
+        fine.
         """
-        try:
-            with self._db.get_connection() as conn:
-                result = conn.execute(
-                    text(
-                        f'SELECT homography_matrix, map_id '
-                        f'FROM "{self.schema}".camera_map_positions '
-                        f'WHERE camera_id = :camera_id '
-                        f'AND homography_matrix IS NOT NULL '
-                        f'LIMIT 1'
-                    ),
-                    {"camera_id": camera_id},
-                )
-                row = result.fetchone()
-                if row is None:
-                    return None
-                matrix_raw, map_id = row[0], row[1]
-                matrix = (
-                    json.loads(matrix_raw)
-                    if isinstance(matrix_raw, str)
-                    else matrix_raw
-                )
-                return matrix, int(map_id)
-        except Exception as e:
-            logger.exception(
-                f"Failed to fetch homography for camera {camera_id} "
-                f"in schema {self.schema}: {e}"
+        with self._db.get_connection() as conn:
+            result = conn.execute(
+                text(
+                    f'SELECT homography_matrix, map_id '
+                    f'FROM "{self.schema}".camera_map_positions '
+                    f'WHERE camera_id = :camera_id '
+                    f'AND homography_matrix IS NOT NULL '
+                    f'LIMIT 1'
+                ),
+                {"camera_id": camera_id},
             )
-            return None
+            row = result.fetchone()
+            if row is None:
+                return None
+            matrix_raw, map_id = row[0], row[1]
+            matrix = (
+                json.loads(matrix_raw)
+                if isinstance(matrix_raw, str)
+                else matrix_raw
+            )
+            if map_id is None:
+                # Data-integrity bug (valid matrix, no map_id) — surface it
+                # rather than masking it as "not calibrated".
+                raise ValueError(
+                    f"camera_map_positions row for camera {camera_id} in "
+                    f"schema {self.schema} has a homography_matrix but a "
+                    f"NULL map_id"
+                )
+            return matrix, int(map_id)

@@ -108,7 +108,11 @@ class AsyncLogger:
     # ── Background workers ────────────────────────────────────────────────────
 
     def _db_worker(self) -> None:
-        while self._running:
+        # Keep draining after stop() clears _running until the queue is
+        # actually empty (bounded by stop()'s join timeout) — otherwise
+        # whatever was queued at shutdown (e.g. an end-of-day burst of
+        # attendance events) is silently discarded instead of drained.
+        while self._running or not self._db_queue.empty():
             try:
                 entry = self._db_queue.get(timeout=0.5)
             except queue.Empty:
@@ -119,7 +123,7 @@ class AsyncLogger:
                 logger.exception(f"AsyncLogger db_worker error: {e}")
 
     def _gcs_worker(self) -> None:
-        while self._running:
+        while self._running or not self._gcs_queue.empty():
             try:
                 data = self._gcs_queue.get(timeout=0.5)
             except queue.Empty:
@@ -130,7 +134,7 @@ class AsyncLogger:
                 logger.exception(f"AsyncLogger gcs_worker error: {e}")
 
     def _redis_worker(self) -> None:
-        while self._running:
+        while self._running or not self._redis_queue.empty():
             try:
                 event = self._redis_queue.get(timeout=0.5)
             except queue.Empty:

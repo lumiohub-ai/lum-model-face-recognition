@@ -49,44 +49,51 @@ class DatabaseConfig:
         Raises:
             ValueError: If required environment variables are not set
         """
-        # Prevent re-initialization
-        if self._initialized:
-            return
+        # Prevent re-initialization. Locked (double-checked, matching
+        # __new__'s pattern) because two threads racing to construct the
+        # first DatabaseConfig() both pass __new__'s check and reach here
+        # concurrently — without this lock both would build a full
+        # connection pool and the first one's engine gets silently
+        # orphaned/never disposed, exactly what this class's docstring says
+        # it exists to prevent.
+        with self._lock:
+            if self._initialized:
+                return
 
-        self.host = settings.postgres_host
-        self.port = settings.postgres_port
-        self.user = settings.postgres_user
+            self.host = settings.postgres_host
+            self.port = settings.postgres_port
+            self.user = settings.postgres_user
 
-        # SECURITY: Require password to be explicitly set (no default)
-        self.password = settings.postgres_password
-        if not self.password:
-            raise ValueError(
-                "SO_POSTGRES_PASSWORD environment variable is required. "
-                "Please set a secure password in your environment."
+            # SECURITY: Require password to be explicitly set (no default)
+            self.password = settings.postgres_password
+            if not self.password:
+                raise ValueError(
+                    "SO_POSTGRES_PASSWORD environment variable is required. "
+                    "Please set a secure password in your environment."
+                )
+
+            self.database = settings.postgres_db
+
+            # Build connection string
+            self.connection_string = (
+                f"postgresql://{self.user}:{self.password}@"
+                f"{self.host}:{self.port}/{self.database}"
             )
 
-        self.database = settings.postgres_db
+            # Create engine with connection pooling
+            self.engine = create_engine(
+                self.connection_string,
+                poolclass=QueuePool,
+                pool_size=5,
+                max_overflow=10,
+                pool_pre_ping=True,  # Verify connections before use
+                pool_recycle=3600,   # Recycle connections after 1 hour
+            )
 
-        # Build connection string
-        self.connection_string = (
-            f"postgresql://{self.user}:{self.password}@"
-            f"{self.host}:{self.port}/{self.database}"
-        )
+            # SECURITY: Log connection info WITHOUT password
+            logger.info(f"✅ Database connection pool initialized: {self.user}@{self.host}:{self.port}/{self.database}")
 
-        # Create engine with connection pooling
-        self.engine = create_engine(
-            self.connection_string,
-            poolclass=QueuePool,
-            pool_size=5,
-            max_overflow=10,
-            pool_pre_ping=True,  # Verify connections before use
-            pool_recycle=3600,   # Recycle connections after 1 hour
-        )
-
-        # SECURITY: Log connection info WITHOUT password
-        logger.info(f"✅ Database connection pool initialized: {self.user}@{self.host}:{self.port}/{self.database}")
-
-        self._initialized = True
+            self._initialized = True
 
     @classmethod
     def get_instance(cls) -> 'DatabaseConfig':
@@ -97,9 +104,10 @@ class DatabaseConfig:
         Returns:
             DatabaseConfig: The singleton instance
         """
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+        # __new__ + __init__ are both already correctly locked/idempotent,
+        # so just delegate rather than duplicating (and only partially
+        # replicating) that check here.
+        return cls()
 
     @property
     def safe_connection_string(self) -> str:
@@ -250,6 +258,12 @@ class DatabaseConfig:
         conn = self.engine.connect()
         try:
             yield conn
+        except Exception:
+            # Connection.close() below does implicitly roll back an open
+            # transaction, but doing it explicitly here documents the
+            # intent and doesn't depend on that implicit behavior.
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

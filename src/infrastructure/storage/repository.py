@@ -35,28 +35,31 @@ class Repository:
 
         Returns:
             List of users with id, full_name, image_urls
+
+        Raises:
+            Exception: on any DB failure. Callers must NOT treat a caught
+            exception here the same as "zero users" — this list is used to
+            decide which embeddings/users are stale and should be deleted,
+            so silently returning [] on a transient DB error would make
+            every real user look deleted and wipe their stored data.
         """
-        try:
-            with self.db.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    SELECT id, full_name, image_urls
-                    FROM {self.schema}.users
-                    ORDER BY full_name
-                """))
-                users = []
-                for row in result.fetchall():
-                    image_urls = row[2] or []
-                    user = {
-                        'id': row[0],
-                        'name': row[1],
-                        'full_name': row[1],
-                        'image_urls': image_urls
-                    }
-                    users.append(user)
-                return users
-        except Exception as e:
-            logger.exception(f"Failed to fetch users: {e}")
-            return []
+        with self.db.get_connection() as conn:
+            result = conn.execute(text(f"""
+                SELECT id, full_name, image_urls
+                FROM {self.schema}.users
+                ORDER BY full_name
+            """))
+            users = []
+            for row in result.fetchall():
+                image_urls = row[2] or []
+                user = {
+                    'id': row[0],
+                    'name': row[1],
+                    'full_name': row[1],
+                    'image_urls': image_urls
+                }
+                users.append(user)
+            return users
 
     def get_users_by_status(self, status: str) -> List[str]:
         """Get user names by their current attendance status.

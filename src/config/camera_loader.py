@@ -47,7 +47,11 @@ def load_cameras_from_db(
                 'cam_type': cam.get('camera_type', 'in').upper(),
                 'stream_url': cam.get('stream_url', ''),
                 'application': cam.get('application', application),
-                'match_threshold': float(cam.get('matching_threshold') or 0.3),
+                'match_threshold': (
+                    float(cam['matching_threshold'])
+                    if cam.get('matching_threshold') is not None
+                    else 0.3
+                ),
                 'roi': _parse_roi(cam.get('roi_points')),
                 'line_points': _parse_line_points(cam.get('virtual_line_points'))
             }

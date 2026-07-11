@@ -113,9 +113,16 @@ class IDSwitchCorrector:
         Returns:
             Cosine distance (0 = identical, 1 = opposite, 0.4 = similar threshold)
         """
-        # Normalize
-        emb1_norm = emb1 / np.linalg.norm(emb1)
-        emb2_norm = emb2 / np.linalg.norm(emb2)
+        # Normalize (guard zero-norm like get_average_embedding does above —
+        # a degenerate all-zero embedding, e.g. from a failed alignment crop,
+        # would otherwise produce a NaN distance that always compares False
+        # against embedding_threshold, silently reporting "consistent" and
+        # disabling ID-switch detection for that comparison instead of
+        # correctly reading as maximally dissimilar)
+        norm1 = np.linalg.norm(emb1)
+        norm2 = np.linalg.norm(emb2)
+        emb1_norm = emb1 / norm1 if norm1 > 0 else emb1
+        emb2_norm = emb2 / norm2 if norm2 > 0 else emb2
 
         # Cosine similarity: dot product of normalized vectors
         similarity = np.dot(emb1_norm, emb2_norm)

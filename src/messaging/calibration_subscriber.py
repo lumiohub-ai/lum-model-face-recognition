@@ -31,15 +31,22 @@ class CalibrationSubscriber(threading.Thread):
         retry_delay = 1
         channel = EVENT_CHANNELS["CALIBRATION"]
         while not self._stop.is_set():
+            pubsub = None
             try:
                 pubsub = RedisClient.get_instance().client.pubsub()
                 pubsub.subscribe(channel)
                 logger.debug(f"Subscribed to {channel} for homography invalidation")
                 retry_delay = 1
 
-                for message in pubsub.listen():
-                    if self._stop.is_set():
-                        return
+                # get_message(timeout=...) polls and returns None on timeout,
+                # unlike listen() which blocks indefinitely until a message
+                # arrives — that meant self._stop was only ever checked
+                # between messages, so stop() wasn't honored promptly (or at
+                # all) on a quiet channel.
+                while not self._stop.is_set():
+                    message = pubsub.get_message(timeout=1.0)
+                    if message is None:
+                        continue
                     if message.get("type") != "message":
                         continue
                     try:
@@ -77,3 +84,9 @@ class CalibrationSubscriber(threading.Thread):
                 )
                 time.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30)
+            finally:
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
