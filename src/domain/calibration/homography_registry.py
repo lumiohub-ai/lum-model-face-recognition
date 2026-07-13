@@ -71,6 +71,8 @@ class HomographyRegistry:
             return None
         matrix, map_id = result
         H = np.asarray(matrix, dtype=np.float64)
+        if H.size == 9 and H.shape != (3, 3):
+            H = H.reshape(3, 3)
         if H.shape != (3, 3):
             logger.warning(
                 f"Unexpected homography shape {H.shape} for ({client_slug}, "
