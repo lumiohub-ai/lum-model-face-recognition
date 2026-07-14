@@ -17,6 +17,7 @@ import numpy as np
 from loguru import logger
 
 # Face recognition components
+from domain.calibration.undistort import undistort_points
 from domain.face_detection import FaceDetector
 from domain.face_detection.recognizer import FaceRecognition
 
@@ -557,10 +558,10 @@ class CameraEngine:
         if self.homography_registry is None or not active_tracks:
             return
 
-        cached = self.homography_registry.get(self.client_slug, self.camera_id)
-        if cached is None:
+        proj = self.homography_registry.get(self.client_slug, self.camera_id)
+        if proj is None:
             return
-        H, map_id = cached
+        H, map_id = proj.H, proj.map_id
 
         now = time.monotonic()
         cooldown = 0.2  # 5 Hz
@@ -578,6 +579,8 @@ class CameraEngine:
             foot = np.array(
                 [[[(float(x1) + float(x2)) / 2.0, float(y2)]]], dtype=np.float64
             )
+            if proj.undistort:
+                foot = undistort_points(foot, proj.K, proj.D, proj.model)
             projected = cv2.perspectiveTransform(foot, H).reshape(2)
 
             user_id: Optional[int] = None

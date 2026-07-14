@@ -389,22 +389,41 @@ class SmartOfficeEngine:
             logger.exception(f"Failed to reload embeddings: {e}")
             return False
 
-    def capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
+    def capture_frame(
+        self,
+        camera_id: int,
+        command_id: str,
+        frame_index: int = 1,
+        undistort: bool = False,
+        camera_matrix: Optional[list] = None,
+        dist_coeffs: Optional[list] = None,
+        calibration_model: str = 'fisheye',
+    ) -> None:
         """Capture a single frame for camera calibration.
 
         Non-blocking — spawns a daemon thread so the main pipeline is never paused.
         Reads the latest frame already buffered by the RTSP background thread (no
-        new RTSP connection), uploads to GCS, then publishes a FrameCaptured event.
+        new RTSP connection), optionally undistorts it, uploads to GCS, then
+        publishes a FrameCaptured event.
         """
         threading.Thread(
             target=self._do_capture_frame,
-            args=(camera_id, command_id, frame_index),
+            args=(camera_id, command_id, frame_index, undistort, camera_matrix, dist_coeffs, calibration_model),
             daemon=True,
             name=f"capture-{camera_id}",
         ).start()
 
-    def _do_capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
-        """Background: grab latest frame → upload to GCS → save to DB → publish event."""
+    def _do_capture_frame(
+        self,
+        camera_id: int,
+        command_id: str,
+        frame_index: int = 1,
+        undistort: bool = False,
+        camera_matrix: Optional[list] = None,
+        dist_coeffs: Optional[list] = None,
+        calibration_model: str = 'fisheye',
+    ) -> None:
+        """Background: grab latest frame → optionally undistort → upload to GCS → save to DB → publish event."""
         from messaging.publisher import MDAPublisher
 
         publisher = MDAPublisher(self.client_slug)
@@ -428,6 +447,24 @@ class SmartOfficeEngine:
 
             h, w = frame.shape[:2]
 
+            undistorted_applied = False
+            if undistort:
+                if camera_matrix and dist_coeffs:
+                    try:
+                        from domain.calibration.undistort import undistort_image
+                        frame = undistort_image(frame, camera_matrix, dist_coeffs, calibration_model)
+                        undistorted_applied = True
+                    except Exception as e:
+                        logger.warning(
+                            f"capture_frame: undistort requested but failed for camera "
+                            f"{camera_id}, falling back to raw frame: {e}"
+                        )
+                else:
+                    logger.warning(
+                        f"capture_frame: undistort requested for camera {camera_id} but "
+                        f"camera_matrix/dist_coeffs missing; falling back to raw frame"
+                    )
+
             from infrastructure.storage.gcs import ImageFetcher
             image_url = ImageFetcher().upload_image(
                 frame,
@@ -450,9 +487,17 @@ class SmartOfficeEngine:
                 command_id=command_id,
                 camera_id=camera_id,
                 image_url=image_url,
-                metadata={'width': w, 'height': h, 'source': 'OpenCV'},
+                metadata={
+                    'width': w,
+                    'height': h,
+                    'source': 'OpenCV',
+                    'undistorted': undistorted_applied,
+                    'calibration_model': calibration_model,
+                },
             )
-            logger.info(f"Frame captured: camera={camera_id}, command={command_id}")
+            logger.info(
+                f"Frame captured: camera={camera_id}, command={command_id}, undistorted={undistorted_applied}"
+            )
 
         except Exception as e:
             logger.exception(f"capture_frame failed for camera {camera_id}: {e}")

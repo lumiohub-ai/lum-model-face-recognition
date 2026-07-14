@@ -18,7 +18,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
 
-from domain.calibration.homography_registry import HomographyRegistry  # noqa: E402
+from domain.calibration.homography_registry import (  # noqa: E402
+    CameraProjection,
+    HomographyRegistry,
+)
 
 
 def _bbox_foot(bbox):
@@ -63,10 +66,12 @@ class StubIdentityManager:
         return self._locked.get(track_id)
 
 
-def make_engine(H, map_id, locked_for=None, name_to_id=None):
+def make_engine(H, map_id, locked_for=None, name_to_id=None, undistort=False, K=None, D=None, model="fisheye"):
     """Build a minimal object with the attributes emit_positions touches."""
     registry = HomographyRegistry()
-    registry._cache[("test-slug", 7)] = (H, map_id)
+    registry._cache[("test-slug", 7)] = CameraProjection(
+        H=H, map_id=map_id, undistort=undistort, K=K, D=D, model=model
+    )
 
     engine = types.SimpleNamespace()
     engine.client_slug = "test-slug"
@@ -153,6 +158,42 @@ class RecognizedIdentityTests(unittest.TestCase):
         evt = engine._publisher.events[0]
         self.assertEqual(evt["user_id"], 42)
         self.assertEqual(evt["user_name"], "Aziza K.")
+
+
+class UndistortedProjectionTests(unittest.TestCase):
+    def test_undistorts_foot_point_before_projecting_when_flagged(self):
+        # Identity H so the projected output IS the undistorted foot point —
+        # isolates whether undistortion actually ran before perspectiveTransform.
+        K = np.array([[400.0, 0.0, 320.0], [0.0, 400.0, 240.0], [0.0, 0.0, 1.0]])
+        D = np.array([-0.15, 0.02, -0.001, 0.0002])
+        H = np.eye(3, dtype=np.float64)
+
+        engine = make_engine(H, map_id=1, undistort=True, K=K, D=D, model="fisheye")
+        bbox = [80.0, 40.0, 160.0, 440.0]  # foot = (120, 440), off-center
+        engine.emit_positions([{"track_id": 1, "bbox": bbox}])
+
+        evt = engine._publisher.events[0]
+        expected = _project_undistort(K, D, (120.0, 440.0))
+        self.assertAlmostEqual(evt["x"], expected[0], places=3)
+        self.assertAlmostEqual(evt["y"], expected[1], places=3)
+        # Distortion at this off-center point is nonzero, so undistortion must have moved it.
+        self.assertNotAlmostEqual(evt["x"], 120.0, places=1)
+
+    def test_raw_projection_unaffected_when_not_flagged(self):
+        H = np.eye(3, dtype=np.float64)
+        engine = make_engine(H, map_id=1, undistort=False)
+        bbox = [300.0, 100.0, 340.0, 260.0]
+        engine.emit_positions([{"track_id": 1, "bbox": bbox}])
+        evt = engine._publisher.events[0]
+        self.assertAlmostEqual(evt["x"], 320.0, places=9)
+        self.assertAlmostEqual(evt["y"], 260.0, places=9)
+
+
+def _project_undistort(K, D, pt):
+    from domain.calibration.undistort import undistort_points
+
+    arr = np.array([[[pt[0], pt[1]]]], dtype=np.float64)
+    return undistort_points(arr, K, D, "fisheye").reshape(2).tolist()
 
 
 class MissingHomographyTests(unittest.TestCase):

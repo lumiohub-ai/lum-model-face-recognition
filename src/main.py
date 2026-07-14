@@ -224,9 +224,21 @@ class MDAManager:
         elif command_type == 'CaptureFrame':
             command_id = payload.get('command_id')
             frame_index = int(payload.get('frame_index', 1))
-            logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}, frame_index={frame_index}")
+            undistort = bool(payload.get('undistort', False))
+            camera_matrix = payload.get('camera_matrix')
+            dist_coeffs = payload.get('dist_coeffs')
+            calibration_model = payload.get('calibration_model', 'fisheye')
+            logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}, frame_index={frame_index}, undistort={undistort}")
             if self.engine:
-                self.engine.capture_frame(camera_id, command_id, frame_index)
+                self.engine.capture_frame(
+                    camera_id,
+                    command_id,
+                    frame_index,
+                    undistort=undistort,
+                    camera_matrix=camera_matrix,
+                    dist_coeffs=dist_coeffs,
+                    calibration_model=calibration_model,
+                )
             else:
                 logger.warning("Engine not available for frame capture")
 
@@ -250,6 +262,22 @@ class MDAManager:
                 )
             else:
                 logger.warning("Engine not available for test calibration")
+
+        elif command_type == 'CameraCalibrationSaved':
+            # Pure invalidation signal, published the moment lens intrinsics are
+            # persisted (Save on the Lens Calibration tab, including Recalibrate
+            # on a camera that already has a homography). Carries no intrinsics,
+            # so it can't itself go stale — it just forces the next emit_positions
+            # to reload fresh K/D + H together from the DB. Without this, a
+            # Recalibrate would silently undistort with stale K/D while H stays
+            # fit under the new ones. See docs/calibration-plan.md §5.
+            logger.info(f"CameraCalibrationSaved for camera {camera_id}, client {client_slug}")
+            if camera_id is None or not client_slug:
+                logger.warning(f"CameraCalibrationSaved missing camera_id/client_slug: {payload}")
+            elif self.engine and self.engine.homography_registry:
+                self.engine.homography_registry.invalidate(client_slug, camera_id)
+            else:
+                logger.warning("Engine/homography_registry not available for CameraCalibrationSaved")
 
         elif command_type == 'ComputeHomography':
             command_id = payload.get('command_id')
