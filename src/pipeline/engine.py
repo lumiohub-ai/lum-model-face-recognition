@@ -261,12 +261,10 @@ class SmartOfficeEngine:
 
         pipeline_cfg = self.config.get("pipeline", {})
         metrics_interval: float = float(pipeline_cfg.get("metrics_interval", 30))
-        heartbeat_interval: float = float(pipeline_cfg.get("heartbeat_interval", 15))
 
         last_validation_time = time.time()
         validation_interval = 30.0
         last_metrics_time = time.time()
-        last_heartbeat_time = time.time()
 
         try:
             while self._running:
@@ -284,11 +282,8 @@ class SmartOfficeEngine:
                 if self._metrics_enabled and current_time - last_metrics_time >= metrics_interval:
                     self._report_metrics()
                     last_metrics_time = current_time
-
-                # Periodic camera heartbeat (stream health → backend)
-                if current_time - last_heartbeat_time >= heartbeat_interval:
-                    self._publish_camera_heartbeats()
-                    last_heartbeat_time = current_time
+                # NOTE: per-camera stream-health heartbeats are published by the
+                # Edge MediaMTX now (LSO-26), not the AI service.
 
         except Exception as e:
             logger.exception(f"SmartOfficeEngine error: {e}")
@@ -721,41 +716,6 @@ class SmartOfficeEngine:
             )
         except Exception as e:
             logger.debug(f"Metrics publish failed: {e}")
-
-    def _publish_camera_heartbeats(self) -> None:
-        """Publish per-camera stream health to Backend via MDA."""
-        if not self.camera_workers:
-            return
-
-        try:
-            from messaging.publisher import MDAPublisher
-
-            publisher = MDAPublisher(self.client_slug)
-            max_len = min(
-                len(self.camera_workers),
-                len(self.camera_configs),
-                len(self.stream_manager.streams),
-            )
-            for idx in range(max_len):
-                config = self.camera_configs[idx]
-                camera_id = config.get("camera_id")
-                if camera_id is None:
-                    continue
-
-                stream = self.stream_manager.streams[idx]
-                health = stream.get_health()
-                fps = self.metrics.get_fps(idx) if self.metrics else 0.0
-
-                publisher.publish_camera_heartbeat(
-                    camera_id=camera_id,
-                    camera_name=config.get("camera_name"),
-                    state=health["state"],
-                    last_frame_at=health.get("last_frame_at"),
-                    fps=round(fps, 2),
-                    last_error=health.get("last_error"),
-                )
-        except Exception as e:
-            logger.debug(f"Camera heartbeat publish failed: {e}")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

@@ -495,30 +495,3 @@ class MDAPublisher:
         logger.warning(f"[Events] SystemAlert: {alert_type} — {message}")
         self.redis.publish(EVENT_CHANNELS['METRICS'], event)
 
-    def publish_camera_heartbeat(
-        self,
-        camera_id: int,
-        camera_name: Optional[str],
-        state: str,
-        last_frame_at: Optional[str] = None,
-        fps: Optional[float] = None,
-        last_error: Optional[str] = None,
-    ) -> bool:
-        """Publish periodic camera stream health to Backend."""
-        event = {
-            'event_id': self._generate_message_id(),
-            'event_type': EVENT_TYPES['CAMERA_HEARTBEAT'],
-            'timestamp': self._get_timestamp(),
-            'client_slug': self.client_slug,
-            'camera_id': camera_id,
-            'camera_name': camera_name,
-            'state': state,
-            'last_frame_at': last_frame_at,
-            'fps': fps,
-            'last_error': last_error,
-        }
-        logger.debug(
-            f"[Events] CameraHeartbeat: camera {camera_id} ({camera_name}) state={state} fps={fps}"
-        )
-        return self.redis.publish(EVENT_CHANNELS['CAMERA'], event)
-
