@@ -1,0 +1,6 @@
+[submodule "modules/yolo_tracking"]
+	path = modules/yolo_tracking
+	url = https://github.com/humblebeeintel/yolo_tracking
+[submodule "docs/lumiohub-docs"]
+	path = docs/lumiohub-docs
+	url = https://github.com/lumiohub-ai/lumiohub-docs.git

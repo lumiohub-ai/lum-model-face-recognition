@@ -1,0 +1,36 @@
+# Core
+opencv-python-headless~=4.12.0.88
+
+# Person Tracking (YOLOv8/YOLO26)
+ultralytics>=8.3.60
+# scipy>=1.10.0  # Removed: comes with ultralytics
+# pillow~=10.4.0  # Removed: comes with ultralytics
+# PyYAML~=6.0.2  # Removed: comes with ultralytics
+requests~=2.32.3
+# matplotlib~=3.10.0  # Removed: comes with ultralytics
+loguru~=0.7.3
+psutil~=6.1.1
+nvidia-ml-py~=12.560.30  # GPU monitoring via pynvml (nvmlDeviceGetUtilizationRates)
+gdown~=5.2.0
+lap~=0.5.12
+filterpy~=1.4.5
+onnxruntime-gpu~=1.21.0
+dotenv~=0.9.9
+
+# pgvector Database dependencies
+psycopg2-binary~=2.9.9
+sqlalchemy~=2.0.23
+pgvector~=0.2.4
+
+# Redis for Pub/Sub (MDA)
+redis~=5.0.1
+
+# Celery for async task processing (MDA)
+celery~=5.4.0
+flower~=2.0.1
+
+# GCS image fetching
+google-cloud-storage~=2.14.0
+
+# Action Recognition (Ollama)
+ollama~=0.4.4  # Ollama Python client for LLM inference

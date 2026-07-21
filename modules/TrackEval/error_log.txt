@@ -1,0 +1,1499 @@
+MotChallenge2DBox
+/home/juma/code/StrongSORT/results/StrongSORT_Git/tmp
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 264, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=float
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+/home/juma/code/StrongSORT/results/detectorParams/SORT__input_2240__conf_.05
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 152, in _load_simple_text_file
+    fp = open(file)
+FileNotFoundError: [Errno 2] No such file or directory: '/home/juma/code/StrongSORT/results/detectorParams/SORT__input_2240__conf_.05/MOT17-04-FRCNN.txt'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 118, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 234, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 235, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File MOT17-04-FRCNN.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+Kitti2DBox
+0006.txt
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 152, in _load_simple_text_file
+    fp = open(file)
+NotADirectoryError: [Errno 20] Not a directory: '/home/juma/code/StrongSORT/results/scenarios/KITTI/StrongSORT__input_1280__conf_.25/0006.txt/data/0000.txt'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 192, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(file, time_col=0, id_col=1, remove_negative_ids=True,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File 0000.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+Kitti2DBox
+0006.txt
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 152, in _load_simple_text_file
+    fp = open(file)
+NotADirectoryError: [Errno 20] Not a directory: '/home/juma/code/StrongSORT/results/scenarios/KITTI/StrongSORT__input_1280__conf_.25/0006.txt/data/0000.txt'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 192, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(file, time_col=0, id_col=1, remove_negative_ids=True,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File 0000.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+Kitti2DBox
+SORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 194, in _load_simple_text_file
+    row[convert_key] = convert_value[row[convert_key].lower()]
+KeyError: '1149.40'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 204, in _load_simple_text_file
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: In file 0000.txt the following line cannot be read correctly: 
+ 2 1 1149.40 161.79 99.84 149.41 1 -1 -1 -1
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 191, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(file, time_col=0, id_col=1, remove_negative_ids=True,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File 0000.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+Kitti2DBox
+SORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 194, in _load_simple_text_file
+    row[convert_key] = convert_value[row[convert_key].lower()]
+KeyError: 'unknown'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 204, in _load_simple_text_file
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: In file 0000.txt the following line cannot be read correctly: 
+ 2 1 Unknown -1 -1 -10 1149.403835478063 161.7920003432248 1249.2488319900929 311.20588403995896 -1 -1 -1 -1000 -1000 -1000 -10 149.41388369673413
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 191, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(file, time_col=0, id_col=1, remove_negative_ids=True,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File 0000.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+PersonPath22
+DeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 152, in _load_simple_text_file
+    fp = open(file)
+FileNotFoundError: [Errno 2] No such file or directory: '/home/juma/code/StrongSORT/results/scenarios/PersonPath22/person_path_22-test/DeepSORT__input_1280__conf_.25/data/uid_vid_00019.mp4.txt'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/person_path_22.py", line 240, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File uid_vid_00019.mp4.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+MotChallenge2DBox
+InitialReID_iouDistance_0.1_maxCosineDistance_0.3_LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 228, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=float
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+InitialReID_iouDistance_0.1_maxCosineDistance_0.3_LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 222, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 403, in get_preprocessed_seq_data
+    to_remove_tracker = np.array([], np.int)
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+InitialReID_iouDistance_0.1_maxCosineDistance_0.3_LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 222, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 467, in get_preprocessed_seq_data
+    [t]].astype(np.int)
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+InitialReID_iouDistance_0.1_maxCosineDistance_0.3_LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 222, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 476, in get_preprocessed_seq_data
+    np.int)
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+InitialReID_iouDistance_0.1_maxCosineDistance_0.3_LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 224, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/metrics/hota.py", line 31, in eval_sequence
+    res[field] = np.zeros((len(self.array_labels)), dtype=float
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+InitialReID_iouDistance_0.1_maxCosineDistance_0.3_LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 224, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/metrics/identity.py", line 83, in eval_sequence
+    res['IDFN'] = fn_mat[match_rows, match_cols].sum().astype(np.int)
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+iouDistance_0.01_maxCosineDistance_0.5_LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 224, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/metrics/hota.py", line 40, in eval_sequence
+    np.ones((len(self.array_labels)), dtype=float
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+PersonPath22
+DeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/person_path_22.py", line 270, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=float
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+PersonPath22
+DeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/home/juma/code/StrongSORT/TrackEval/trackeval/datasets/person_path_22.py", line 322, in _load_raw_file
+    ignore_data[time_key], dtype=float
+  File "/home/juma/code/StrongSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+PersonPath22
+LiteSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 168, in _load_simple_text_file
+    timestep = str(int(float(row[time_col])))
+ValueError: could not convert string to float: 'version'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 204, in _load_simple_text_file
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: In file uid_vid_00008.mp4.txt the following line cannot be read correctly: 
+ version https://git-lfs.github.com/spec/v1
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 113, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 218, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/person_path_22.py", line 241, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File uid_vid_00008.mp4.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+PersonPath22
+layerconcat__cosdist_0.1__maxage_30
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 152, in _load_simple_text_file
+    fp = open(file)
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/LiteSORT/results/scenarios/PersonPath22/person_path_22-test/layerconcat__cosdist_0.1__maxage_30/data/uid_vid_00008.mp4.txt'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/person_path_22.py", line 245, in _load_raw_file
+    read_data, ignore_data = self._load_simple_text_file(
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 209, in _load_simple_text_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: File uid_vid_00008.mp4.txt cannot be read because it is either not present or invalidly formatted
+
+
+
+
+
+Kitti2DBox
+DeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 221, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=float
+  File "/media/juma/code/MOT/LiteSORT/myenv/lib/python3.10/site-packages/numpy/__init__.py", line 324, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+Kitti2DBox
+DeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 326, in get_preprocessed_seq_data
+    gt_class_mask = gt_class_mask.astype(np.bool)
+  File "/media/juma/code/MOT/LiteSORT/myenv/lib/python3.10/site-packages/numpy/__init__.py", line 324, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'bool'.
+`np.bool` was a deprecated alias for the builtin `bool`. To avoid this error in existing code, use `bool` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.bool_` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+Kitti2DBox
+DeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/juma/code/MOT/LiteSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 344, in get_preprocessed_seq_data
+    to_remove_matched = np.array([], np.int)
+  File "/media/juma/code/MOT/LiteSORT/myenv/lib/python3.10/site-packages/numpy/__init__.py", line 324, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+/workspace/LiteSORT/results
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 228, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=np.float)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+/workspace/LiteSORT/results
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 228, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=np.float)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+/workspace/LiteSORT/results
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 359, in get_preprocessed_seq_data
+    to_remove_tracker = np.array([], np.int)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+/workspace/LiteSORT/results
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 413, in get_preprocessed_seq_data
+    data['gt_ids'][t] = gt_id_map[data['gt_ids'][t]].astype(np.int)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+/workspace/LiteSORT/results
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 420, in get_preprocessed_seq_data
+    data['tracker_ids'][t] = tracker_id_map[data['tracker_ids'][t]].astype(np.int)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+PersonPath22
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/person_path_22.py", line 233, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=np.float)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+PersonPath22
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/person_path_22.py", line 279, in _load_raw_file
+    time_ignore = np.asarray(ignore_data[time_key], dtype=np.float)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+PersonPath22
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/person_path_22.py", line 369, in get_preprocessed_seq_data
+    to_remove_tracker = np.array([], np.int)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+ViratS
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 224, in _load_raw_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: Tracking data contains the following invalid timesteps in seq VIRAT_S_010002_05_000397_000420: 319, 
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+trackeval.utils.TrackEvalException: Tracking data contains the following invalid timesteps in seq VIRAT_S_010002_05_000397_000420: 319, 
+
+
+
+
+
+ViratS
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 93, in get_raw_seq_data
+    raw_tracker_data = self._load_raw_file(tracker, seq, is_gt=False)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 224, in _load_raw_file
+    raise TrackEvalException(
+trackeval.utils.TrackEvalException: Tracking data contains the following invalid timesteps in seq VIRAT_S_010005_04_000299_000323: 494, 
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+trackeval.utils.TrackEvalException: Tracking data contains the following invalid timesteps in seq VIRAT_S_010005_04_000299_000323: 494, 
+
+
+
+
+
+ViratS
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 334, in get_preprocessed_seq_data
+    distractor_classes = [self.class_name_to_class_id[x] for x in distractor_class_names]
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 334, in <listcomp>
+    distractor_classes = [self.class_name_to_class_id[x] for x in distractor_class_names]
+KeyError: 'static_person'
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+KeyError: 'static_person'
+
+
+
+
+
+ViratS
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 337, in get_preprocessed_seq_data
+    distractor_classes = [self.class_name_to_class_id[x] for x in distractor_class_names]
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 337, in <listcomp>
+    distractor_classes = [self.class_name_to_class_id[x] for x in distractor_class_names]
+KeyError: 'distractor'
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+KeyError: 'distractor'
+
+
+
+
+
+ViratS
+BoTSORT__input_1280__conf_.25
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 64, in wrap
+    return f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 338, in get_preprocessed_seq_data
+    distractor_classes = [self.class_name_to_class_id[x] for x in distractor_class_names]
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/virat_s.py", line 338, in <listcomp>
+    distractor_classes = [self.class_name_to_class_id[x] for x in distractor_class_names]
+KeyError: 'reflection'
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 106, in evaluate
+    results = pool.map(_eval_sequence, seq_list)
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 364, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+  File "/opt/conda/lib/python3.8/multiprocessing/pool.py", line 771, in get
+    raise self._value
+KeyError: 'reflection'
+
+
+
+
+
+Kitti2DBox
+OCSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 233, in eval_sequence
+    raw_data = dataset.get_raw_seq_data(tracker, seq)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/_base_dataset.py", line 92, in get_raw_seq_data
+    raw_gt_data = self._load_raw_file(tracker, seq, is_gt=True)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 193, in _load_raw_file
+    time_data = np.asarray(read_data[time_key], dtype=np.float)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+Kitti2DBox
+OCSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 291, in get_preprocessed_seq_data
+    gt_class_mask = gt_class_mask.astype(np.bool)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'bool'.
+`np.bool` was a deprecated alias for the builtin `bool`. To avoid this error in existing code, use `bool` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.bool_` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+Kitti2DBox
+OCSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/eval.py", line 237, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/workspace/LiteSORT/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/workspace/LiteSORT/TrackEval/trackeval/datasets/kitti_2d_box.py", line 307, in get_preprocessed_seq_data
+    to_remove_matched = np.array([], np.int)
+  File "/workspace/LiteSORT/myenv/lib/python3.8/site-packages/numpy/__init__.py", line 305, in __getattr__
+    raise AttributeError(__former_attrs__[attr])
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 122, in evaluate
+    with open(f"output/{dataset_name}/{tracker}/{seqname}.pkl", "wb") as f:
+FileNotFoundError: [Errno 2] No such file or directory: 'output/MotChallenge2DBox/LITEDeepSORT__input_1280__conf_.25/MOT20-01.pkl'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 123, in evaluate
+    conf_info = res_seq['pedestrian']['HOTA']['frame_trackid_confs']
+FileNotFoundError: [Errno 2] No such file or directory: 'output/MotChallenge2DBox/LITEDeepSORT__input_1280__conf_.25/MOT20-01.pkl'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/metrics/hota.py", line 116, in eval_sequence
+    _matched_track_ids = gt_ids_t[alpha_match_cols]
+IndexError: index 32 is out of bounds for axis 0 with size 32
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/metrics/hota.py", line 120, in eval_sequence
+    _matched_track_ids_with_rows = tracker_ids_t[alpha_match_rows]
+IndexError: index 21 is out of bounds for axis 0 with size 19
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    trackids = data['trackid'].unique()
+KeyError: 'trackid'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    trackids = data['tracker_ids'].unique()
+AttributeError: 'list' object has no attribute 'unique'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 249, in eval_sequence
+    trackids = np.array(data['tracker_ids']).unique()
+NameError: name 'np' is not defined
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 249, in eval_sequence
+    trackids = np.array(data['tracker_ids']).unique()
+ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (429,) + inhomogeneous part.
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 250, in eval_sequence
+    trackids = pd.DataFrame(data['tracker_ids'].unique())
+AttributeError: 'list' object has no attribute 'unique'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 250, in eval_sequence
+    trackids = pd.DataFrame(data['tracker_ids']).unique()
+  File "/media/hbai/data/code/LITE/myenv/lib/python3.10/site-packages/pandas/core/generic.py", line 6299, in __getattr__
+    return object.__getattribute__(self, name)
+AttributeError: 'DataFrame' object has no attribute 'unique'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 246, in eval_sequence
+    actual_tracks_id = raw_data['tracks_id']
+KeyError: 'tracks_id'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 249, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data, actual_tracks_id)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+TypeError: CLEAR.eval_sequence() takes 2 positional arguments but 3 were given
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 249, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data, actual_tracks_id)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+TypeError: CLEAR.eval_sequence() takes 2 positional arguments but 3 were given
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 249, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data, actual_tracks_id)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+TypeError: CLEAR.eval_sequence() takes 2 positional arguments but 3 were given
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 250, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+TypeError: HOTA.eval_sequence() missing 1 required positional argument: 'actual_track_ids'
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 247, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 385, in get_preprocessed_seq_data
+    actual_tracker_ids = defaultdict(list)
+NameError: name 'defaultdict' is not defined
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 247, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 434, in get_preprocessed_seq_data
+    actual_tracker_ids[t] = tracker_ids[match_cols]
+NameError: name 'actual_tracker_ids' is not defined
+
+
+
+
+
+MotChallenge2DBox
+LITEDeepSORT__input_1280__conf_.25
+Traceback (most recent call last):
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 117, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/eval.py", line 249, in eval_sequence
+    seq_res[cls][met_name] = metric.eval_sequence(data)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/media/hbai/data/code/LITE/TrackEval/trackeval/metrics/hota.py", line 86, in eval_sequence
+    for t, (gt_ids_t, tracker_ids_t, track_confs, ac_ids) in enumerate(zip(data['gt_ids'], data['tracker_ids'], data['tracker_confidences'], data['tracker_ids_original'])):
+KeyError: 'actual_tracks_id'
+
+
+
+
+
+MotChallenge2DBox
+alg5
+Traceback (most recent call last):
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 118, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 383, in get_preprocessed_seq_data
+    self._check_unique_ids(raw_data)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/_base_dataset.py", line 315, in _check_unique_ids
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: Tracker predicts the same ID more than once in a single timestep (seq: video11, frame: 3161, ids: 25)
+
+
+
+
+
+MotChallenge2DBox
+alg5
+Traceback (most recent call last):
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 118, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 383, in get_preprocessed_seq_data
+    self._check_unique_ids(raw_data)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/_base_dataset.py", line 315, in _check_unique_ids
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: Tracker predicts the same ID more than once in a single timestep (seq: video11, frame: 3162, ids: 25)
+
+
+
+
+
+MotChallenge2DBox
+alg1-ilhan
+Traceback (most recent call last):
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 118, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 383, in get_preprocessed_seq_data
+    self._check_unique_ids(raw_data)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/_base_dataset.py", line 326, in _check_unique_ids
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: Ground-truth has the same ID more than once in a single timestep (seq: videoa1-1, frame: 289, ids: 1)
+
+
+
+
+
+MotChallenge2DBox
+alg1-ilhan
+Traceback (most recent call last):
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 118, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 383, in get_preprocessed_seq_data
+    self._check_unique_ids(raw_data)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/_base_dataset.py", line 315, in _check_unique_ids
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: Tracker predicts the same ID more than once in a single timestep (seq: videoa1-3, frame: 1209, ids: 80)
+
+
+
+
+
+MotChallenge2DBox
+alg1-ilhan
+Traceback (most recent call last):
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 118, in evaluate
+    res[curr_seq] = eval_sequence(curr_seq, dataset, tracker, class_list, metrics_list,
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/eval.py", line 248, in eval_sequence
+    data = dataset.get_preprocessed_seq_data(raw_data, cls)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/_timing.py", line 17, in wrap
+    result = f(*args, **kw)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/mot_challenge_2d_box.py", line 383, in get_preprocessed_seq_data
+    self._check_unique_ids(raw_data)
+  File "/home/hbvision/mirsaid/smart-office/TrackEval/trackeval/datasets/_base_dataset.py", line 315, in _check_unique_ids
+    raise TrackEvalException(exc_str)
+trackeval.utils.TrackEvalException: Tracker predicts the same ID more than once in a single timestep (seq: videoa1-3, frame: 1210, ids: 80)
+
+
+
+
+

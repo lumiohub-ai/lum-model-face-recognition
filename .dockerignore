@@ -1,0 +1,101 @@
+# =============================================================================
+# Docker Build Context Exclusions
+# Smaller context = faster builds
+# =============================================================================
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python cache and build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+*.dist-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+env/
+venv/
+myenv/
+.venv/
+
+# Testing
+tests/
+pytest_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Notebooks (large)
+notebooks/
+
+# Data and media files (large)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.MP4
+*.avi
+*.mov
+*.mkv
+*.tif
+*.npz
+*.zip
+*.tar.gz
+*.pkl
+*.pt
+*.pth
+*.onnx
+
+# Logs and temp files
+*.log
+*.cache
+logs/
+tmp/
+temp/
+
+# Data directories
+data/
+volumes/
+
+# Model weights (download at runtime)
+weights/
+*.weights
+
+# Local config (use .env.example instead)
+.env
+.env.local
+.env.*.local
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+Makefile
+
+# Misc
+*.csv
+*.dat
+*.json
+!package.json
+!tsconfig.json

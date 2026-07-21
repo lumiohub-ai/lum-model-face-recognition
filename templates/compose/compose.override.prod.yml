@@ -1,0 +1,13 @@
+services:
+  ollama:
+    restart: unless-stopped
+
+  person-tracking:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
+
+  celery-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
