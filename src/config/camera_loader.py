@@ -1,20 +1,11 @@
 """Camera configuration loader from database."""
 
-import re
 from typing import List, Dict, Any, Optional, Tuple
 
 from loguru import logger
 
 from config.settings import settings
-
-
-def _mediamtx_path(camera_name: str) -> str:
-    """Slug a camera name to its MediaMTX path ('Vision_1' -> 'vision1').
-
-    Must match the convention used by the edge config, the frontend WHEP
-    resolver, and the heartbeat sidecar.
-    """
-    return re.sub(r"[^a-z0-9]", "", str(camera_name).lower())
+from config.camera_slug import mediamtx_path as _mediamtx_path
 
 
 def _resolve_stream_url(cam: Dict[str, Any]) -> str:
