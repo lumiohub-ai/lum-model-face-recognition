@@ -1,0 +1,37 @@
+# Custom BoT-SORT config for the static, fixed-mount cam1/cam2 setup in this
+# test script. Based on Ultralytics' packaged botsort.yaml defaults, with:
+#   - with_reid enabled, model: yolo26n-cls.pt as the embedder. Ultralytics'
+#     model: "auto" (reuse the detector's own pre-Detect-head features via a
+#     forward hook, no separate network) only works for a standard NMS-based
+#     Detect head -- yolo26 checkpoints are end2end models, which that path
+#     explicitly excludes (ultralytics/trackers/track.py on_predict_start),
+#     so "auto" silently falls back to loading this small classification
+#     network as the embedder anyway. Pinning it here instead of relying on
+#     the undocumented auto-fallback: same runtime behavior, but explicit
+#     and won't change silently if Ultralytics' fallback logic changes.
+#     This is separate from the OSNet embedder this script already runs for
+#     *cross-camera* matching in GlobalTrackManager -- this one only gives
+#     the local, same-camera tracker an appearance signal so it can hold an
+#     ID through brief occlusion instead of relying on motion/IoU alone.
+#   - gmc_method: none -- sparseOptFlow compensates for a moving camera;
+#     cam1/cam2 are static mounted cameras, so it was pure wasted per-frame
+#     compute with nothing to correct for.
+#   - track_buffer raised 30 -> 60 frames (~3s at ~20fps) -- this office
+#     scene has people frequently occluded behind desks/each other; a
+#     slightly longer local buffer avoids spurious new local-track churn for
+#     brief occlusions, before GlobalTrackManager's own (much longer,
+#     450-frame) cross-camera re-binding window ever needs to kick in.
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 60
+match_thresh: 0.8
+fuse_score: True
+
+gmc_method: none
+
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+with_reid: True
+model: yolo26n-cls.pt
