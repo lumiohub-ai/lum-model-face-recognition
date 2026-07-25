@@ -54,6 +54,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
+      - ./volumes/logs:/app/logs
       - ./credentials:/app/credentials
       - ./volumes/models/insightface:/root/.insightface
       - ./volumes/models/huggingface:/root/.cache/huggingface
