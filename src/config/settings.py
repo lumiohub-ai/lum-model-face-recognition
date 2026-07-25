@@ -53,6 +53,11 @@ class Settings:
     config_path = os.getenv("SMART_OFFICE_CONFIG", "")
     hostname = os.getenv("HOSTNAME", "unknown")
 
+    # Edge MediaMTX (LSO-27): when set, the AI reads every camera via the edge
+    # (rtsp://<base>/<slug(camera_name)>) instead of the DB stream_url — single
+    # pull per camera, no credentials in the AI. Empty = use the DB stream_url.
+    edge_rtsp_base = os.getenv("SO_EDGE_RTSP_BASE", "").strip().rstrip("/")
+
     # Ollama (action recognition)
     ollama_api_url = os.getenv("SO_OLLAMA_API_URL", "http://localhost:11434")
     ollama_model = os.getenv("SO_OLLAMA_MODEL", "gemma3:4b")
