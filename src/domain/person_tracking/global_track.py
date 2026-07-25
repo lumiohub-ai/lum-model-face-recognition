@@ -898,6 +898,8 @@ class GlobalTrackManager:
 
             # Extract features in batch
             with torch.no_grad():
+                ## Here we get the embeddings from the model. The model is expected to return a tensor of shape (batch_size, embedding_dim).
+                
                 embeddings = self._body_reid_model.forward(batch)
 
             # Convert to numpy

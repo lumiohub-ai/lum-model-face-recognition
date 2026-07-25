@@ -272,6 +272,7 @@ class ActionRecognizer:
             image_base64 = base64.b64encode(buffer).decode('utf-8')
 
             # Call Ollama API using shared client
+            ## Here we send the image to the Ollama API for inference. The model is expected to return a response containing the recognized action.
             response = self._ollama_client.generate(
                 model=self.model_name,
                 prompt=self.prompt_template,

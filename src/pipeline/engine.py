@@ -70,7 +70,7 @@ class SmartOfficeEngine:
         # Database repository
         self.repository = Repository(client_slug)
 
-        # Load camera configurations
+        # Here we load the camera configurations from the database using the provided client slug and applications.
         self.camera_configs = load_cameras_from_db(
             client_slug=client_slug,
             applications=self.applications,
