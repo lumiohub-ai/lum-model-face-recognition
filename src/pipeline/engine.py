@@ -28,7 +28,7 @@ from domain.face_detection import ModelFactory
 from config import load_cameras_from_db
 
 # Local
-from pipeline.camera_engine import CameraEngine, GlobalTrackIDGenerator
+from pipeline.camera_engine import CameraEngine
 
 from pipeline.gpu_worker import GPUInferenceWorker
 from pipeline.camera_worker import CameraWorker
@@ -105,7 +105,7 @@ class SmartOfficeEngine:
         else:
             self._annotator = None
 
-        # Homography registry + calibration subscriber (Phase 2: floor positions)
+        # Homography registry + calibration subscriber 
         from domain.calibration.homography_registry import HomographyRegistry
         from messaging.calibration_subscriber import CalibrationSubscriber
         self.homography_registry = HomographyRegistry()

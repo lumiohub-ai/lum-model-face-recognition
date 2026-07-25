@@ -16,7 +16,7 @@ Exception Hierarchy:
 import json
 import traceback
 from datetime import datetime
-from typing import Any, Tuple
+from typing import Any
 from celery import Task
 from loguru import logger
 

@@ -94,21 +94,6 @@ class MessageDLQ:
         except Exception as e:
             logger.exception(f"Failed to send to DLQ: {e}")
 
-    def get_count(self, stream: str) -> int:
-        """Get number of messages in DLQ for a stream.
-
-        Args:
-            stream: Stream name
-
-        Returns:
-            Number of messages in DLQ
-        """
-        dlq_key = f'{self.DLQ_KEY_PREFIX}{stream.replace(":", "_")}'
-        try:
-            return self.redis.llen(dlq_key)
-        except Exception:
-            return 0
-
 
 class StreamConsumer:
     """

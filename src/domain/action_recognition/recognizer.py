@@ -420,31 +420,6 @@ class ActionRecognizer:
             )
             return False
 
-    def get_queue_size(self) -> int:
-        """Get current queue size."""
-        return self.inference_queue.qsize()
-
-    def get_metrics(self) -> Dict:
-        """Get performance metrics."""
-        avg_time = (
-            self.total_inference_time / self.total_inferences
-            if self.total_inferences > 0
-            else 0.0
-        )
-
-        return {
-            'total_inferences': self.total_inferences,
-            'total_time': self.total_inference_time,
-            'average_time': avg_time,
-            'total_errors': self.total_api_errors,
-            'total_timeouts': self.total_timeouts,
-            'queue_size': self.get_queue_size(),
-            'workers_running': self.running,
-            'ollama_api_url': self.ollama_api_url,
-            'model_name': self.model_name,
-            'inference_timeout': self.inference_timeout
-        }
-
     def __del__(self):
         """Cleanup on deletion."""
         self.stop_workers()

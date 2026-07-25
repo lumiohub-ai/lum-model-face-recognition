@@ -13,7 +13,6 @@ import uuid
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
-import numpy as np
 
 from messaging.redis_client import RedisClient
 from messaging.channels import (
@@ -46,28 +45,6 @@ class MDAPublisher:
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""
         return datetime.utcnow().isoformat() + 'Z'
-
-    async def _upload_image_to_gcs(self, image: np.ndarray, prefix: str) -> Optional[str]:
-        """
-        Upload image to GCS and return URL.
-
-        Args:
-            image: numpy array image
-            prefix: GCS path prefix
-
-        Returns:
-            GCS URL or None if upload fails
-        """
-        if self.gcs_uploader is None:
-            logger.warning("No GCS uploader configured, skipping image upload")
-            return None
-
-        try:
-            url = await self.gcs_uploader.upload_image(image, prefix)
-            return url
-        except Exception as e:
-            logger.exception(f"Failed to upload image to GCS: {e}")
-            return None
 
     def publish_attendance_recorded(
         self,

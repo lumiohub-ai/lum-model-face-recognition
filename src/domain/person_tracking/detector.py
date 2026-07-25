@@ -7,9 +7,7 @@ Detects persons in video frames using Ultralytics YOLO models.
 - Pose variants: Person detection + 17 pose keypoints (COCO format, slower)
 """
 
-from typing import List, Dict, Optional
-import numpy as np
-from numpy.typing import NDArray
+from typing import Optional
 from loguru import logger
 import torch
 

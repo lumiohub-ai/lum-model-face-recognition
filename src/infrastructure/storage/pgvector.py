@@ -130,32 +130,6 @@ class PgVectorStore:
             logger.exception(f"Failed to delete embeddings for user {user_id}: {e}")
             raise
 
-    def delete_by_image_url(self, user_id: str, image_url: str) -> int:
-        """Delete embedding for a specific image.
-
-        Args:
-            user_id: Backend user ID
-            image_url: Image URL to delete
-
-        Returns:
-            int: Number of embeddings deleted (should be 0 or 1)
-        """
-        try:
-            with self.db_config.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    DELETE FROM {self.schema_name}.face_embeddings
-                    WHERE user_id = :user_id AND image_url = :image_url
-                """), {'user_id': user_id, 'image_url': image_url})
-                conn.commit()
-
-                count = result.rowcount
-                logger.info(f"Deleted {count} embedding for {image_url}")
-                return count
-
-        except Exception as e:
-            logger.exception(f"Failed to delete embedding for {image_url}: {e}")
-            raise
-
     def delete_by_image_url_norm(self, user_id: str, image_url_norm: str) -> int:
         """Delete embedding by user_id and normalized image URL.
 
@@ -236,26 +210,3 @@ class PgVectorStore:
             logger.exception(f"Failed to load embeddings: {e}")
             raise
 
-    def clear_all_embeddings(self) -> int:
-        """Clear all embeddings for this organization.
-
-        Warning:
-            This will delete all face embeddings for the organization!
-
-        Returns:
-            int: Number of embeddings deleted
-        """
-        try:
-            with self.db_config.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    DELETE FROM {self.schema_name}.face_embeddings
-                """))
-                conn.commit()
-
-                count = result.rowcount
-                logger.warning(f"⚠️ Cleared {count} embeddings from {self.schema_name}")
-                return count
-
-        except Exception as e:
-            logger.exception(f"Failed to clear embeddings: {e}")
-            raise

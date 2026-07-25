@@ -163,7 +163,3 @@ class GlobalTrack:
         """Set face recognition identity for this global track."""
         self.identity = identity
         self.identity_locked = locked
-
-    def get_duration_seconds(self) -> float:
-        """Get total duration this track has been active."""
-        return (self.last_seen - self.first_seen).total_seconds()
