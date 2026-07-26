@@ -7,13 +7,10 @@ Detects persons in video frames using Ultralytics YOLO models.
 - Pose variants: Person detection + 17 pose keypoints (COCO format, slower)
 """
 
-from typing import List, Dict, Optional
-import numpy as np
-from numpy.typing import NDArray
+from typing import Optional
 from loguru import logger
 import torch
-import ssl
-import warnings
+
 
 # SECURITY: Do NOT disable SSL verification globally.
 # SSL verification is critical for preventing MITM attacks.
@@ -118,90 +115,3 @@ class PersonDetector:
             f"PersonDetector initialized: model={model_name}, conf={confidence_threshold}, "
             f"iou={iou_threshold}, device={self.device}, pose={use_pose}"
         )
-
-    def detect_persons(
-        self,
-        frame: NDArray,
-        min_keypoint_confidence: float = 0.3
-    ) -> List[Dict]:
-        """
-        Detect persons in a frame and extract pose keypoints.
-
-        Args:
-            frame: Input frame (BGR format, shape: [H, W, 3])
-            min_keypoint_confidence: Minimum confidence for keypoint visibility
-
-        Returns:
-            List of detected persons, each as a dict:
-            {
-                'bbox': [x1, y1, x2, y2],  # Bounding box coordinates
-                'confidence': float,        # Detection confidence
-                'keypoints': np.array,      # Shape: (17, 3) [x, y, confidence]
-                'person_id': int            # Temporary ID (will be assigned by tracker)
-            }
-        """
-        if frame is None or frame.size == 0:
-            logger.warning("Empty frame received")
-            return []
-
-        try:
-            # Run YOLO inference
-            results = self.model(
-                frame,
-                conf=self.confidence_threshold,
-                iou=self.iou_threshold,
-                verbose=False,
-                device=self.device
-            )
-
-            # Extract detections
-            detections = []
-            for result in results:
-                # Get bounding boxes
-                boxes = result.boxes
-                if boxes is None or len(boxes) == 0:
-                    continue
-
-                # Process each detection
-                for idx in range(len(boxes)):
-                    # Get class ID
-                    cls_id = int(boxes.cls[idx].cpu().numpy())
-
-                    # Filter: Only accept person class (class 0 in COCO)
-                    if cls_id != 0:
-                        continue
-
-                    # Bounding box
-                    bbox = boxes.xyxy[idx].cpu().numpy()  # [x1, y1, x2, y2]
-                    conf = float(boxes.conf[idx].cpu().numpy())
-
-                    # Get keypoints only if using pose model
-                    kpts_full = None
-                    if self.use_pose:
-                        keypoints = result.keypoints
-                        if keypoints is not None:
-                            # Keypoints: shape (17, 3) where each row is [x, y, confidence]
-                            kpts = keypoints.xy[idx].cpu().numpy()  # (17, 2)
-                            kpts_conf = keypoints.conf[idx].cpu().numpy()  # (17,)
-
-                            # Combine keypoints with confidence
-                            kpts_full = np.zeros((self.num_keypoints, 3))
-                            kpts_full[:, :2] = kpts  # x, y
-                            kpts_full[:, 2] = kpts_conf  # confidence
-
-                    detection = {
-                        'bbox': bbox.tolist(),
-                        'confidence': conf,
-                        'keypoints': kpts_full,  # None if not using pose
-                        'person_id': idx  # Temporary ID (tracker will assign real ID)
-                    }
-
-                    detections.append(detection)
-
-            # Verbose logging disabled to reduce log noise
-            # logger.debug(f"Detected {len(detections)} person(s) in frame")
-            return detections
-
-        except Exception as e:
-            logger.exception(f"Error during person detection: {e}")
-            return []

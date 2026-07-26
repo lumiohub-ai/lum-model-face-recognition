@@ -101,33 +101,6 @@ class DatabaseConfig:
             cls._instance = cls()
         return cls._instance
 
-    @property
-    def safe_connection_string(self) -> str:
-        """Get connection string with password masked for logging.
-
-        Returns:
-            Connection string with password replaced by asterisks
-        """
-        return (
-            f"postgresql://{self.user}:****@"
-            f"{self.host}:{self.port}/{self.database}"
-        )
-
-    def test_connection(self) -> bool:
-        """Test database connection.
-
-        Returns:
-            bool: True if connection successful, False otherwise
-        """
-        try:
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            logger.info("Database connection test successful")
-            return True
-        except Exception as e:
-            logger.exception(f"Database connection test failed: {e}")
-            return False
-
     def init_schema(self, client_slug: str) -> None:
         """Create schema and tables for a client if not exists.
 
@@ -211,32 +184,6 @@ class DatabaseConfig:
 
         except Exception as e:
             logger.exception(f"Failed to initialize schema {schema_name}: {e}")
-            raise
-
-    def drop_schema(self, client_slug: str, cascade: bool = True) -> None:
-        """Drop schema for a client.
-
-        Args:
-            client_slug: Organization slug
-            cascade: If True, drop all objects in schema
-
-        Raises:
-            ValueError: If client_slug contains invalid characters
-
-        Warning:
-            This will delete all data for the client!
-        """
-        schema_name = schema_name_for(client_slug)
-        validate_schema_name(schema_name)
-
-        try:
-            with self.engine.begin() as conn:
-                cascade_str = "CASCADE" if cascade else ""
-                conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} {cascade_str}"))
-                logger.warning(f"Schema dropped: {schema_name}")
-
-        except Exception as e:
-            logger.exception(f"Failed to drop schema {schema_name}: {e}")
             raise
 
     @contextmanager

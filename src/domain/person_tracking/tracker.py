@@ -267,7 +267,7 @@ class PersonTracker:
                     cls = 0  # Person class
                     dets.append([bbox[0], bbox[1], bbox[2], bbox[3], conf, cls])
                 dets = np.array(dets, dtype=np.float32)
-
+            # Here we run tracking model
             # Run BoT-SORT tracking (uses external detections, not YOLO)
             tracks = self.botsort.update(dets, frame)  # Returns (N, 6) [x1, y1, x2, y2, track_id, conf, cls, det_ind]
 

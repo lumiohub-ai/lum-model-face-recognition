@@ -217,6 +217,7 @@ class GPUInferenceWorker:
             return []
         try:
             t0 = time.time()
+            # Here we inference the batch of frames using the YOLO model. The model is expected to return a list of results, one for each frame.
             results = self._detector.model(
                 frames,
                 conf=self._detector.confidence_threshold,
@@ -247,6 +248,8 @@ class GPUInferenceWorker:
                 results.append(result)
                 continue
             try:
+                ## Here we inference the face detection model on the ROI
+                ## The function calls both RetinaFace and Arcface inside of InsideFace.
                 faces = self._face_detector.detect(roi)
                 if faces:
                     face = faces[0]

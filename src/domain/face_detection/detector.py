@@ -90,7 +90,7 @@ class FaceDetector:
         # Apply padding to improve detection of faces near edges
         padded_image = self._add_padding(image)
 
-        # Detect faces on padded image
+        # Here we infer the faces using the InsightFace model
         faces = self.model.get(padded_image)
         return faces
 

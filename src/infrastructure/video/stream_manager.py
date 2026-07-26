@@ -7,9 +7,8 @@ This module manages:
 """
 
 import os
-import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 
 import cv2
 import numpy as np
@@ -35,10 +34,7 @@ class StreamManager:
         self.camera_configs = camera_configs
         self.streams: List[StreamHandler] = []
         self.video_writers: List[Optional[cv2.VideoWriter]] = []
-        self.frame_nums: List[int] = []
         self._initialized = False
-        self._last_write_time: List[float] = []
-        self._write_interval: float = 1.0 / 20
 
     def init_streams(self) -> List[StreamHandler]:
         """Initialize stream handlers for all cameras.
@@ -47,7 +43,6 @@ class StreamManager:
             List of initialized StreamHandler objects
         """
         self.streams = []
-        self.frame_nums = []
 
         for config in self.camera_configs:
             stream = StreamHandler(
@@ -55,7 +50,6 @@ class StreamManager:
                 logger=logger
             )
             self.streams.append(stream)
-            self.frame_nums.append(0)
             if stream.connected:
                 logger.info(
                     f"Stream ready: {config.get('camera_name', 'Unknown')} "
@@ -103,8 +97,6 @@ class StreamManager:
             logger.exception(f"Output directory not writable: {output_dir} - {e}")
             return self.video_writers
 
-        self._last_write_time = []
-
         for i, config in enumerate(self.camera_configs):
             camera_name = config['camera_name'].replace(' ', '_')
             status = config.get('cam_type', 'IN').upper()
@@ -127,9 +119,7 @@ class StreamManager:
 
             writer = self._create_video_writer(filename, w, h, fps)
             self.video_writers.append(writer)
-            self._last_write_time.append(0.0)
 
-        self._write_interval = 1.0 / (fps if fps > 0 else 20)
         return self.video_writers
 
     def _create_video_writer(
@@ -175,48 +165,6 @@ class StreamManager:
                 stream.start()
 
         logger.info("Started video streams")
-
-    def read_all_frames(self) -> List[Tuple[int, np.ndarray, int]]:
-        """Read frames from all cameras.
-
-        Returns:
-            List of tuples: (camera_idx, frame, frame_num)
-            Only includes successfully read frames
-        """
-        frames = []
-
-        for i, stream in enumerate(self.streams):
-            ret, frame = stream.read()
-            if not ret:
-                logger.warning(f"Camera {i}: Failed to read frame")
-                continue
-
-            self.frame_nums[i] += 1
-            frames.append((i, frame, self.frame_nums[i]))
-
-        return frames
-
-    def write_frames(self, annotated_frames: List[Tuple[int, np.ndarray]]) -> None:
-        """Write annotated frames to video files.
-
-        Throttles writes to match the declared fps so playback duration
-        matches real-world recording time.
-
-        Args:
-            annotated_frames: List of (camera_idx, frame) tuples
-        """
-        now = time.monotonic()
-        for camera_idx, frame in annotated_frames:
-            if camera_idx >= len(self.video_writers):
-                continue
-            writer = self.video_writers[camera_idx]
-            if writer is None:
-                continue
-            # Skip if not enough time has passed since last write
-            if now - self._last_write_time[camera_idx] < self._write_interval:
-                continue
-            writer.write(frame)
-            self._last_write_time[camera_idx] = now
 
     def stop_streams(self) -> None:
         """Stop all streams."""
