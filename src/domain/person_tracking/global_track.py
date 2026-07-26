@@ -15,9 +15,8 @@ Memory Management:
 - Periodic cleanup of stale entries
 """
 
-import os
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from collections import defaultdict, OrderedDict
 import time
@@ -25,7 +24,6 @@ import threading
 
 import numpy as np
 import torch
-import cv2
 import yaml
 from loguru import logger
 
@@ -272,13 +270,6 @@ class GlobalTrackManager:
         self.reid_device = reid_cfg.get('device', 'cuda:0')
         self.reid_half_precision = reid_cfg.get('half_precision', False)
 
-    @property
-    def body_reid_model(self):
-        """Lazy initialization of body ReID model."""
-        if self._body_reid_model is None:
-            self._init_body_reid_model()
-        return self._body_reid_model
-
     def _download_reid_weights(self, weights_path: Path) -> bool:
         """
         Download ReID weights if not present.
@@ -408,7 +399,7 @@ class GlobalTrackManager:
             camera_id: Camera identifier
             local_track_id: Local track ID from PersonTracker
             person_crop: Cropped person image (H, W, C)
-            face_embedding: Face embedding if available (not used in Phase 1)
+            face_embedding: Face embedding if available 
             detection_confidence: Detection confidence score
             frame_num: Current frame number
             identity: Face recognition identity name (if available)
@@ -826,195 +817,6 @@ class GlobalTrackManager:
         except Exception as e:
             logger.exception(f"Failed to extract body embedding: {e}")
             return None
-
-    def _batch_extract_embeddings(
-        self,
-        crops: List[np.ndarray]
-    ) -> List[Optional[np.ndarray]]:
-        """
-        Extract body ReID embeddings in batch for GPU efficiency.
-
-        Args:
-            crops: List of person crop images (H, W, C) in BGR format
-
-        Returns:
-            List of normalized embedding vectors (or None for failed extractions)
-        """
-        if not crops:
-            return []
-
-        if self._body_reid_model is None:
-            try:
-                self._init_body_reid_model()
-            except Exception:
-                return [None] * len(crops)
-
-        if self._body_reid_model is None:
-            return [None] * len(crops)
-
-        try:
-            start_time = time.time()
-
-            # Preprocessing constants (same as boxmot)
-            resize_dims = (128, 256)
-            mean_array = np.array([0.485, 0.456, 0.406])
-            std_array = np.array([0.229, 0.224, 0.225])
-
-            # Preprocess all crops
-            tensors = []
-            valid_indices = []
-
-            for i, crop in enumerate(crops):
-                if crop is None or crop.size == 0:
-                    continue
-
-                # Resize
-                crop_resized = cv2.resize(crop, resize_dims, interpolation=cv2.INTER_LINEAR)
-
-                # BGR to RGB
-                crop_rgb = cv2.cvtColor(crop_resized, cv2.COLOR_BGR2RGB)
-
-                # To tensor and normalize
-                tensor = torch.from_numpy(crop_rgb).float() / 255.0
-
-                # Standardize
-                tensor = (tensor - torch.tensor(mean_array)) / torch.tensor(std_array)
-
-                # Permute to (C, H, W)
-                tensor = tensor.permute(2, 0, 1)
-
-                tensors.append(tensor)
-                valid_indices.append(i)
-
-            if not tensors:
-                return [None] * len(crops)
-
-            # Stack into batch and move to device
-            batch = torch.stack(tensors, dim=0)
-            batch = batch.to(
-                dtype=torch.half if self.reid_half_precision else torch.float,
-                device=self._device
-            )
-
-            # Extract features in batch
-            with torch.no_grad():
-                embeddings = self._body_reid_model.forward(batch)
-
-            # Convert to numpy
-            embeddings = embeddings.cpu().numpy()
-
-            # Normalize each embedding
-            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-            norms = np.where(norms > 0, norms, 1.0)  # Avoid division by zero
-            embeddings = embeddings / norms
-
-            # Build result list with None for invalid crops
-            results = [None] * len(crops)
-            for idx, emb in zip(valid_indices, embeddings):
-                results[idx] = emb
-
-            # Record extraction time
-            extraction_time_ms = (time.time() - start_time) * 1000
-            avg_per_crop = extraction_time_ms / len(tensors) if tensors else 0
-            self.metrics.avg_extraction_time_ms = (
-                self.metrics.avg_extraction_time_ms * 0.9 +
-                avg_per_crop * 0.1
-            )
-
-            logger.debug(
-                f"BATCH_EXTRACT | count={len(tensors)} total_time={extraction_time_ms:.1f}ms "
-                f"avg_per_crop={avg_per_crop:.1f}ms"
-            )
-
-            return results
-
-        except Exception as e:
-            logger.exception(f"Failed to batch extract embeddings: {e}")
-            return [None] * len(crops)
-
-    def batch_assign_global_ids(
-        self,
-        camera_id: int,
-        tracks: List[Dict],
-        frame_num: int
-    ) -> Dict[int, int]:
-        """
-        Batch process tracks for efficiency.
-
-        Args:
-            camera_id: Camera identifier
-            tracks: List of track dicts with keys:
-                - track_id: Local track ID
-                - crop: Person crop image (np.ndarray)
-                - confidence: Detection confidence
-                - identity: Optional face identity
-                - identity_locked: Whether identity is locked
-            frame_num: Current frame number
-
-        Returns:
-            Dict mapping local_track_id -> global_track_id
-        """
-        if not self.enabled or not tracks:
-            return {t['track_id']: t['track_id'] for t in tracks}
-
-        result = {}
-
-        # Step 1: Identify tracks needing embedding extraction
-        tracks_to_extract = []
-        tracks_with_cache = []
-
-        for track in tracks:
-            local_id = track['track_id']
-            key = (camera_id, local_id)
-
-            # Check if already assigned and cache is fresh
-            if local_id in self.local_to_global[camera_id]:
-                cached = self.embedding_cache.get(key)
-                if cached is not None:
-                    if (frame_num - cached.frame_num) < self.extract_interval_frames:
-                        # Cache is fresh, no extraction needed
-                        tracks_with_cache.append(track)
-                        continue
-
-            # Needs extraction (new track or stale cache)
-            if self._validate_crop_quality(track.get('crop')):
-                tracks_to_extract.append(track)
-            else:
-                tracks_with_cache.append(track)
-
-        # Step 2: Batch extract embeddings for tracks that need it
-        if tracks_to_extract:
-            crops = [t.get('crop') for t in tracks_to_extract]
-            embeddings = self._batch_extract_embeddings(crops)
-
-            # Update cache with new embeddings
-            for track, emb in zip(tracks_to_extract, embeddings):
-                if emb is not None:
-                    key = (camera_id, track['track_id'])
-                    self.embedding_cache.put(key, CachedEmbedding(
-                        embedding=emb,
-                        frame_num=frame_num,
-                        quality=track.get('confidence', 0.0),
-                        timestamp=datetime.now()
-                    ))
-
-        # Step 3: Assign global IDs using cached embeddings
-        all_tracks = tracks_to_extract + tracks_with_cache
-
-        for track in all_tracks:
-            global_id = self.assign_global_id(
-                camera_id=camera_id,
-                local_track_id=track['track_id'],
-                person_crop=track.get('crop'),
-                face_embedding=track.get('face_embedding'),
-                detection_confidence=track.get('confidence', 0.0),
-                frame_num=frame_num,
-                identity=track.get('identity'),
-                identity_locked=track.get('identity_locked', False)
-            )
-            result[track['track_id']] = global_id
-
-        return result
 
     def _validate_crop_quality(self, person_crop: np.ndarray) -> bool:
         """
@@ -1465,14 +1267,6 @@ class GlobalTrackManager:
 
         return len(inactive_tracks)
 
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics for monitoring."""
-        return {
-            'embedding_cache_size': len(self.embedding_cache),
-            'global_tracks_count': len(self.global_tracks),
-            'active_mappings': sum(len(m) for m in self.local_to_global.values())
-        }
-
     # =========================================================================
     # Phase 0 Compatibility Methods
     # =========================================================================
@@ -1749,36 +1543,6 @@ class GlobalTrackingMetrics:
         if self.total_assignments == 0:
             return 0.0
         return self.matched_to_existing / self.total_assignments
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Export metrics as dictionary for API/dashboard."""
-        uptime_sec = (datetime.now() - self.started_at).total_seconds()
-        return {
-            'uptime_seconds': uptime_sec,
-            'matching': {
-                'total_assignments': self.total_assignments,
-                'matched_to_existing': self.matched_to_existing,
-                'created_new': self.created_new,
-                'match_rate': self.get_match_rate(),
-                'identity_matches': self.identity_matches,
-                'body_reid_matches': self.body_reid_matches
-            },
-            'quality': {
-                'avg_similarity_matched': self.avg_similarity_matched,
-                'avg_similarity_rejected': self.avg_similarity_rejected
-            },
-            'safety': {
-                'conflicts_detected': self.conflicts_detected,
-                'tracks_split': self.tracks_split,
-                'id_switch_corrections': self.id_switch_corrections,
-                'potential_rematches': self.potential_rematches
-            },
-            'performance': {
-                'avg_extraction_time_ms': self.avg_extraction_time_ms,
-                'avg_matching_time_ms': self.avg_matching_time_ms,
-                'cache_hit_rate': self.cache_hit_rate
-            }
-        }
 
     def reset(self) -> None:
         """Reset metrics for new monitoring period."""

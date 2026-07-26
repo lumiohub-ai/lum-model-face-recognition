@@ -12,7 +12,6 @@ Manages track history and stores per-track data across frames including:
 from typing import Dict, List, Optional, Any
 from collections import defaultdict
 from datetime import datetime
-import numpy as np
 from numpy.typing import NDArray
 from loguru import logger
 
@@ -186,25 +185,6 @@ class PersonTrackManager:
             data['crops'] = crops
 
         return data
-
-    def get_latest_bbox(self, track_id: int) -> Optional[NDArray]:
-        """
-        Get latest bounding box for a track.
-
-        Args:
-            track_id: Track identifier
-
-        Returns:
-            Latest bbox or None
-        """
-        if track_id not in self.track_bbox_history:
-            return None
-
-        frames = sorted(self.track_bbox_history[track_id].keys())
-        if not frames:
-            return None
-
-        return self.track_bbox_history[track_id][frames[-1]]
 
     def remove_track(self, track_id: int) -> Dict[str, Any]:
         """

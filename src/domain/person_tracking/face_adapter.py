@@ -6,7 +6,6 @@ with person ROIs from person detection.
 """
 
 from typing import Optional, Tuple
-import numpy as np
 from numpy.typing import NDArray
 
 

@@ -117,7 +117,7 @@ class CameraWorker:
             except Exception as e:
                 logger.exception(f"CameraWorker[{self.camera_idx}] error: {e}")
                 time.sleep(0.01)
-
+    ## This function is the main loop of the CameraWorker thread. It continuously processes frames from the camera stream until the worker is stopped. It calls the _process_one_frame() method to handle each frame, and if any exception occurs during processing, it logs the error and sleeps briefly before continuing.
     def _process_one_frame(self) -> None:
         # ── Step 1: Read frame ────────────────────────────────────────────────
         ret, frame = self.stream_handler.read()

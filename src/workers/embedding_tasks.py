@@ -17,7 +17,7 @@ IMPORTANT: Tasks use BaseTaskWithRetry for:
 - Automatic DLQ on permanent failures
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from workers.celery_app import celery
 from celery.exceptions import SoftTimeLimitExceeded
 from loguru import logger

@@ -9,7 +9,6 @@ This module handles per-camera processing including:
 
 import threading
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
