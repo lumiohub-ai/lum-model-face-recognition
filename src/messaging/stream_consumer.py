@@ -121,15 +121,19 @@ class StreamConsumer:
     - Graceful shutdown
     """
 
-    def __init__(self, consumer_name: str = None):
+    def __init__(self, consumer_name: str = None, client_slug: str = None):
         """
         Initialize the stream consumer.
 
         Args:
             consumer_name: Unique name for this consumer (default: hostname)
+            client_slug: This service's org slug — commands for other orgs are ignored
         """
         self.redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
         self.consumer_name = consumer_name or settings.hostname
+        self.client_slug = client_slug
+        # Per-org consumer group so each service receives its own copy of every message
+        self.consumer_group = f'ai-service-group:{client_slug}' if client_slug else CONSUMER_GROUP
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._camera_handler: Optional[Callable] = None
@@ -137,7 +141,7 @@ class StreamConsumer:
         # Initialize Dead-Letter Queue
         self.dlq = MessageDLQ(self.redis)
 
-        logger.debug(f"Initialized: {self.consumer_name}")
+        logger.debug(f"Initialized: {self.consumer_name} group={self.consumer_group}")
 
     def set_camera_handler(self, handler: Callable[[str, str, Dict], None]) -> None:
         """
@@ -152,7 +156,7 @@ class StreamConsumer:
         """Create consumer groups if they don't exist."""
         for name, stream in COMMAND_STREAMS.items():
             try:
-                self.redis.xgroup_create(stream, CONSUMER_GROUP, id='0', mkstream=True)
+                self.redis.xgroup_create(stream, self.consumer_group, id='0', mkstream=True)
                 logger.info(f"Created consumer group for {stream}")
             except redis.ResponseError as e:
                 if 'BUSYGROUP' not in str(e):
@@ -180,7 +184,7 @@ class StreamConsumer:
         while self._running:
             try:
                 results = self.redis.xreadgroup(
-                    CONSUMER_GROUP,
+                    self.consumer_group,
                     self.consumer_name,
                     streams,
                     count=10,
@@ -288,6 +292,12 @@ class StreamConsumer:
 
         Uses lazy imports to avoid circular import with celery_app.py.
         """
+        client_slug = payload.get('client_slug')
+
+        if self.client_slug and client_slug and client_slug != self.client_slug:
+            logger.debug(f"Ignoring {command_type} for {client_slug} (we are {self.client_slug})")
+            return
+
         # Lazy import to avoid circular imports
         from workers.embedding_tasks import (
             process_add_user,
@@ -295,7 +305,6 @@ class StreamConsumer:
             process_delete_user,
         )
 
-        client_slug = payload.get('client_slug')
         user_id = payload.get('user_id')
         full_name = payload.get('full_name', 'Unknown')
         image_urls = payload.get('image_urls', [])
@@ -346,23 +355,23 @@ class StreamConsumer:
             logger.exception(f"Camera handler error: {e}")
 
     def _is_duplicate(self, idempotency_key: str) -> bool:
-        """Check if command was already processed."""
+        """Check if command was already processed by this org's consumer group."""
         if not idempotency_key:
             return False
-        key = f"idempotency:{idempotency_key}"
+        key = f"idempotency:{self.consumer_group}:{idempotency_key}"
         return bool(self.redis.exists(key))
 
     def _mark_processed(self, idempotency_key: str) -> None:
-        """Mark command as processed."""
+        """Mark command as processed by this org's consumer group."""
         if not idempotency_key:
             return
-        key = f"idempotency:{idempotency_key}"
+        key = f"idempotency:{self.consumer_group}:{idempotency_key}"
         self.redis.setex(key, IDEMPOTENCY_TTL, '1')
 
     def _ack(self, stream: str, message_id: str) -> None:
         """Acknowledge a message."""
         try:
-            self.redis.xack(stream, CONSUMER_GROUP, message_id)
+            self.redis.xack(stream, self.consumer_group, message_id)
             logger.debug(f"ACKed {message_id} on {stream}")
         except Exception as e:
             logger.exception(f"Failed to ACK {message_id}: {e}")

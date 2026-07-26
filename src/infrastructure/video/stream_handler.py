@@ -113,7 +113,7 @@ class StreamHandler:
         return time.time() - self._last_frame_at
 
     def get_health(self, stale_sec: float = 15.0) -> Dict[str, Optional[str]]:
-        """Return stream health for MDA heartbeat publishing."""
+        """Return stream health (state / last_frame_at / last_error) for monitoring."""
         now = time.time()
         last_frame_at = self._iso_last_frame_at()
         has_recent_frame = (
