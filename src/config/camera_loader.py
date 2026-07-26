@@ -20,7 +20,7 @@ def _resolve_stream_url(cam: Dict[str, Any]) -> str:
     db_url = cam.get("stream_url", "") or ""
     if not base:
         return db_url
-    path = _mediamtx_path(cam.get("name", ""))
+    path = _mediamtx_path(cam.get("name") or "")
     if not path:
         logger.warning(
             f"[camera_loader] camera {cam.get('id')} has no name to derive an edge "

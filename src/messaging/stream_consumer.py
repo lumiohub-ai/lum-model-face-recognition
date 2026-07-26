@@ -355,17 +355,17 @@ class StreamConsumer:
             logger.exception(f"Camera handler error: {e}")
 
     def _is_duplicate(self, idempotency_key: str) -> bool:
-        """Check if command was already processed."""
+        """Check if command was already processed by this org's consumer group."""
         if not idempotency_key:
             return False
-        key = f"idempotency:{idempotency_key}"
+        key = f"idempotency:{self.consumer_group}:{idempotency_key}"
         return bool(self.redis.exists(key))
 
     def _mark_processed(self, idempotency_key: str) -> None:
-        """Mark command as processed."""
+        """Mark command as processed by this org's consumer group."""
         if not idempotency_key:
             return
-        key = f"idempotency:{idempotency_key}"
+        key = f"idempotency:{self.consumer_group}:{idempotency_key}"
         self.redis.setex(key, IDEMPOTENCY_TTL, '1')
 
     def _ack(self, stream: str, message_id: str) -> None:
