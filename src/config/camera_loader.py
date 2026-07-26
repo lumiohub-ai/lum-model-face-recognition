@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any, Optional, Tuple
 
+from loguru import logger
 
 from config.settings import settings
 from config.camera_slug import mediamtx_path as _mediamtx_path
