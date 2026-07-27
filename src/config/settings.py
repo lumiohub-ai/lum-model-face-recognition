@@ -53,9 +53,11 @@ class Settings:
     config_path = os.getenv("SMART_OFFICE_CONFIG", "")
     hostname = os.getenv("HOSTNAME", "unknown")
 
-    # Edge MediaMTX (LSO-27): when set, the AI reads every camera via the edge
-    # (rtsp://<base>/<slug(camera_name)>) instead of the DB stream_url — single
-    # pull per camera, no credentials in the AI. Empty = use the DB stream_url.
+    # Edge MediaMTX (LSO-27): the AI reads EVERY camera via the edge
+    # (rtsp://<base>/<slug(camera_name)>, the high-res main path) — single pull
+    # per camera, no credentials in the AI. REQUIRED: the AI never pulls cameras
+    # directly; if this is empty the camera loader raises. Same-host deploys use
+    # rtsp://host.docker.internal:8554; cross-host use the edge's Tailnet IP.
     edge_rtsp_base = os.getenv("SO_EDGE_RTSP_BASE", "").strip().rstrip("/")
 
     # Ollama (action recognition)
