@@ -343,3 +343,6 @@ buffalo_l.zip
 
 .claude
 CLAUDE.md
+
+# Rendered output from notebooks/lum_vision_demo.ipynb (.venv is covered above)
+notebooks/output/
