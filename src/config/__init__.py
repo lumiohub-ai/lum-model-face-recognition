@@ -12,12 +12,15 @@ from .startup import (
     setup_logging,
     log_startup_info,
 )
+from .vision import build_vision_config
 
 __all__ = [
     # Camera
     "load_cameras_from_db",
     # Settings
     "settings",
+    # Models
+    "build_vision_config",
     # Startup
     "init_smart_office_app",
     "load_config",

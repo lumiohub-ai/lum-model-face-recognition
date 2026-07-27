@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lum-model-vision"
+version = "0.1.0"
+description = "Face detection, person tracking, cross-camera ReID and action recognition models."
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+
+dependencies = [
+    # numpy<2 is a hard constraint, not caution: the boxmot fork and the
+    # onnxruntime/insightface stack are all numpy 1.x. Production runs 1.26.4.
+    "numpy<2",
+    # 4.12+ requires numpy>=2, which the above rules out. Production runs 4.11.
+    "opencv-python-headless~=4.11.0",
+    "ultralytics>=8.3.60",
+    # CPU build by default so the package installs anywhere. GPU deployments
+    # install lum-model-vision[gpu], which swaps in onnxruntime-gpu.
+    "onnxruntime~=1.21",
+    "loguru~=0.7.3",
+    "PyYAML",
+    "filterpy~=1.4.5",
+    "lap~=0.5.12",
+    "gdown~=5.2.0",
+    "ollama~=0.4.4",
+    # The boxmot fork imports pkg_resources, which setuptools removed in 81.
+    # It does not declare this itself, so we have to.
+    "setuptools<81",
+    # Fork of mikel-brostrom/yolo_tracking, pinned to the commit this repo has
+    # carried as a submodule. Replaces the old sys.path hack into modules/.
+    "boxmot @ git+https://github.com/humblebeeintel/yolo_tracking@5a2b2a63b59aa26e118b4950a4932be51f8b8de3",
+    # NOTE: insightface is deliberately NOT listed. The copy in modules/insightface
+    # is a fork (it filters genderage.onnx out of the loaded model set), so the
+    # PyPI 0.7.3 release is not a substitute. Until that fork lives at its own URL
+    # it stays an install-time step:  pip install ./modules/insightface
+]
+
+# torch/torchvision are deliberately absent: they arrive transitively via
+# ultralytics, and leaving them unpinned lets the Dockerfile's cu121 build from
+# PyTorch's own index win instead of being overridden by a PyPI CPU wheel.
+
+[project.optional-dependencies]
+# No `gpu` extra on purpose: onnxruntime and onnxruntime-gpu install into the
+# same `onnxruntime/` directory, so an extra would leave both present and the
+# result undefined. GPU deployments uninstall the CPU build and install the GPU
+# one — see the Dockerfile, which does the same swap for opencv.
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lum_vision = ["resources/*.yaml", "py.typed"]

@@ -2,38 +2,14 @@
 Domain Layer
 
 Core business logic for Smart Office AI features.
-Contains pure business logic with no external I/O dependencies.
+
+The detection and recognition models now live in the `lum_vision` package
+(packages/lum-model-vision); what remains here is camera calibration, which is
+database-backed and therefore application-specific.
 """
 
-from .face_detection import FaceDetector, FaceRecognizer, ModelFactory
-from .person_tracking import (
-    PersonTracker,
-    PersonDetector,
-    IdentityManager,
-    PersonStateManager,
-    PersonTrackManager,
-    GlobalTrackManager,
-    GlobalTrack,
-    IDSwitchCorrector,
-    crop_person_roi,
-)
-from .action_recognition import ActionRecognizer
+from .calibration import CameraCalibrator
 
 __all__ = [
-    # Face Detection
-    "FaceDetector",
-    "FaceRecognizer",
-    "ModelFactory",
-    # Person Tracking
-    "PersonTracker",
-    "PersonDetector",
-    "IdentityManager",
-    "PersonStateManager",
-    "PersonTrackManager",
-    "GlobalTrackManager",
-    "GlobalTrack",
-    "IDSwitchCorrector",
-    "crop_person_roi",
-    # Action Recognition
-    "ActionRecognizer",
+    "CameraCalibrator",
 ]

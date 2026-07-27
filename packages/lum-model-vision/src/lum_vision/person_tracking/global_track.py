@@ -22,6 +22,8 @@ from collections import defaultdict, OrderedDict
 import time
 import threading
 
+from importlib import resources
+
 import numpy as np
 import torch
 import yaml
@@ -147,23 +149,33 @@ class GlobalTrackManager:
     Phase 1: Conservative body-only matching with hard rejection rules.
     """
 
-    def __init__(self, config_path: Optional[str] = None, app_config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        weights_dir: Optional[Path] = None,
+    ):
         """
         Initialize GlobalTrackManager.
 
         Args:
-            config_path: Path to global_tracking.yaml config file
-            app_config: Optional app config dict (from config.yaml)
+            config_path: Path to a global_tracking.yaml. Defaults to the copy
+                         shipped with this package.
+            enabled: Explicit feature flag from the caller. Overrides the
+                     `enabled` key in the YAML when given.
+            weights_dir: Directory to load/download ReID weights into. Overridden
+                         by `body_reid.weights_path` in the YAML if that is set.
         """
         # Load configuration
         self.config = self._load_config(config_path)
+        self._weights_dir = Path(weights_dir) if weights_dir else None
 
-        # Feature flag priority:
-        # 1. app_config (config.yaml) - enable_global_tracking
-        # 2. global_tracking.yaml - enabled
-        # 3. Environment variable ENABLE_GLOBAL_TRACKING (backward compatibility)
-        if app_config and 'enable_global_tracking' in app_config:
-            self.enabled = app_config.get('enable_global_tracking', True)
+        # Feature flag priority: explicit argument, then the YAML, then off.
+        # Note the default matters: a config without an `enabled` key must not
+        # leave this attribute unset.
+        self.enabled = False
+        if enabled is not None:
+            self.enabled = enabled
         elif self.config.get('enabled') is not None:
             self.enabled = self.config.get('enabled', False)
 
@@ -209,25 +221,30 @@ class GlobalTrackManager:
             logger.debug("GlobalTrackManager disabled (enable_global_tracking=false)")
 
     def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
-        """Load configuration from YAML file."""
-        if config_path is None:
-            # Try default paths
-            possible_paths = [
-                Path("configs/global_tracking.yaml"),
-                Path(__file__).parent.parent.parent.parent / "configs" / "global_tracking.yaml",
-            ]
-            for p in possible_paths:
-                if p.exists():
-                    config_path = str(p)
-                    break
+        """Load configuration from a YAML file.
 
+        Falls back to the copy packaged in ``lum_vision/resources`` so this works
+        regardless of the caller's working directory.
+        """
         if config_path and Path(config_path).exists():
             with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
+                config = yaml.safe_load(f) or {}
                 return config.get('global_tracking', {})
 
-        # Return defaults if no config found
-        return {}
+        if config_path:
+            logger.warning(
+                f"Global tracking config not found at {config_path}, using packaged defaults"
+            )
+
+        try:
+            packaged = resources.files("lum_vision.resources") / "global_tracking.yaml"
+            with resources.as_file(packaged) as p:
+                with open(p, 'r') as f:
+                    config = yaml.safe_load(f) or {}
+                    return config.get('global_tracking', {})
+        except (FileNotFoundError, ModuleNotFoundError) as e:
+            logger.warning(f"Packaged global tracking config unavailable: {e}")
+            return {}
 
     def _init_config_values(self) -> None:
         """Initialize configuration values with defaults."""
@@ -264,10 +281,19 @@ class GlobalTrackManager:
         # Body ReID model config
         reid_cfg = self.config.get('body_reid', {})
         self.reid_model_name = reid_cfg.get('model', 'osnet_x0_25_msmt17')
-        self.reid_weights_path = reid_cfg.get(
-            'weights_path', 'volumes/models/weights/osnet_x0_25_msmt17.pt'
+        # An explicit weights_path in the YAML wins; otherwise resolve under the
+        # caller's weights_dir so nothing is written relative to the CWD.
+        configured_path = reid_cfg.get('weights_path')
+        if configured_path:
+            self.reid_weights_path = str(configured_path)
+        else:
+            base = self._weights_dir or (Path.home() / ".cache" / "lum-model-vision" / "weights")
+            self.reid_weights_path = str(Path(base) / f"{self.reid_model_name}.pt")
+        # Auto-detect rather than assuming CUDA — the package must import and
+        # construct on CPU-only machines. An explicit config value still wins.
+        self.reid_device = reid_cfg.get(
+            'device', 'cuda:0' if torch.cuda.is_available() else 'cpu'
         )
-        self.reid_device = reid_cfg.get('device', 'cuda:0')
         self.reid_half_precision = reid_cfg.get('half_precision', False)
 
     def _download_reid_weights(self, weights_path: Path) -> bool:

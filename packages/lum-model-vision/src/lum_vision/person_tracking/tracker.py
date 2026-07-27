@@ -5,24 +5,28 @@ Assigns and maintains stable TrackIDs for persons across video frames.
 Uses boxmot library with external detections (single YOLO pass).
 """
 
+import inspect
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 from numpy.typing import NDArray
 from loguru import logger
-import sys
-from pathlib import Path
 
-# Add boxmot to path
-boxmot_path = Path(__file__).parent.parent.parent.parent / "modules" / "yolo_tracking"
-if str(boxmot_path) not in sys.path:
-    sys.path.insert(0, str(boxmot_path))
-
+# boxmot is a declared dependency (see pyproject.toml) — it resolves from
+# site-packages like any other import. The guard below stays as an install
+# health signal, not as a path fallback.
 try:
     from boxmot.trackers.botsort.bot_sort import BoTSORT
     BOTSORT_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"BoT-SORT not available: {e}. Falling back to simple IoU tracking.")
     BOTSORT_AVAILABLE = False
+
+# We require the humblebeeintel fork, which adds `custom_features` to BoTSORT so
+# externally-computed ReID embeddings can be supplied. Upstream boxmot imports
+# fine but silently tracks worse, so detect it here rather than at the call site.
+BOTSORT_IS_FORK = BOTSORT_AVAILABLE and (
+    "custom_features" in inspect.signature(BoTSORT.__init__).parameters
+)
 
 
 class PersonTracker:
@@ -88,6 +92,15 @@ class PersonTracker:
 
         # Initialize BoT-SORT tracker
         self.botsort = None
+        if BOTSORT_AVAILABLE and not BOTSORT_IS_FORK:
+            raise RuntimeError(
+                "Incompatible boxmot: this is upstream boxmot, which lacks the "
+                "`custom_features` argument BoT-SORT needs here. Falling back would "
+                "silently degrade tracking quality, so install the fork instead:\n"
+                "  pip install 'boxmot @ git+https://github.com/humblebeeintel/"
+                "yolo_tracking@5a2b2a63b59aa26e118b4950a4932be51f8b8de3'"
+            )
+
         if BOTSORT_AVAILABLE and tracker_type == 'botsort':
             try:
                 # Calculate thresholds
@@ -267,7 +280,7 @@ class PersonTracker:
                     cls = 0  # Person class
                     dets.append([bbox[0], bbox[1], bbox[2], bbox[3], conf, cls])
                 dets = np.array(dets, dtype=np.float32)
-            # Here we run tracking model
+            # INFER: Here we run tracking model
             # Run BoT-SORT tracking (uses external detections, not YOLO)
             tracks = self.botsort.update(dets, frame)  # Returns (N, 6) [x1, y1, x2, y2, track_id, conf, cls, det_ind]
 

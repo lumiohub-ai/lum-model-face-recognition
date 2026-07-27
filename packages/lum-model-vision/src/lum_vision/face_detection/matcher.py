@@ -1,25 +1,45 @@
-"""Face recognition module for comparing face embeddings and identifying people."""
+"""Face matching: compares face embeddings against a known-face database."""
 
-import numpy as np
 from typing import Dict, List, Tuple
 
+import numpy as np
+from loguru import logger
 
-class FaceRecognition:
-    """Face recognition class for managing face embeddings and performing identity matching."""
+from ..ports import EmbeddingProvider
 
-    def __init__(self, args) -> None:
-        self.args = args
 
-        from infrastructure.storage import PgVectorStore
-        self.pgvector_store = PgVectorStore(args.client_slug)
-        self.db_names, self.db_embs = self.load_embeddings_from_pgvector()
+class FaceMatcher:
+    """Matches face embeddings against a set of known identities.
 
+    The embeddings are supplied by an :class:`~lum_vision.ports.EmbeddingProvider`
+    rather than fetched directly, so this class needs no database of its own.
+    """
+
+    def __init__(self, provider: EmbeddingProvider, match_threshold: float = 0.3) -> None:
+        """Initialize the matcher.
+
+        Args:
+            provider: Source of the known-face embeddings
+            match_threshold: Minimum cosine similarity to consider a match
+
+        Raises:
+            TypeError: If provider does not implement ``get_all_embeddings``
+        """
+        if not isinstance(provider, EmbeddingProvider):
+            raise TypeError(
+                f"provider must implement get_all_embeddings(), got {type(provider).__name__}"
+            )
+
+        self.provider = provider
+        self.match_threshold = match_threshold
+
+        self.db_names, self.db_embs = self._load_embeddings()
         self._rebuild_name_index()
 
-    def load_embeddings_from_pgvector(self) -> Tuple[List[str], np.ndarray]:
-        """Load face embeddings from pgvector database."""
-        names, embeddings = self.pgvector_store.get_all_embeddings()
-        self.args.logger.debug(f"Loaded {len(names)} embeddings from pgvector")
+    def _load_embeddings(self) -> Tuple[List[str], np.ndarray]:
+        """Fetch embeddings from the provider."""
+        names, embeddings = self.provider.get_all_embeddings()
+        logger.debug(f"Loaded {len(names)} embeddings from provider")
         return names, embeddings
 
     def _rebuild_name_index(self) -> None:
@@ -29,10 +49,10 @@ class FaceRecognition:
         }
 
     def reload_embeddings(self) -> None:
-        """Reload embeddings from pgvector database."""
-        self.db_names, self.db_embs = self.load_embeddings_from_pgvector()
+        """Re-fetch embeddings from the provider."""
+        self.db_names, self.db_embs = self._load_embeddings()
         self._rebuild_name_index()
-        self.args.logger.info(f"Reloaded {len(self.db_embs)} embeddings")
+        logger.info(f"Reloaded {len(self.db_embs)} embeddings")
 
     def compute_similarities(self, face_embs: np.ndarray) -> np.ndarray:
         """Compute cosine similarities between input face embeddings and database embeddings.

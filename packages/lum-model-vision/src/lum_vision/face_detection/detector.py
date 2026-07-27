@@ -2,13 +2,14 @@
 
 import contextlib
 import os
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Union
 
 import cv2
 import numpy as np
 from loguru import logger
 
-from insightface.app import FaceAnalysis 
+from insightface.app import FaceAnalysis
 
 
 class FaceDetector:
@@ -17,17 +18,26 @@ class FaceDetector:
     This class handles face detection and embedding computation.
     """
 
-    def __init__(self, gpu_id: int = 0, model_name: str = 'buffalo_l', padding_percent: float = 20.0):
+    def __init__(
+        self,
+        gpu_id: int = 0,
+        model_name: str = 'buffalo_l',
+        padding_percent: float = 20.0,
+        model_root: Optional[Union[str, Path]] = None,
+    ):
         """Initialize the face detector.
 
         Args:
             gpu_id: GPU device ID to use for detection
             model_name: Name of the InsightFace model to use
             padding_percent: Percentage of padding to add around images before detection (0-100)
+            model_root: Directory InsightFace downloads its model zoo into.
+                        Defaults to InsightFace's own ``~/.insightface``.
         """
         self.gpu_id = gpu_id
         self.model_name = model_name
         self.padding_percent = max(0.0, min(100.0, padding_percent))  # Clamp between 0-100
+        self.model_root = Path(model_root).expanduser() if model_root else None
         self.model: Optional[FaceAnalysis] = None
         self._initialize_model()
 
@@ -36,13 +46,23 @@ class FaceDetector:
 
     def _initialize_model(self) -> None:
         """Initialize the InsightFace detection model."""
+        # FaceAnalysis defaults root to '~/.insightface'; only override when the
+        # caller asked for a specific location.
+        kwargs = {}
+        if self.model_root is not None:
+            self.model_root.mkdir(parents=True, exist_ok=True)
+            kwargs['root'] = str(self.model_root)
+
         # Suppress InsightFace output during initialization
         with open(os.devnull, 'w') as fnull:
             with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
-                self.model = FaceAnalysis(name=self.model_name)
+                self.model = FaceAnalysis(name=self.model_name, **kwargs)
                 self.model.prepare(ctx_id=self.gpu_id)
 
-        logger.debug(f"Initialized InsightFace model '{self.model_name}' on GPU {self.gpu_id}")
+        logger.debug(
+            f"Initialized InsightFace model '{self.model_name}' on GPU {self.gpu_id}"
+            + (f" (root={self.model_root})" if self.model_root else "")
+        )
 
     def _add_padding(self, image: np.ndarray) -> np.ndarray:
         """Add padding around the image to improve face detection.

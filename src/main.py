@@ -24,12 +24,13 @@ from loguru import logger
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from config import init_smart_office_app, log_startup_info
+from config import init_smart_office_app, log_startup_info, build_vision_config
 from pipeline.engine import SmartOfficeEngine
 from config.settings import settings
+from infrastructure.storage import PgVectorStore
 from messaging import RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
-from domain.face_detection import ModelFactory
+from lum_vision import ModelFactory
 
 
 # ============================================================
@@ -322,7 +323,10 @@ def main() -> None:
     mda_manager.start()
 
     # Load ML models once — reused across all engine reinitializations
-    models = ModelFactory(config, client_slug)
+    models = ModelFactory(
+        build_vision_config(config),
+        embedding_provider=PgVectorStore(client_slug),
+    )
     models.initialize_all()
     lifecycle.register_shutdown_callback(models.cleanup)
 
