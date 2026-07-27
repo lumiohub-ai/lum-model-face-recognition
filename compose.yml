@@ -56,9 +56,10 @@ services:
       - ./volumes/storage/person-tracking:/app/volumes/storage/person-tracking
       - ./volumes/logs:/app/logs
       - ./credentials:/app/credentials
-      - ./volumes/models/insightface:/root/.insightface
+      # lum_vision model_cache_dir — buffalo_l, yolo26s and the ReID weights all
+      # live under here now, so they survive container restarts.
+      - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
-      - ./volumes/models/weights:/app/volumes/models/weights
     networks:
       - person-tracking-network
     ports:
@@ -99,7 +100,9 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
-      - ./volumes/models/insightface:/root/.insightface
+      # Same model cache as person-tracking — the embedding sync task loads the
+      # face model from here rather than downloading its own copy.
+      - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
     networks:
       - person-tracking-network

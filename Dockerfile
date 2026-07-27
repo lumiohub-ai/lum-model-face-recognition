@@ -34,18 +34,26 @@ RUN pip install --no-cache-dir \
     torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
-# Copy and install requirements
+# Install the forked insightface first — the lum-model-vision package depends on it but
+# cannot declare it, since this fork (it drops genderage.onnx) has no git remote.
+COPY modules/insightface ./modules/insightface
+RUN pip install --no-cache-dir ./modules/insightface
+
+# Copy and install requirements. This pulls in packages/lum-model-vision, which brings
+# boxmot from git — the modules/yolo_tracking submodule is no longer needed.
+COPY packages ./packages
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy and install local modules
-COPY modules ./modules
-RUN pip install --no-cache-dir ./modules/insightface && \
-    pip install --no-cache-dir ./modules/yolo_tracking
 
 # Force headless OpenCV — ultralytics pulls in opencv-python (full), replace it
 RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
     pip install --no-cache-dir opencv-python-headless~=4.12.0.88
+
+# Swap the CPU onnxruntime that lum-model-vision depends on for the GPU build. They
+# share the same `onnxruntime/` install directory, so this is a replace, not an
+# addition — which is why lum-model-vision has no `[gpu]` extra.
+RUN pip uninstall -y onnxruntime 2>/dev/null || true && \
+    pip install --no-cache-dir onnxruntime-gpu~=1.21.0
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
@@ -78,8 +86,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY scripts/docker/*.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/*.sh
 
-# Copy config and source
+# Copy config and source. packages/ must be present at the same path as in the
+# builder stage: lum-model-vision is installed editable, so its .pth entry resolves to
+# /app/packages/lum-model-vision/src at import time.
 COPY configs ./configs
+COPY packages ./packages
 COPY src ./src
 
 ENTRYPOINT ["docker-entrypoint.sh"]
