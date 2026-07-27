@@ -8,25 +8,30 @@ from config.settings import settings
 from config.camera_slug import mediamtx_path as _mediamtx_path
 
 
-def _resolve_stream_url(cam: Dict[str, Any]) -> str:
-    """Source URL for a camera.
+def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
+    """Edge MediaMTX source URL for a camera — NEVER the camera directly (LSO-27).
 
-    LSO-27: when SO_EDGE_RTSP_BASE is set, read via the Edge MediaMTX
-    (rtsp://<base>/<slug(name)>, the high-res main path) — single pull per
-    camera, no credentials in the AI, and immune to stream_url being rewritten
-    in the dashboard. Otherwise fall back to the DB stream_url.
+    The AI reads rtsp://<SO_EDGE_RTSP_BASE>/<slug(name)> (the high-res main path):
+    one pull per camera, no camera credentials in the AI, and immune to the
+    dashboard rewriting stream_url. Pulling from a camera directly is
+    deliberately unsupported — the AI must not hold camera credentials nor open a
+    second connection to the camera. A camera that can't be mapped to an edge
+    path is skipped (returns None) rather than fetched directly.
     """
     base = settings.edge_rtsp_base
-    db_url = cam.get("stream_url", "") or ""
     if not base:
-        return db_url
+        raise RuntimeError(
+            "SO_EDGE_RTSP_BASE is not set. The AI reads exclusively via the Edge "
+            "MediaMTX and never pulls cameras directly — set SO_EDGE_RTSP_BASE "
+            "(e.g. rtsp://host.docker.internal:8554)."
+        )
     path = _mediamtx_path(cam.get("name") or "")
     if not path:
         logger.warning(
             f"[camera_loader] camera {cam.get('id')} has no name to derive an edge "
-            f"path; falling back to DB stream_url"
+            f"path; skipping (the AI never falls back to a direct camera pull)"
         )
-        return db_url
+        return None
     return f"{base}/{path}"
 
 
@@ -66,11 +71,16 @@ def load_cameras_from_db(
         cameras = repository.get_cameras(application=application)
 
         for cam in cameras:
+            stream_url = _resolve_stream_url(cam)
+            if not stream_url:
+                # Unmappable to an edge path — skip rather than pull the camera
+                # directly (the AI never opens a direct/credentialed connection).
+                continue
             config = {
                 'camera_id': cam.get('id'),
                 'camera_name': cam.get('name', 'Unknown'),
                 'cam_type': cam.get('camera_type', 'in').upper(),
-                'stream_url': _resolve_stream_url(cam),
+                'stream_url': stream_url,
                 'application': cam.get('application', application),
                 'match_threshold': float(cam.get('matching_threshold') or 0.3),
                 'roi': _parse_roi(cam.get('roi_points')),
