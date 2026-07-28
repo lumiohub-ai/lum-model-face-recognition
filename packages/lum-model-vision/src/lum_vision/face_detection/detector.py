@@ -64,6 +64,18 @@ class FaceDetector:
             + (f" (root={self.model_root})" if self.model_root else "")
         )
 
+    #: Attributes InsightFace fills with image-space point coordinates. Each is an
+    #: (N, 2) or (N, 3) array whose first two columns are x, y.
+    _POINT_ATTRS = ('kps', 'landmark_2d_106', 'landmark_3d_68')
+
+    def _padding_offset(self, image: np.ndarray) -> tuple:
+        """Return the (pad_w, pad_h) border added to ``image`` by :meth:`_add_padding`."""
+        if self.padding_percent <= 0:
+            return 0, 0
+
+        h, w = image.shape[:2]
+        return int(w * self.padding_percent / 100), int(h * self.padding_percent / 100)
+
     def _add_padding(self, image: np.ndarray) -> np.ndarray:
         """Add padding around the image to improve face detection.
 
@@ -73,14 +85,9 @@ class FaceDetector:
         Returns:
             Padded image with border added
         """
-        if self.padding_percent <= 0:
+        pad_w, pad_h = self._padding_offset(image)
+        if not (pad_w or pad_h):
             return image
-
-        h, w = image.shape[:2]
-
-        # Calculate padding size based on percentage of image dimensions
-        pad_h = int(h * self.padding_percent / 100)
-        pad_w = int(w * self.padding_percent / 100)
 
         # Add padding using border replication (extends edge pixels)
         # This is better than black/white borders as it looks more natural
@@ -95,8 +102,38 @@ class FaceDetector:
 
         return padded
 
+    def _remove_padding_offset(self, faces: List, pad_w: int, pad_h: int) -> List:
+        """Shift face coordinates from padded-image space back to input-image space.
+
+        Mutates and returns ``faces``. Angular attributes (``pose``) and the
+        embedding are translation-invariant and left alone.
+        """
+        if not (pad_w or pad_h):
+            return faces
+
+        offset = np.array([pad_w, pad_h], dtype=np.float32)
+
+        for face in faces:
+            if face.bbox is not None:
+                face.bbox = face.bbox - np.tile(offset, 2)
+
+            for attr in self._POINT_ATTRS:
+                points = face.get(attr)
+                if points is None:
+                    continue
+                points = points.astype(np.float32, copy=True)
+                points[:, 0:2] -= offset
+                face[attr] = points
+
+        return faces
+
     def detect(self, image: np.ndarray) -> List:
         """Detect faces in an image.
+
+        Padding is an internal detail: coordinates come back in the coordinate
+        space of ``image``, so callers must not compensate for it themselves.
+        Boxes may still fall partly outside the frame for faces detected against
+        the replicated border, so clamp before cropping.
 
         Args:
             image: Input image array (BGR format)
@@ -108,11 +145,12 @@ class FaceDetector:
             raise RuntimeError("Model not initialized")
 
         # Apply padding to improve detection of faces near edges
+        pad_w, pad_h = self._padding_offset(image)
         padded_image = self._add_padding(image)
 
         # Here we infer the faces using the InsightFace model
         faces = self.model.get(padded_image)
-        return faces
+        return self._remove_padding_offset(faces, pad_w, pad_h)
 
     def extract_face_features(self, image: np.ndarray) -> List[dict]:
         """Extract comprehensive face features including boxes, embeddings, and landmarks.
@@ -121,7 +159,7 @@ class FaceDetector:
             image: Input image array (BGR format)
 
         Returns:
-            List of dictionaries containing face features:
+            List of dictionaries containing face features, in ``image`` coordinates:
             - bbox: Bounding box coordinates [x1, y1, x2, y2, confidence, class_id]
             - embedding: Normalized face embedding vector
             - landmarks: Facial landmarks (5 keypoints)

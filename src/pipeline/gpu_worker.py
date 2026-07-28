@@ -253,20 +253,14 @@ class GPUInferenceWorker:
                 faces = self._face_detector.detect(roi)
                 if faces:
                     face = faces[0]
-                    # face.bbox / face.kps are in padded-image coordinates.
-                    # Subtract the padding offset to get back to ROI space.
-                    roi_h, roi_w = roi.shape[:2]
-                    pad_pct = self._face_detector.padding_percent
-                    pad_w = int(roi_w * pad_pct / 100)
-                    pad_h = int(roi_h * pad_pct / 100)
-
+                    # face.bbox / face.kps are already in ROI coordinates; the
+                    # detector's internal padding is undone before it returns.
                     x1, y1, x2, y2 = face.bbox.astype(int)
-                    x1 -= pad_w; y1 -= pad_h; x2 -= pad_w; y2 -= pad_h
                     face_crop = roi[max(0, y1):y2, max(0, x1):x2]
 
                     kps = None
                     if hasattr(face, "kps") and face.kps is not None:
-                        kps = (face.kps.astype(int) - [pad_w, pad_h]).tolist()
+                        kps = face.kps.astype(int).tolist()
 
                     result = {
                         "embedding": face.embedding,
