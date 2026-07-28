@@ -1,0 +1,54 @@
+name: docker-publish
+
+# Build the AI (person-tracking) image and push it to Docker Hub (LSO-45/LSO-49).
+#   • git tag v*   → publishes <version> + latest   (v0.1.0 → 0.1.0, latest)
+#   • manual run   → publishes the tag you enter     (default: edge)
+#
+# Runs on a SELF-HOSTED runner: the image is ~4 GB (CUDA base), too big for the
+# hosted runners' disk. Building needs no GPU — only disk + the host layer cache.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (manual runs)"
+        required: false
+        default: edge
+
+env:
+  IMAGE: humblebeeai/lumiohub-person-tracking
+
+jobs:
+  build-push:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive tags + OCI labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      # Default builder → uses the self-hosted runner's persistent Docker layer
+      # cache, so rebuilds are incremental (no gha cache: a 4 GB image would blow
+      # the 10 GB per-repo Actions cache limit).
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
