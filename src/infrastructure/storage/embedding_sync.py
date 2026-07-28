@@ -49,6 +49,7 @@ class EmbeddingSyncService:
                 model_name=vision_config.face_model_name,
                 padding_percent=vision_config.face_detection_padding,
                 model_root=vision_config.insightface_dir,
+                allowed_modules=vision_config.face_modules,
             )
 
         self.store = store if store is not None else PgVectorStore(client_slug)

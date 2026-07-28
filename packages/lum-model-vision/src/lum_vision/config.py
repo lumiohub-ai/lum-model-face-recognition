@@ -8,7 +8,7 @@ caller is now responsible for supplying every value.
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 def _default_model_cache_dir() -> Path:
@@ -72,6 +72,9 @@ class VisionConfig:
     face_model_name: str = "buffalo_l"
     face_detection_padding: float = 20.0
     gpu_id: int = 0
+    # InsightFace tasks to load. None means FaceDetector.DEFAULT_MODULES
+    # (detection + recognition); widen it if you need the landmark models.
+    face_modules: Optional[Tuple[str, ...]] = None
 
     # Person detection
     person_detection_threshold: float = 0.5

@@ -57,6 +57,7 @@ class ModelFactory:
                 model_name=self.config.face_model_name,
                 padding_percent=self.config.face_detection_padding,
                 model_root=self.config.insightface_dir,
+                allowed_modules=self.config.face_modules,
             )
         return self._face_detector
 

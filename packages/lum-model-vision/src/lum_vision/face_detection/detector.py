@@ -3,7 +3,7 @@
 import contextlib
 import os
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Sequence, Union
 
 import cv2
 import numpy as np
@@ -18,12 +18,19 @@ class FaceDetector:
     This class handles face detection and embedding computation.
     """
 
+    #: InsightFace tasks loaded by default. buffalo_l also ships genderage,
+    #: landmark_2d_106 and landmark_3d_68; none are used here, and each one costs
+    #: VRAM and startup time. Detection supplies the 5-point kps, recognition the
+    #: embedding — together they cover everything this class returns.
+    DEFAULT_MODULES = ('detection', 'recognition')
+
     def __init__(
         self,
         gpu_id: int = 0,
         model_name: str = 'buffalo_l',
         padding_percent: float = 20.0,
         model_root: Optional[Union[str, Path]] = None,
+        allowed_modules: Optional[Sequence[str]] = None,
     ):
         """Initialize the face detector.
 
@@ -33,11 +40,17 @@ class FaceDetector:
             padding_percent: Percentage of padding to add around images before detection (0-100)
             model_root: Directory InsightFace downloads its model zoo into.
                         Defaults to InsightFace's own ``~/.insightface``.
+            allowed_modules: InsightFace tasks to load. Defaults to
+                             :attr:`DEFAULT_MODULES`. Pass ``'landmark_2d_106'`` /
+                             ``'landmark_3d_68'`` as well if you need those.
         """
         self.gpu_id = gpu_id
         self.model_name = model_name
         self.padding_percent = max(0.0, min(100.0, padding_percent))  # Clamp between 0-100
         self.model_root = Path(model_root).expanduser() if model_root else None
+        self.allowed_modules = list(
+            self.DEFAULT_MODULES if allowed_modules is None else allowed_modules
+        )
         self.model: Optional[FaceAnalysis] = None
         self._initialize_model()
 
@@ -56,11 +69,16 @@ class FaceDetector:
         # Suppress InsightFace output during initialization
         with open(os.devnull, 'w') as fnull:
             with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
-                self.model = FaceAnalysis(name=self.model_name, **kwargs)
+                self.model = FaceAnalysis(
+                    name=self.model_name,
+                    allowed_modules=self.allowed_modules,
+                    **kwargs,
+                )
                 self.model.prepare(ctx_id=self.gpu_id)
 
         logger.debug(
-            f"Initialized InsightFace model '{self.model_name}' on GPU {self.gpu_id}"
+            f"Initialized InsightFace model '{self.model_name}' on GPU {self.gpu_id} "
+            f"(modules={self.allowed_modules})"
             + (f" (root={self.model_root})" if self.model_root else "")
         )
 

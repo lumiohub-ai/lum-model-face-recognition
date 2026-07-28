@@ -31,10 +31,10 @@ dependencies = [
     # Fork of mikel-brostrom/yolo_tracking, pinned to the commit this repo has
     # carried as a submodule. Replaces the old sys.path hack into modules/.
     "boxmot @ git+https://github.com/humblebeeintel/yolo_tracking@5a2b2a63b59aa26e118b4950a4932be51f8b8de3",
-    # NOTE: insightface is deliberately NOT listed. The copy in modules/insightface
-    # is a fork (it filters genderage.onnx out of the loaded model set), so the
-    # PyPI 0.7.3 release is not a substitute. Until that fork lives at its own URL
-    # it stays an install-time step:  pip install ./modules/insightface
+    # Stock upstream. This repo used to vendor a fork whose only change was
+    # skipping genderage.onnx — which upstream already supports via the
+    # allowed_modules argument, so the fork bought nothing. See FaceDetector.
+    "insightface==0.7.3",
 ]
 
 # torch/torchvision are deliberately absent: they arrive transitively via

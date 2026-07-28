@@ -10,23 +10,30 @@ Verified end-to-end in a clean venv on CPU. Order matters:
 ```bash
 python -m venv .venv && source .venv/bin/activate
 
-# 1. torch first, so the CPU build wins. GPU deployments use their own
-#    --index-url (see the repo Dockerfile) instead of this line.
+# torch first, so the CPU build wins. GPU deployments use their own
+# --index-url (see the repo Dockerfile) instead of this line.
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-# 2. the forked insightface — builds a Cython extension, needs gcc
-pip install ./modules/insightface
-
-# 3. the package itself; pulls the boxmot fork from git
 pip install -e ./packages/lum-model-vision
 ```
 
-`boxmot` *is* declared, pinned to the `humblebeeintel/yolo_tracking` fork, and
-resolves from git — no submodule or `sys.path` manipulation required.
+Every dependency is declared, so that second command is the whole install.
+`boxmot` is pinned to the `humblebeeintel/yolo_tracking` fork and resolves from
+git; `insightface` comes from PyPI. Installing insightface compiles a Cython
+extension, so a C compiler (`gcc`) must be present.
 
-InsightFace is **not** declared. The copy in `modules/insightface` is a fork (it
-drops `genderage.onnx` from the loaded model set), so PyPI's 0.7.3 is not a
-substitute, and the fork has no git remote to pin. Hence step 2.
+### On not forking InsightFace
+
+This repo used to vendor a patched InsightFace whose only change was skipping
+`genderage.onnx`. Upstream already supports that through `FaceAnalysis`'s
+`allowed_modules` argument, so the fork bought nothing and cost a permanent
+maintenance tax. `FaceDetector` now loads `('detection', 'recognition')` by
+default — which also skips the two landmark models the fork still loaded, saving
+VRAM and startup time. Widen it if you need them:
+
+```python
+FaceDetector(allowed_modules=('detection', 'recognition', 'landmark_2d_106'))
+```
 
 ### Version constraints, and why
 
