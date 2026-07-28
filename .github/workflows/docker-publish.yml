@@ -18,7 +18,7 @@ on:
         default: edge
 
 env:
-  IMAGE: humblebeeai/lumiohub-person-tracking
+  IMAGE: humblebeeai/lumiohub-model
 
 jobs:
   build-push:
