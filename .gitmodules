@@ -1,3 +1,0 @@
-[submodule "modules/yolo_tracking"]
-	path = modules/yolo_tracking
-	url = https://github.com/humblebeeintel/yolo_tracking
