@@ -43,10 +43,9 @@ services:
         max-file: "10"
 
   person-tracking:
-    image: humblebeeai/person-tracking-lumiohub:${SO_IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Pulled from Docker Hub (published by CI, LSO-49). Pin the version via
+    # SO_IMAGE_TAG. For local model dev, use compose.override.dev.yml to build.
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     restart: unless-stopped
     depends_on:
       ollama:
@@ -90,7 +89,7 @@ services:
         max-file: "10"
 
   celery-worker:
-    image: humblebeeai/person-tracking-lumiohub:latest
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
     restart: unless-stopped
     depends_on:
