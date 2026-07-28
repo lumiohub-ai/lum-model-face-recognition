@@ -34,20 +34,26 @@ RUN pip install --no-cache-dir \
     torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
-# Install the forked insightface first — the lum-model-vision package depends on it but
-# cannot declare it, since this fork (it drops genderage.onnx) has no git remote.
-COPY modules/insightface ./modules/insightface
-RUN pip install --no-cache-dir ./modules/insightface
-
 # Copy and install requirements. This pulls in packages/lum-model-vision, which brings
 # boxmot from git — the modules/yolo_tracking submodule is no longer needed.
+# It also settles numpy at <2, which the next step depends on.
 COPY packages ./packages
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Force headless OpenCV — ultralytics pulls in opencv-python (full), replace it
+# The forked insightface: lum-model-vision depends on it but cannot declare it,
+# since this fork (it drops genderage.onnx) has no git remote to pin.
+# Must come AFTER requirements.txt: it compiles a Cython extension against the
+# installed numpy headers, so installing it earlier would build it against the
+# numpy 2.x that torch pulls in, then have that downgraded underneath it.
+COPY modules/insightface ./modules/insightface
+RUN pip install --no-cache-dir ./modules/insightface
+
+# Force headless OpenCV — ultralytics pulls in opencv-python (full), replace it.
+# Pinned to 4.11 deliberately: 4.12+ requires numpy>=2, which the boxmot fork's
+# numpy==1.24.4 pin rules out. Keep in step with lum-model-vision's pyproject.
 RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
-    pip install --no-cache-dir opencv-python-headless~=4.12.0.88
+    pip install --no-cache-dir opencv-python-headless~=4.11.0
 
 # Swap the CPU onnxruntime that lum-model-vision depends on for the GPU build. They
 # share the same `onnxruntime/` install directory, so this is a replace, not an
