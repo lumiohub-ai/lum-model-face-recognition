@@ -198,7 +198,7 @@ camera_worker.run()
           → GlobalTrack (model object)
 ```
 
-**Files:** `src/pipeline/camera_worker.py`, `src/pipeline/camera_engine.py`, `src/domain/person_tracking/global_track.py`, `src/domain/person_tracking/global_track_model.py`
+**Files:** `src/pipeline/camera_worker.py`, `src/pipeline/camera_engine.py`, `packages/lum-model-vision/src/lum_vision/person_tracking/global_track.py`, `packages/lum-model-vision/src/lum_vision/person_tracking/global_track_model.py`
 
 ---
 
@@ -218,7 +218,7 @@ global_track.batch_assign_global_ids()
                 → insightface/utils/download.check_sha1()
 ```
 
-**Files:** `src/domain/person_tracking/global_track.py`, `modules/insightface/insightface/utils/storage.py`, `modules/insightface/insightface/utils/download.py`
+**Files:** `packages/lum-model-vision/src/lum_vision/person_tracking/global_track.py`, `modules/insightface/insightface/utils/storage.py`, `modules/insightface/insightface/utils/download.py`
 
 ---
 
