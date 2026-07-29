@@ -9,11 +9,13 @@ shutdown ordering; a library that spawns threads can do neither well.
 """
 
 import base64
+import json
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import cv2
+import httpx
 import numpy as np
 import ollama
 from loguru import logger
@@ -59,6 +61,11 @@ class ActionRecognizer:
         self.action_mapping = self._build_action_mapping()
         self.prompt_template = self._build_prompt_template()
 
+        # Case-insensitive name lookup: the model echoes an enum member back, but
+        # casing is not guaranteed even under a constrained schema.
+        self._action_lookup = {name.lower(): name for name in self.actions_config}
+        self.response_format = self._build_response_format()
+
         # Create Ollama client once (reused across all inference calls)
         self._ollama_client = ollama.Client(
             host=config.ollama_api_url, timeout=config.inference_timeout
@@ -69,6 +76,7 @@ class ActionRecognizer:
         self.total_inference_time = 0.0
         self.total_api_errors = 0
         self.total_timeouts = 0
+        self.total_parse_failures = 0
 
         logger.info(
             f"ActionRecognizer initialized | enabled={self.enabled} | "
@@ -89,6 +97,26 @@ class ActionRecognizer:
             mapping[action_name] = backend_type
         return mapping
 
+    def _build_response_format(self) -> Optional[Dict[str, Any]]:
+        """JSON schema constraining the reply to a configured action.
+
+        Returns None when no actions are configured — an ``enum`` of just
+        ``["none"]`` would force every answer to "none", so in that case the
+        caller must omit ``format=`` entirely and fall back to string parsing.
+        """
+        if not self.actions_config:
+            return None
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [*self.actions_config, "none"],
+                }
+            },
+            "required": ["action"],
+        }
+
     def _build_prompt_template(self) -> str:
         """Build VLM prompt from configured actions.
 
@@ -102,11 +130,11 @@ class ActionRecognizer:
             description = config.get("description", "")
             lines.append(f"{i}. {action_name} - {description}")
 
-        # Add response instructions
-        lines.append("\nRespond with ONLY one of these exact phrases:")
-        for action_name in self.actions_config.keys():
-            lines.append(f'- "{action_name}"')
-        lines.append("\nJust the phrase, no explanation.")
+        # Add response instructions. The schema in _build_response_format is what
+        # actually constrains the reply; naming the options here keeps the model
+        # from having to infer them from the schema alone.
+        lines.append('\nRespond with JSON: {"action": "<one of the names above>"}')
+        lines.append('Use "none" only if no option applies.')
 
         return "\n".join(lines)
 
@@ -158,15 +186,21 @@ class ActionRecognizer:
 
             # Call Ollama API using shared client
             ## INFER: Here we send the image to the Ollama API for inference. The model is expected to return a response containing the recognized action.
-            response = self._ollama_client.generate(
-                model=self.model_name,
-                prompt=self.prompt_template,
-                images=[image_base64],
-                stream=False
-            )
+            kwargs: Dict[str, Any] = {
+                "model": self.model_name,
+                "prompt": self.prompt_template,
+                "images": [image_base64],
+                "stream": False,
+                # Classification, not generation — sampling only adds variance.
+                "options": {"temperature": 0},
+            }
+            if self.response_format is not None:
+                kwargs["format"] = self.response_format
+            response = self._ollama_client.generate(**kwargs)
 
-            # Parse response
-            raw_output = response.get('response', '').strip().lower()
+            # Case is preserved: the schema enum is case-exact, and the fallback
+            # path lowercases for itself.
+            raw_output = response.get('response', '').strip()
 
             # Extract action from response using configured actions
             action = self._parse_action_response(raw_output)
@@ -178,9 +212,19 @@ class ActionRecognizer:
                 'raw_output': raw_output
             }
 
-        except TimeoutError as e:
+        except httpx.TimeoutException as e:
             self.total_timeouts += 1
             logger.warning(f"Ollama API timeout after {self.inference_timeout}s: {e}")
+            return None
+        except httpx.ConnectError as e:
+            # Ollama being down is an expected operational state, not a defect —
+            # a traceback per inference would bury the logs.
+            self.total_api_errors += 1
+            logger.warning(f"Ollama unreachable at {self.config.ollama_api_url}: {e}")
+            return None
+        except ollama.ResponseError as e:
+            self.total_api_errors += 1
+            logger.warning(f"Ollama returned an error (model '{self.model_name}'): {e}")
             return None
         except Exception as e:
             self.total_api_errors += 1
@@ -191,23 +235,36 @@ class ActionRecognizer:
         """Parse VLM response to extract action using configured actions.
 
         Args:
-            raw_output: Raw response from VLM (lowercase, stripped)
+            raw_output: Raw response from VLM (stripped, original case)
 
         Returns:
-            Matched action name or None if no match
+            Matched action name, or None if the model picked "none" or replied
+            with something outside the configured set
         """
-        # Check for "none" or "none of" patterns first (fallback to idle if configured)
-        if raw_output.startswith('none') or 'none of' in raw_output:
-            if 'idle' in self.actions_config:
-                return 'idle'
-            return None
+        try:
+            value = json.loads(raw_output)["action"]
+            matched = self._action_lookup.get(str(value).strip().lower())
+            if matched is None and str(value).strip().lower() != "none":
+                # Valid JSON, but an action we never offered — worth counting
+                # separately from "the model correctly rejected every option".
+                self.total_parse_failures += 1
+            return matched
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
 
-        # Check each configured action
-        for action_name in self.actions_config.keys():
-            action_lower = action_name.lower()
-            if raw_output.startswith(action_lower) or raw_output == action_lower:
+        # Fallback: the model (or a stub) ignored the schema and replied in prose.
+        self.total_parse_failures += 1
+        return self._match_free_text(raw_output.lower())
+
+    def _match_free_text(self, lowered: str) -> Optional[str]:
+        """Best-effort match of an unconstrained reply against the action set."""
+        for action_name in self.actions_config:
+            if lowered.startswith(action_name.lower()):
                 return action_name
-
+        # Prefix match misses replies like "the person is using phone".
+        for action_name in self.actions_config:
+            if action_name.lower() in lowered:
+                return action_name
         return None
 
     def get_stats(self) -> Dict[str, float]:
@@ -222,4 +279,5 @@ class ActionRecognizer:
             "avg_inference_time": avg,
             "total_api_errors": self.total_api_errors,
             "total_timeouts": self.total_timeouts,
+            "total_parse_failures": self.total_parse_failures,
         }

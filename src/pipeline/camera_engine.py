@@ -145,10 +145,8 @@ class CameraEngine:
             name_to_id_map=self.name_to_id_map
         )
 
-        # Action recognition timing (track per identity name, not track_id)
-        # Bounded: old entries pruned in _check_and_queue_action_recognition()
-        self.last_action_check_per_identity: Dict[str, float] = {}
-        self._max_action_identity_cache = 500
+        # Action recognition throttling lives on the shared ActionRecognitionWorker,
+        # not here — otherwise one person on N cameras is classified N times.
 
         # Frame counter
         self.frame_count = 0
@@ -390,11 +388,14 @@ class CameraEngine:
                     identity = voting["top_candidate"]
                     identity_confidence = voting.get("top_avg_similarity", 0.0)
 
-            # Proof image crop for state manager
+            # Proof image crop for state manager. Copied, not a view: this crop
+            # outlives the frame (state manager, action queue) and a view would
+            # pin the whole frame alive behind it.
             proof_image = None
             if bbox is not None:
                 x1, y1, x2, y2 = self._clip_bbox(frame, bbox)
-                proof_image = frame[y1:y2, x1:x2]
+                if x2 > x1 and y2 > y1:
+                    proof_image = frame[y1:y2, x1:x2].copy()
 
             self.state_manager.update_person(
                 track_id=track_id,
@@ -735,23 +736,15 @@ class CameraEngine:
         if proof_image is None or proof_image.size == 0:
             return
 
-        current_time = time.time()
-        last_check_time = self.last_action_check_per_identity.get(identity, 0.0)
-        if current_time - last_check_time < self.action_recognizer.check_interval_seconds:
+        # Engine-wide reservation: at most one inference per identity per
+        # interval, however many cameras can see them right now.
+        if not self.action_recognizer.reserve_check(identity):
             return
-
-        self.last_action_check_per_identity[identity] = current_time
-
-        # Prune stale entries to prevent unbounded growth
-        if len(self.last_action_check_per_identity) > self._max_action_identity_cache:
-            cutoff = current_time - self.action_recognizer.check_interval_seconds * 2
-            stale = [k for k, t in self.last_action_check_per_identity.items() if t < cutoff]
-            for k in stale:
-                del self.last_action_check_per_identity[k]
 
         user_id = self.name_to_id_map.get(identity)
         if user_id is None:
             logger.warning(f"Cannot find user_id for '{identity}', skipping action recognition")
+            self.action_recognizer.cancel_check(identity)
             return
 
         request_id = f"cam{self.camera_id}_track{track_id}_frame{frame_num}"
@@ -759,11 +752,8 @@ class CameraEngine:
         def action_result_callback(result: Dict):
             self._handle_action_result(
                 track_id=track_id,
-                user_id=user_id,
                 identity=identity,
                 result=result,
-                timestamp=current_time,
-                proof_image=proof_image,
             )
 
         queued = self.action_recognizer.recognize_async(
@@ -780,16 +770,16 @@ class CameraEngine:
         )
 
         if not queued:
+            # Nothing ran, so release the reservation rather than making this
+            # person wait out a full interval.
+            self.action_recognizer.cancel_check(identity)
             logger.warning("Failed to queue action recognition (queue full)")
 
     def _handle_action_result(
         self,
         track_id: int,
-        user_id: int,
         identity: str,
         result: Dict,
-        timestamp: float,
-        proof_image: np.ndarray,
     ) -> None:
         """Handle action recognition result."""
         action = result.get('action')
@@ -811,6 +801,7 @@ class CameraEngine:
         self.track_manager.reset()
         self.identity_manager.reset()
         self.state_manager.reset()
-        self.last_action_check_per_identity.clear()
+        # The action throttle is engine-wide and deliberately NOT cleared here —
+        # one camera resetting must not license a duplicate inference elsewhere.
         self.frame_count = 0
 

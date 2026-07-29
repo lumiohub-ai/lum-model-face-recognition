@@ -6,6 +6,7 @@ Collects:
   - GPU utilization + VRAM  (pynvml / nvidia-ml-py)
   - Per-camera FPS      (rolling 10-second window)
   - YOLO / ArcFace inference latency (rolling average)
+  - Action recognition latency + outcome counts (Ollama VLM)
   - Frame drop counts   (queue-full events)
 
 Designed to be low-overhead: data is only aggregated when snapshot() is called.
@@ -13,7 +14,7 @@ Designed to be low-overhead: data is only aggregated when snapshot() is called.
 
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from typing import Dict, List, Optional
 
 import psutil
@@ -75,6 +76,11 @@ class MetricsCollector:
         self._yolo_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
         self._arcface_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
 
+        # Action recognition (Ollama VLM): latency plus per-outcome counters
+        self._action_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
+        self._action_counts: Counter = Counter()
+        self._action_queue_depth: int = 0
+
     # ── FPS / frame tracking ──────────────────────────────────────────────────
 
     def record_frame(self, camera_idx: int) -> None:
@@ -118,6 +124,21 @@ class MetricsCollector:
         """Record one ArcFace batch inference duration in milliseconds."""
         with self._lock:
             self._arcface_ms.append(ms)
+
+    def record_action_inference(
+        self, ms: float, status: str, queue_depth: int = 0
+    ) -> None:
+        """Record one action-recognition inference.
+
+        Args:
+            ms: Wall-clock duration in milliseconds
+            status: One of "ok", "error", "timeout", "parse_fail"
+            queue_depth: Pending requests at the time of recording
+        """
+        with self._lock:
+            self._action_ms.append(ms)
+            self._action_counts[status] += 1
+            self._action_queue_depth = queue_depth
 
     # ── System resource stats (static helpers) ────────────────────────────────
 
@@ -170,6 +191,9 @@ class MetricsCollector:
         with self._lock:
             yolo_avg = sum(self._yolo_ms) / len(self._yolo_ms) if self._yolo_ms else 0.0
             arcface_avg = sum(self._arcface_ms) / len(self._arcface_ms) if self._arcface_ms else 0.0
+            action_avg = sum(self._action_ms) / len(self._action_ms) if self._action_ms else 0.0
+            action_counts = dict(self._action_counts)
+            action_queue_depth = self._action_queue_depth
 
         return {
             "timestamp": time.time(),
@@ -186,6 +210,14 @@ class MetricsCollector:
             "inference": {
                 "yolo_avg_ms": round(yolo_avg, 1),
                 "arcface_avg_ms": round(arcface_avg, 1),
+            },
+            "action": {
+                "avg_ms": round(action_avg, 1),
+                "queue_depth": action_queue_depth,
+                "ok": action_counts.get("ok", 0),
+                "error": action_counts.get("error", 0),
+                "timeout": action_counts.get("timeout", 0),
+                "parse_fail": action_counts.get("parse_fail", 0),
             },
         }
 

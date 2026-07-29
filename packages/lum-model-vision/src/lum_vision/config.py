@@ -32,7 +32,8 @@ class ActionConfig:
     ollama_api_url: str = "http://localhost:11434"
     model_name: str = "gemma3:4b"
     check_interval_seconds: int = 30
-    inference_timeout: int = 30
+    # A cold model load alone costs ~28s; see configs/config.yaml.
+    inference_timeout: int = 60
     actions: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     @classmethod
@@ -52,7 +53,7 @@ class ActionConfig:
         base = cls(
             enabled=bool(cfg.get("enabled", False)),
             check_interval_seconds=int(cfg.get("check_interval_seconds", 30)),
-            inference_timeout=int(cfg.get("inference_timeout", 30)),
+            inference_timeout=int(cfg.get("inference_timeout", 60)),
             actions=cfg.get("actions") or {},
         )
         overrides = {}

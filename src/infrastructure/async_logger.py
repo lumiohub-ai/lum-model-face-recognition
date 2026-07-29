@@ -83,16 +83,24 @@ class AsyncLogger:
         except queue.Full:
             logger.warning("AsyncLogger db_queue full — dropping log entry")
 
-    def upload_image(self, data: dict) -> None:
+    def upload_image(self, data: dict) -> bool:
         """Queue an image for GCS upload.
 
         Required keys: image (np.ndarray), folder (str), client_slug (str)
-        Optional key:  callback (callable receiving the resulting URL)
+        Optional key:  callback (callable receiving the resulting URL, or None
+                       if the upload failed). When queued, the callback is
+                       guaranteed to run exactly once.
+
+        Returns:
+            True if queued, False if the queue was full (callback will NOT run,
+            so the caller stays responsible for the work).
         """
         try:
             self._gcs_queue.put_nowait(data)
+            return True
         except queue.Full:
             logger.warning("AsyncLogger gcs_queue full — dropping image upload")
+            return False
 
     def publish_event(self, event: dict) -> None:
         """Queue a Redis stream event.
@@ -184,17 +192,27 @@ class AsyncLogger:
         image = data.get("image")
         folder = data.get("folder", "uploads")
         client_slug = data.get("client_slug", "")
+        callback = data.get("callback")
         if image is None:
+            if callback:
+                callback(None)
             return
+
+        url = None
         try:
             from infrastructure.storage import ImageFetcher
 
             url = ImageFetcher().upload_image(image, folder, client_slug)
-            callback = data.get("callback")
-            if callback:
-                callback(url)
         except Exception as e:
             logger.exception(f"GCS upload failed: {e}")
+
+        # Runs even on failure (with None) so callers can complete their work
+        # without the proof image rather than stalling on it.
+        if callback:
+            try:
+                callback(url)
+            except Exception as e:
+                logger.exception(f"GCS upload callback failed: {e}")
 
     def _process_redis_event(self, event: dict) -> None:
         stream = event.get("stream", "ai:events")

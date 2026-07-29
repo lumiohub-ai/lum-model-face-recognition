@@ -25,6 +25,10 @@ dependencies = [
     "lap~=0.5.12",
     "gdown~=5.2.0",
     "ollama~=0.4.4",
+    # Ollama's transport. Imported directly so the recognizer can distinguish a
+    # timeout from an unreachable host — httpx raises its own TimeoutException,
+    # which is not a subclass of the builtin TimeoutError.
+    "httpx>=0.27",
     # The boxmot fork imports pkg_resources, which setuptools removed in 81.
     # It does not declare this itself, so we have to.
     "setuptools<81",
