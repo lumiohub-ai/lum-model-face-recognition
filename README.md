@@ -82,11 +82,24 @@ The Smart Office AI Service is a production-ready, multi-tenant face recognition
 ### Step 1: Clone Repository
 
 ```bash
-git clone --recursive https://github.com/humblebeeai/so.model-face-recognition.git
+git clone https://github.com/humblebeeai/so.model-face-recognition.git
 cd so.model-face-recognition
 ```
 
-> If you already cloned without `--recursive`, run `git submodule update --init --recursive` to fetch submodules.
+> **SSH access to `lumiohub-ai/lum-model-vision` required.** The ML models (face
+> detection, person tracking, ReID, action recognition) live in their own
+> private repo and are installed as a normal Python dependency — see
+> [`requirements.txt`](requirements.txt). Ask a maintainer for read access, then
+> make sure an SSH agent is running with that key loaded *before* Step 3:
+>
+> ```bash
+> eval $(ssh-agent -s)
+> ssh-add ~/.ssh/id_rsa       # or wherever your key lives
+> ssh -T git@github.com       # sanity check — should greet you by username
+> ```
+>
+> Without this, `./compose.sh build` fails at the pip install step with
+> `invalid empty ssh agent socket: make sure SSH_AUTH_SOCK is set`.
 
 ### Step 2: Configure Environment Variables
 
@@ -293,11 +306,18 @@ The dev override mounts `./src` and `./configs` into the container so code edits
 docker compose logs -f person-tracking   # one service
 ```
 
-**Submodules:** `modules/insightface` is a git submodule. After pulling changes that touch it, run:
+**Iterating on model code:** the ML models live in a separate repo
+([`lumiohub-ai/lum-model-vision`](https://github.com/lumiohub-ai/lum-model-vision))
+and are installed as a pinned dependency, not vendored here. To work on model
+code locally, clone that repo alongside this one and install it editable:
 
 ```bash
-git submodule update --init --recursive
+git clone git@github.com:lumiohub-ai/lum-model-vision.git ../lum-model-vision
+pip install -e ../lum-model-vision
 ```
+
+Ship a change by tagging a new version in that repo, then bumping the pin in
+[`requirements.txt`](requirements.txt).
 
 ---
 
@@ -322,7 +342,8 @@ A high-level summary lives below. The full internal architecture — components,
 ### Components (one-liner each)
 
 - **Pipeline** — `SmartOfficeEngine` orchestrates per-camera workers and a shared GPU inference worker.
-- **Domain** — ML models: YOLO (person detection), InsightFace (face detection + ArcFace embeddings), BoT-SORT (tracking), OSNet (cross-camera ReID), Ollama (activity recognition).
+- **Models** ([`lum-model-vision`](https://github.com/lumiohub-ai/lum-model-vision), external) — YOLO (person detection), InsightFace (face detection + ArcFace embeddings), BoT-SORT (tracking), OSNet (cross-camera ReID), Ollama (activity recognition).
+- **Domain** — camera calibration (`CameraCalibrator`, `HomographyRegistry`); DB-backed, so it stays application-specific rather than moving with the models above.
 - **Messaging** — Redis Streams for commands (Backend → AI), Pub/Sub for events (AI → Backend).
 - **Workers** — Celery tasks for embedding ingestion and detection persistence.
 - **Infrastructure** — pgvector store, Postgres repositories, GCS uploader, async logger, Prometheus metrics.
