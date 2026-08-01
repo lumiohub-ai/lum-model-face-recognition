@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 from sqlalchemy import text
 
-from domain.face_detection import FaceDetector
+from lum_vision import FaceDetector
 from .pgvector import PgVectorStore
 from .repository import Repository
 from .url_utils import normalize_image_url
@@ -39,8 +39,18 @@ class EmbeddingSyncService:
         if detector is not None:
             self.detector = detector
         else:
-            padding_percent = float(config.get('face_detection_padding', 20.0)) if config else 20.0
-            self.detector = FaceDetector(gpu_id=gpu_id, padding_percent=padding_percent)
+            # Build from the same vision config the engine uses, so this detector
+            # reads its model zoo from the same place instead of re-downloading.
+            from config.vision import build_vision_config
+
+            vision_config = build_vision_config(config)
+            self.detector = FaceDetector(
+                gpu_id=gpu_id,
+                model_name=vision_config.face_model_name,
+                padding_percent=vision_config.face_detection_padding,
+                model_root=vision_config.insightface_dir,
+                allowed_modules=vision_config.face_modules,
+            )
 
         self.store = store if store is not None else PgVectorStore(client_slug)
         self.image_fetcher = ImageFetcher()
@@ -83,7 +93,7 @@ class EmbeddingSyncService:
         try:
             image = self.image_fetcher.fetch_image(original_url)
             if image is None:
-                logger.error(f"❌ Failed to fetch image: {original_url}")
+                logger.warning(f"❌ Failed to fetch image: {original_url}")
                 return None
 
             features = self.detector.extract_face_features(image)

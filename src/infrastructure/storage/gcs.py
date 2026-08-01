@@ -335,7 +335,7 @@ class ImageFetcher:
                 return None
 
         if img_bytes is None:
-            logger.error(f"Failed to fetch image bytes from {url}")
+            logger.warning(f"Failed to fetch image bytes from {url}")
             return None
 
         try:
