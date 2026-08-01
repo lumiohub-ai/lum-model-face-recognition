@@ -22,9 +22,14 @@ RUN rm -rf /var/lib/apt/lists/* && \
     wget \
     curl \
     git \
+    openssh-client \
     ca-certificates \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# github.com must be a known host before pip can clone lum-model-vision over
+# SSH, or the clone hangs on an interactive host-key prompt.
+RUN mkdir -p -m 0700 /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_hosts
 
 # Upgrade pip
 RUN pip install --upgrade pip setuptools wheel
@@ -34,11 +39,12 @@ RUN pip install --no-cache-dir \
     torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
-# Copy and install requirements. This pulls in packages/lum-model-vision, which
-# brings boxmot from git and insightface from PyPI — no vendored forks needed.
-COPY packages ./packages
+# Install requirements. This pulls lum-model-vision from its own private repo
+# (git+ssh, see requirements.txt) — build with `docker build --ssh default .`
+# so an SSH agent with access to that repo is forwarded into this step. It
+# brings boxmot from git and insightface from PyPI; no vendored forks needed.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=ssh pip install --no-cache-dir -r requirements.txt
 
 # Force headless OpenCV — ultralytics pulls in opencv-python (full), replace it.
 # Pinned to 4.11 deliberately: 4.12+ requires numpy>=2, which the boxmot fork's
@@ -83,11 +89,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY scripts/docker/*.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/*.sh
 
-# Copy config and source. packages/ must be present at the same path as in the
-# builder stage: lum-model-vision is installed editable, so its .pth entry resolves to
-# /app/packages/lum-model-vision/src at import time.
+# Copy config and source. lum-model-vision ships as a normal installed
+# package now (see the builder stage) — nothing repo-local to copy for it.
 COPY configs ./configs
-COPY packages ./packages
 COPY src ./src
 
 ENTRYPOINT ["docker-entrypoint.sh"]

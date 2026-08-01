@@ -62,7 +62,7 @@ graph TB
         gpuw["GPUInferenceWorker<br/>gpu_worker.py"]
     end
 
-    subgraph models["lum_vision (packages/lum-model-vision)"]
+    subgraph models["lum_vision (external package, pinned in requirements.txt)"]
         mf["ModelFactory<br/>factory.py"]
         det["PersonDetector (YOLO)"]
         face["FaceMatcher (ArcFace)"]
@@ -127,7 +127,7 @@ graph TB
 |---|---|---|---|
 | **Entry** | `src/main.py` | Lifecycle, signal handling, wiring | `SmartOfficeApp`, `ApplicationLifecycle` |
 | **Pipeline** | `src/pipeline/` | Real-time per-camera processing, GPU batching | `SmartOfficeEngine`, `CameraWorker`, `GPUInferenceWorker` |
-| **Models** | `packages/lum-model-vision/` | ML models & tracking logic, as an installable package (`lum_vision`). No DB, queue or cloud-storage dependency. | `ModelFactory`, `PersonDetector`, `FaceMatcher`, `PersonTracker` (BoT-SORT), `GlobalTrackManager`, `ActionRecognizer` |
+| **Models** | [lum-model-vision](https://github.com/lumiohub-ai/lum-model-vision) | ML models & tracking logic, as its own package (`lum_vision`), pinned in `requirements.txt`. No DB, queue or cloud-storage dependency. | `ModelFactory`, `PersonDetector`, `FaceMatcher`, `PersonTracker` (BoT-SORT), `GlobalTrackManager`, `ActionRecognizer` |
 | **Domain** | `src/domain/` | Camera calibration (DB-backed, so app-specific) | `CameraCalibrator`, `HomographyRegistry` |
 | **Messaging** | `src/messaging/` | Redis Streams (commands) & Pub/Sub (events) | `StreamConsumer`, `Publisher`, channel/event types |
 | **Workers** | `src/workers/` | Async Celery tasks (embeddings, detections) | `embedding_tasks`, `detection_tasks` |

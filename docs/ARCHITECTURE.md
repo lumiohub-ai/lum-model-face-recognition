@@ -198,7 +198,7 @@ camera_worker.run()
           → GlobalTrack (model object)
 ```
 
-**Files:** `src/pipeline/camera_worker.py`, `src/pipeline/camera_engine.py`, `packages/lum-model-vision/src/lum_vision/person_tracking/global_track.py`, `packages/lum-model-vision/src/lum_vision/person_tracking/global_track_model.py`
+**Files:** `src/pipeline/camera_worker.py`, `src/pipeline/camera_engine.py`, and `lum_vision/person_tracking/global_track.py` + `global_track_model.py` in the [lum-model-vision](https://github.com/lumiohub-ai/lum-model-vision) package
 
 ---
 
@@ -213,12 +213,11 @@ global_track.batch_assign_global_ids()
       → global_track._extract_body_embedding()
         → global_track._init_body_reid_model()
           → global_track._download_reid_weights()
-            → insightface/utils/storage.download()
-              → insightface/utils/download.download_file()
-                → insightface/utils/download.check_sha1()
+            → gdown.download()  (primary source, Google Drive)
+              → urllib.request.urlretrieve()  (fallback: direct URL)
 ```
 
-**Files:** `packages/lum-model-vision/src/lum_vision/person_tracking/global_track.py`, `modules/insightface/insightface/utils/storage.py`, `modules/insightface/insightface/utils/download.py`
+**Files:** `lum_vision/person_tracking/global_track.py` in the [lum-model-vision](https://github.com/lumiohub-ai/lum-model-vision) package
 
 ---
 
