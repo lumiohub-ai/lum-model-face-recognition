@@ -1,0 +1,13 @@
+# Dev override — build the person-tracking image from local source instead of
+# pulling the published one. The base compose.yml pulls humblebeeai/lumiohub-model
+# (prod); this lets you iterate on the model locally.
+#
+# Usage:  cp compose.override.dev.yml compose.override.yml   (auto-loaded by compose)
+#   then: docker compose up -d --build person-tracking
+#
+# celery-worker reuses the person-tracking image, so only this build is needed.
+services:
+  person-tracking:
+    build:
+      context: .
+      dockerfile: Dockerfile

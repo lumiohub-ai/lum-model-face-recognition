@@ -43,16 +43,9 @@ services:
         max-file: "10"
 
   person-tracking:
-    image: humblebeeai/person-tracking-lumiohub:${SO_IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      # lum-model-vision is a private repo installed over git+ssh (see
-      # requirements.txt) — forward the host's SSH agent into the build.
-      # `docker compose build` picks this up automatically; a bare
-      # `docker build` needs `--ssh default` for the same effect.
-      ssh:
-        - default
+    # Pulled from Docker Hub (published by CI, LSO-49). Pin the version via
+    # SO_IMAGE_TAG. For local model dev, use compose.override.dev.yml to build.
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     restart: unless-stopped
     depends_on:
       ollama:
@@ -97,7 +90,7 @@ services:
         max-file: "10"
 
   celery-worker:
-    image: humblebeeai/person-tracking-lumiohub:latest
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
     restart: unless-stopped
     depends_on:
