@@ -17,6 +17,16 @@ psutil~=6.1.1
 nvidia-ml-py~=12.560.30  # GPU monitoring via pynvml (nvmlDeviceGetUtilizationRates)
 dotenv~=0.9.9
 
+# numpy, opencv, loguru and PyYAML are imported directly across src/ (e.g.
+# pipeline/, infrastructure/) but previously only arrived transitively via
+# lum-model-vision — if that package ever drops one, the app would break
+# silently. Pinned to match lum-model-vision's own constraints exactly, so
+# pip can't resolve two different versions of the same package.
+numpy<2
+opencv-python-headless~=4.11.0
+loguru~=0.7.3
+PyYAML
+
 # pgvector Database dependencies
 psycopg2-binary~=2.9.9
 sqlalchemy~=2.0.23

@@ -56,7 +56,12 @@ services:
       - ./volumes/logs:/app/logs
       - ./credentials:/app/credentials
       # lum_vision model_cache_dir — buffalo_l, yolo26s and the ReID weights all
-      # live under here now, so they survive container restarts.
+      # live under here now, so they survive container restarts. Runtime-
+      # verified on the dev fleet: this does NOT inherit the old
+      # /root/.insightface + weights layout, so first boot on a host that
+      # only has the pre-extraction volumes re-downloads yolo26s.pt (~20MB)
+      # and the ReID weights into this dir. Fast, but needs network — expect
+      # it on first start rather than assuming the old model volume applies.
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
     networks:
