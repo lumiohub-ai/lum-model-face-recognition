@@ -121,9 +121,12 @@ class MDAManager:
         self.stream_consumer.start()
         logger.debug("StreamConsumer started")
 
+        # Must be set before starting listeners: each listener thread loops on
+        # `while self._running`, so if it's still False they exit before subscribing.
+        self._running = True
+
         # Start internal reload listeners
         self._start_reload_listeners()
-        self._running = True
 
     def stop(self) -> None:
         """Gracefully shutdown MDA components."""
