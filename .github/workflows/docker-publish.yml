@@ -25,14 +25,21 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # requirements.txt pulls lum-model-vision from its own private repo over
+      # git+ssh (LSO-32) — the build step needs an SSH agent forwarded into
+      # BuildKit for that pip install to succeed. LUM_VISION_DEPLOY_KEY is a
+      # read-only deploy key on lumiohub-ai/lum-model-vision, not a personal key.
+      - name: Load lum-model-vision deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.LUM_VISION_DEPLOY_KEY }}
 
       - name: Derive tags + OCI labels
         id: meta
@@ -54,3 +61,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Forwards $SSH_AUTH_SOCK (set by the ssh-agent step above) into
+          # BuildKit — matches the Dockerfile's `RUN --mount=type=ssh` and the
+          # local `docker build --ssh default` / `docker compose build` path.
+          ssh: default
