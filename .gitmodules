@@ -1,0 +1,3 @@
+[submodule "docs/lumiohub-docs"]
+	path = docs/lumiohub-docs
+	url = https://github.com/lumiohub-ai/lumiohub-docs.git
