@@ -160,8 +160,9 @@ class PgVectorStore:
     def get_all_embeddings(self) -> Tuple[List[str], np.ndarray]:
         """Get all embeddings for recognition.
 
-        This method is compatible with the current FaceRecognition interface
-        that expects (names, embeddings) tuple.
+        This signature is what makes PgVectorStore satisfy lum_vision's
+        EmbeddingProvider protocol, so it can be handed straight to a
+        FaceMatcher. Keep the (names, embeddings) shape.
 
         Returns:
             Tuple of (names, embeddings):

@@ -1,21 +1,31 @@
-# Core
-opencv-python-headless~=4.12.0.88
+# ML models (face detection, person tracking, ReID, action recognition), now
+# a standalone package at github.com/lumiohub-ai/lum-model-vision. Pinned to a
+# tag, not a branch, so installs are reproducible — bump the tag deliberately,
+# don't float it. Private repo: this needs an SSH agent forwarded at install
+# time (docker build --ssh default; see Dockerfile).
+# Brings in opencv, ultralytics, onnxruntime, loguru, gdown, lap, filterpy,
+# ollama and boxmot.
+lum-model-vision @ git+ssh://git@github.com/lumiohub-ai/lum-model-vision.git@v0.1.0
 
-# Person Tracking (YOLOv8/YOLO26)
-ultralytics>=8.3.60
-# scipy>=1.10.0  # Removed: comes with ultralytics
-# pillow~=10.4.0  # Removed: comes with ultralytics
-# PyYAML~=6.0.2  # Removed: comes with ultralytics
+# To iterate on model code locally instead, clone the package repo alongside
+# this one and comment out the line above in favor of:
+#   -e ../lum-model-vision
+
+# Application-only dependencies
 requests~=2.32.3
-# matplotlib~=3.10.0  # Removed: comes with ultralytics
-loguru~=0.7.3
 psutil~=6.1.1
 nvidia-ml-py~=12.560.30  # GPU monitoring via pynvml (nvmlDeviceGetUtilizationRates)
-gdown~=5.2.0
-lap~=0.5.12
-filterpy~=1.4.5
-onnxruntime-gpu~=1.21.0
 dotenv~=0.9.9
+
+# numpy, opencv, loguru and PyYAML are imported directly across src/ (e.g.
+# pipeline/, infrastructure/) but previously only arrived transitively via
+# lum-model-vision — if that package ever drops one, the app would break
+# silently. Pinned to match lum-model-vision's own constraints exactly, so
+# pip can't resolve two different versions of the same package.
+numpy<2
+opencv-python-headless~=4.11.0
+loguru~=0.7.3
+PyYAML
 
 # pgvector Database dependencies
 psycopg2-binary~=2.9.9
@@ -31,6 +41,3 @@ flower~=2.0.1
 
 # GCS image fetching
 google-cloud-storage~=2.14.0
-
-# Action Recognition (Ollama)
-ollama~=0.4.4  # Ollama Python client for LLM inference

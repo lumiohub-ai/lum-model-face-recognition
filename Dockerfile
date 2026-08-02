@@ -22,9 +22,14 @@ RUN rm -rf /var/lib/apt/lists/* && \
     wget \
     curl \
     git \
+    openssh-client \
     ca-certificates \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# github.com must be a known host before pip can clone lum-model-vision over
+# SSH, or the clone hangs on an interactive host-key prompt.
+RUN mkdir -p -m 0700 /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_hosts
 
 # Upgrade pip
 RUN pip install --upgrade pip setuptools wheel
@@ -34,18 +39,24 @@ RUN pip install --no-cache-dir \
     torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
-# Copy and install requirements
+# Install requirements. This pulls lum-model-vision from its own private repo
+# (git+ssh, see requirements.txt) — build with `docker build --ssh default .`
+# so an SSH agent with access to that repo is forwarded into this step. It
+# brings boxmot from git and insightface from PyPI; no vendored forks needed.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=ssh pip install --no-cache-dir -r requirements.txt
 
-# Copy and install local modules
-COPY modules ./modules
-RUN pip install --no-cache-dir ./modules/insightface && \
-    pip install --no-cache-dir ./modules/yolo_tracking
-
-# Force headless OpenCV — ultralytics pulls in opencv-python (full), replace it
+# Force headless OpenCV — ultralytics pulls in opencv-python (full), replace it.
+# Pinned to 4.11 deliberately: 4.12+ requires numpy>=2, which the boxmot fork's
+# numpy==1.24.4 pin rules out. Keep in step with lum-model-vision's pyproject.
 RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
-    pip install --no-cache-dir opencv-python-headless~=4.12.0.88
+    pip install --no-cache-dir opencv-python-headless~=4.11.0
+
+# Swap the CPU onnxruntime that lum-model-vision depends on for the GPU build. They
+# share the same `onnxruntime/` install directory, so this is a replace, not an
+# addition — which is why lum-model-vision has no `[gpu]` extra.
+RUN pip uninstall -y onnxruntime 2>/dev/null || true && \
+    pip install --no-cache-dir onnxruntime-gpu~=1.21.0
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
@@ -78,7 +89,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY scripts/docker/*.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/*.sh
 
-# Copy config and source
+# Copy config and source. lum-model-vision ships as a normal installed
+# package now (see the builder stage) — nothing repo-local to copy for it.
 COPY configs ./configs
 COPY src ./src
 

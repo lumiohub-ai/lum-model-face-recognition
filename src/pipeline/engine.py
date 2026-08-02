@@ -19,19 +19,20 @@ from config.settings import settings
 # Infrastructure
 from infrastructure.video import StreamManager
 from infrastructure import EntryLogger
-from infrastructure.storage import Repository, EmbeddingSyncService
+from infrastructure.storage import Repository, EmbeddingSyncService, PgVectorStore
 
-# Domain
-from domain.face_detection import ModelFactory
+# Models
+from lum_vision import ModelFactory, VisionConfig
 
 # Config
-from config import load_cameras_from_db
+from config import load_cameras_from_db, build_vision_config
 
 # Local
 from pipeline.camera_engine import CameraEngine
 
 from pipeline.gpu_worker import GPUInferenceWorker
 from pipeline.camera_worker import CameraWorker
+from pipeline.action_worker import ActionRecognitionWorker
 from infrastructure.async_logger import AsyncLogger
 from infrastructure.video.annotator import FrameAnnotator
 
@@ -78,14 +79,32 @@ class SmartOfficeEngine:
         if not self.camera_configs:
             raise ValueError("No cameras configured. Check config file or database.")
 
+        # Embedding store — owned here, and shared with both the face matcher
+        # (via the factory) and the startup sync service.
+        self.pgvector_store = PgVectorStore(client_slug)
+
         # Initialize ML models — reuse provided factory to avoid reloading GPU models
         if model_factory is not None:
             self.models = model_factory
             self._owns_models = False
         else:
-            self.models = ModelFactory(self.config, client_slug)
+            self.models = ModelFactory(
+                build_vision_config(self.config),
+                embedding_provider=self.pgvector_store,
+            )
             self.models.initialize_all()
             self._owns_models = True
+
+        # Action recognition: the model is synchronous, so the queue and worker
+        # threads that drive it are owned here.
+        action_cfg = kwargs.get("action_recognition", {}) or {}
+        self.action_worker = ActionRecognitionWorker(
+            recognizer=self.models.action_recognizer,
+            client_slug=client_slug,
+            max_queue_size=action_cfg.get("max_queue_size", 50),
+            num_workers=action_cfg.get("async_workers", 1),
+        )
+        self.action_worker.start_workers()
 
         # Sync missing embeddings on startup
         self._sync_embeddings_on_startup()
@@ -181,13 +200,13 @@ class SmartOfficeEngine:
             engine = CameraEngine(
                 camera_config=config,
                 face_detector=self.models.face_detector,
-                face_recognizer=self.models.face_recognizer,
+                face_recognizer=self.models.face_matcher,
                 person_detector=self.models.person_detector,
                 client_slug=self.client_slug,
                 global_id_generator=self.models.global_id_generator,
                 name_to_id_map=self.name_to_id_map,
                 global_track_manager=self.models.global_track_manager,
-                action_recognizer=self.models.action_recognizer,
+                action_recognizer=self.action_worker,
                 homography_registry=self.homography_registry,
             )
             engines.append(engine)
@@ -197,7 +216,7 @@ class SmartOfficeEngine:
         args = type("Args", (), {})()
         args.client_slug = self.client_slug
         args.logger = logger
-        args.db_names = self.models.face_recognizer.db_names
+        args.db_names = self.models.face_matcher.db_names
         args.production = True
         return EntryLogger(args=args)
 
@@ -355,13 +374,13 @@ class SmartOfficeEngine:
         try:
             logger.info("Reloading face embeddings...")
 
-            self.models.face_recognizer.reload_embeddings()
+            self.models.face_matcher.reload_embeddings()
 
             self.name_to_id_map = self._build_name_to_id_map()
             for engine in self.camera_engines:
                 engine.name_to_id_map = self.name_to_id_map
 
-            self.entry_logger.current_users = self.models.face_recognizer.db_names
+            self.entry_logger.current_users = self.models.face_matcher.db_names
             self.entry_logger.name_to_id = [
                 {"name": name, "id": user_id}
                 for name, user_id in self.name_to_id_map.items()
@@ -370,7 +389,7 @@ class SmartOfficeEngine:
 
             logger.info(
                 f"Face embeddings reloaded: "
-                f"{len(self.models.face_recognizer.db_names)} users"
+                f"{len(self.models.face_matcher.db_names)} users"
             )
             return True
 
@@ -736,7 +755,10 @@ class SmartOfficeEngine:
         if self.models.global_track_manager and self.models.global_track_manager.enabled:
             self._log_final_metrics()
 
-        # Stop action recognizer workers (only if this engine owns the models)
+        # Stop action recognition workers — always, since this engine owns them
+        # regardless of where the models came from.
+        self.action_worker.stop_workers()
+
         if self._owns_models:
             self.models.cleanup()
 
@@ -762,7 +784,7 @@ class SmartOfficeEngine:
                 gpu_id=0,
                 config=self.config,
                 detector=self.models.face_detector,
-                store=self.models.face_recognizer.pgvector_store,
+                store=self.pgvector_store,
             )
             result = sync_service.sync_missing_embeddings()
 
@@ -774,7 +796,7 @@ class SmartOfficeEngine:
                         f"Startup sync complete: {users_processed} users, "
                         f"{embeddings_added} embeddings added"
                     )
-                    self.models.face_recognizer.reload_embeddings()
+                    self.models.face_matcher.reload_embeddings()
                     logger.info("Face recognizer reloaded with new embeddings")
                 return True
             else:
