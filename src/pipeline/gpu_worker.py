@@ -10,6 +10,7 @@ Camera threads are fully independent — a slow camera never blocks a fast one.
 import queue
 import threading
 import time
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -83,26 +84,32 @@ class GPUInferenceWorker:
         self, camera_idx: int, frame: np.ndarray, frame_num: int
     ) -> None:
         """Submit a frame for YOLO detection (non-blocking; drops oldest if full)."""
+        t_submit = time.perf_counter()
         try:
-            self._frame_in_queues[camera_idx].put_nowait((frame, frame_num))
+            self._frame_in_queues[camera_idx].put_nowait((frame, frame_num, t_submit))
         except queue.Full:
             try:
                 self._frame_in_queues[camera_idx].get_nowait()
             except queue.Empty:
                 pass
-            self._frame_in_queues[camera_idx].put_nowait((frame, frame_num))
+            self._frame_in_queues[camera_idx].put_nowait((frame, frame_num, t_submit))
             if self._metrics is not None:
                 self._metrics.record_drop(camera_idx)
 
     def get_detections(
         self, camera_idx: int, timeout: float = 2.0
-    ) -> List[Dict]:
-        """Block until YOLO detections are available for this camera."""
+    ) -> Tuple[List[Dict], Dict[str, float]]:
+        """Block until YOLO detections are available for this camera.
+
+        Returns (detections, timing) where timing is {"wait_ms", "gpu_ms"} —
+        time this camera spent queued for the shared YOLO thread vs. its
+        amortized share of the batch inference itself.
+        """
         try:
             return self._detection_out_queues[camera_idx].get(timeout=timeout)
         except queue.Empty:
             logger.warning(f"get_detections timeout for camera {camera_idx}")
-            return []
+            return [], {}
 
     def submit_faces(
         self,
@@ -111,17 +118,23 @@ class GPUInferenceWorker:
         track_ids: List[int],
     ) -> None:
         """Submit person ROI crops for ArcFace embedding."""
-        self._face_in_queues[camera_idx].put((person_rois, track_ids))
+        self._face_in_queues[camera_idx].put(
+            (person_rois, track_ids, time.perf_counter())
+        )
 
     def get_embeddings(
         self, camera_idx: int, timeout: float = 2.0
-    ) -> Dict[int, Dict]:
-        """Block until ArcFace results are available for this camera."""
+    ) -> Tuple[Dict[int, Dict], Dict[str, float]]:
+        """Block until ArcFace results are available for this camera.
+
+        Returns (embeddings_map, timing) — see get_detections() for the
+        wait_ms/gpu_ms shape.
+        """
         try:
             return self._embedding_out_queues[camera_idx].get(timeout=timeout)
         except queue.Empty:
             logger.warning(f"get_embeddings timeout for camera {camera_idx}")
-            return {}
+            return {}, {}
 
     # ── YOLO loop ─────────────────────────────────────────────────────────────
 
@@ -134,12 +147,21 @@ class GPUInferenceWorker:
                     time.sleep(0.001)
                     continue
 
+                t_dequeue = time.perf_counter()
                 cam_ids = sorted(batch.keys())
                 frames = [batch[cid][0] for cid in cam_ids]
-                all_detections = self._run_yolo_batch(frames)
+                all_detections, batch_ms = self._run_yolo_batch(frames)
+
+                # Amortized, not exact — one batch call serves every camera in
+                # cam_ids, so an equal split is the best per-camera estimate of
+                # compute cost available without instrumenting the model itself.
+                gpu_ms_per_cam = batch_ms / len(cam_ids) if cam_ids else 0.0
 
                 for i, cam_id in enumerate(cam_ids):
-                    self._detection_out_queues[cam_id].put(all_detections[i])
+                    t_submit = batch[cam_id][2]
+                    wait_ms = max(0.0, (t_dequeue - t_submit) * 1000)
+                    timing = {"wait_ms": wait_ms, "gpu_ms": gpu_ms_per_cam}
+                    self._detection_out_queues[cam_id].put((all_detections[i], timing))
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker YOLO error: {e}")
@@ -155,11 +177,12 @@ class GPUInferenceWorker:
                     time.sleep(0.001)
                     continue
 
+                t_dequeue = time.perf_counter()
                 all_crops: List[np.ndarray] = []
                 crop_cam_ids: List[int] = []
                 crop_track_ids: List[int] = []
 
-                for cam_id, (rois, track_ids) in face_batch.items():
+                for cam_id, (rois, track_ids, _t_submit) in face_batch.items():
                     for roi, tid in zip(rois, track_ids):
                         all_crops.append(roi)
                         crop_cam_ids.append(cam_id)
@@ -168,15 +191,26 @@ class GPUInferenceWorker:
                 cam_results: Dict[int, Dict[int, Dict]] = {
                     cid: {} for cid in face_batch
                 }
+                batch_ms = 0.0
                 if all_crops:
-                    face_results = self._run_arcface_batch(all_crops)
+                    face_results, batch_ms = self._run_arcface_batch(all_crops)
                     for i, (cam_id, track_id) in enumerate(
                         zip(crop_cam_ids, crop_track_ids)
                     ):
                         cam_results[cam_id][track_id] = face_results[i]
 
+                # ArcFace runs serially per-ROI, so split compute time
+                # proportionally to how many crops each camera contributed —
+                # an equal per-camera split would be wrong when ROI counts differ.
+                crops_per_cam = Counter(crop_cam_ids)
+                ms_per_crop = (batch_ms / len(all_crops)) if all_crops else 0.0
+
                 for cam_id, results in cam_results.items():
-                    self._embedding_out_queues[cam_id].put(results)
+                    t_submit = face_batch[cam_id][2]
+                    wait_ms = max(0.0, (t_dequeue - t_submit) * 1000)
+                    gpu_ms = crops_per_cam.get(cam_id, 0) * ms_per_crop
+                    timing = {"wait_ms": wait_ms, "gpu_ms": gpu_ms}
+                    self._embedding_out_queues[cam_id].put((results, timing))
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker ArcFace error: {e}")
@@ -205,18 +239,20 @@ class GPUInferenceWorker:
 
         return batch
 
-    def _collect_frames(self) -> Dict[int, Tuple[np.ndarray, int]]:
+    def _collect_frames(self) -> Dict[int, Tuple[np.ndarray, int, float]]:
         return self._collect_batch(self._frame_in_queues)
 
-    def _collect_faces(self) -> Dict[int, Tuple[List, List]]:
+    def _collect_faces(self) -> Dict[int, Tuple[List, List, float]]:
         return self._collect_batch(self._face_in_queues)
 
     # ── Inference helpers ─────────────────────────────────────────────────────
 
-    def _run_yolo_batch(self, frames: List[np.ndarray]) -> List[List[Dict]]:
-        """Run YOLO on a batch of frames and return per-frame detections."""
+    def _run_yolo_batch(
+        self, frames: List[np.ndarray]
+    ) -> Tuple[List[List[Dict]], float]:
+        """Run YOLO on a batch of frames; returns (per-frame detections, batch_ms)."""
         if not frames:
-            return []
+            return [], 0.0
         try:
             t0 = time.time()
             # Here we inference the batch of frames using the YOLO model. The model is expected to return a list of results, one for each frame.
@@ -230,13 +266,15 @@ class GPUInferenceWorker:
             duration_ms = (time.time() - t0) * 1000
             if self._metrics is not None:
                 self._metrics.record_yolo_ms(duration_ms)
-            return [self._parse_yolo_result(r) for r in results]
+            return [self._parse_yolo_result(r) for r in results], duration_ms
         except Exception as e:
             logger.exception(f"YOLO batch inference failed: {e}")
-            return [[] for _ in frames]
+            return [[] for _ in frames], 0.0
 
-    def _run_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
-        """Detect face and extract embedding for each person ROI."""
+    def _run_arcface_batch(
+        self, person_rois: List[np.ndarray]
+    ) -> Tuple[List[Dict], float]:
+        """Detect face and extract embedding for each person ROI; returns (results, batch_ms)."""
         t0 = time.time()
         results = []
         for roi in person_rois:
@@ -286,7 +324,7 @@ class GPUInferenceWorker:
         duration_ms = (time.time() - t0) * 1000
         if self._metrics is not None and results:
             self._metrics.record_arcface_ms(duration_ms)
-        return results
+        return results, duration_ms
 
     @staticmethod
     def _parse_yolo_result(result) -> List[Dict]:

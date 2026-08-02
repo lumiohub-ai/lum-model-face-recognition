@@ -155,6 +155,12 @@ class CameraEngine:
         # Frame counter
         self.frame_count = 0
 
+        # Per-frame stage timings (ms), written by update_tracking/finalize_identities
+        # and read back by CameraWorker for the metrics dashboard (LSO-66). Reset at
+        # the top of each method so a mid-method exception can't leave stale numbers
+        # for the next frame to pick up.
+        self.stage_timings: Dict[str, float] = {}
+
     # ── New parallel-pipeline API ─────────────────────────────────────────────
 
     def update_tracking(
@@ -175,11 +181,16 @@ class CameraEngine:
             person_rois = [(track_id, roi), …] — one ROI per active track
         """
         self.frame_count += 1
+        self.stage_timings["track"] = 0.0
+        self.stage_timings["reid"] = 0.0
 
         # Update tracker
+        _t0 = time.perf_counter()
         active_tracks, removed_tracks = self.person_tracker.update(detections, frame)
+        self.stage_timings["track"] = (time.perf_counter() - _t0) * 1000
 
         # GlobalTrackManager assignment (CPU-only)
+        _t0 = time.perf_counter()
         if self.global_track_manager and self.global_track_manager.enabled:
             for track in active_tracks:
                 track_id = track["track_id"]
@@ -211,6 +222,7 @@ class CameraEngine:
                     identity_locked=identity_locked,
                 )
                 track["global_track_id"] = global_id
+        self.stage_timings["reid"] = (time.perf_counter() - _t0) * 1000
 
         # Store track detections and collect person ROIs for face detection
         person_rois: List[Tuple[int, np.ndarray]] = []
@@ -256,6 +268,8 @@ class CameraEngine:
             List of attendance event dicts.
         """
         recognized_persons: List[Dict] = []
+        self.stage_timings["match"] = 0.0
+        _t0_total = time.perf_counter()
 
         for track in active_tracks:
             track_id = track["track_id"]
@@ -503,6 +517,9 @@ class CameraEngine:
                         source_track_id=merge_track, target_track_id=keep_track
                     )
 
+        total_ms = (time.perf_counter() - _t0_total) * 1000
+        self.stage_timings["identity"] = max(0.0, total_ms - self.stage_timings["match"])
+
         return recognized_persons
 
     def emit_positions(self, active_tracks: List[Dict]) -> None:
@@ -601,10 +618,14 @@ class CameraEngine:
                 "face_image": face_image,
             }
 
+        _t0 = time.perf_counter()
         similarities = self.face_recognizer.compute_similarities(
             np.array([embedding])
         )
         best_idx, best_similarity = self.face_recognizer.get_best_match(similarities)
+        self.stage_timings["match"] = (
+            self.stage_timings.get("match", 0.0) + (time.perf_counter() - _t0) * 1000
+        )
 
         if best_similarity >= self.match_threshold:
             name = self.face_recognizer.db_names[best_idx]

@@ -8,6 +8,10 @@ Collects:
   - YOLO / ArcFace inference latency (rolling average)
   - Action recognition latency + outcome counts (Ollama VLM)
   - Frame drop counts   (queue-full events)
+  - Per-camera pipeline stage breakdown (decode/detect/track/reid/face/match/identity/publish)
+  - Per-camera background stream decode cost (StreamHandler's own capture thread, which for
+    RTSP/live sources runs unthrottled at the stream's native rate — separate from, and not
+    part of, the detection_interval-gated stage breakdown above)
 
 Designed to be low-overhead: data is only aggregated when snapshot() is called.
 """
@@ -15,7 +19,7 @@ Designed to be low-overhead: data is only aggregated when snapshot() is called.
 import threading
 import time
 from collections import Counter, deque
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import psutil
 from loguru import logger
@@ -81,6 +85,22 @@ class MetricsCollector:
         self._action_counts: Counter = Counter()
         self._action_queue_depth: int = 0
 
+        # Per-camera pipeline stage breakdown: one whole-frame record per entry,
+        # so every stage's rolling window covers the exact same set of frames
+        # (independent per-stage deques would drift out of alignment whenever a
+        # stage is conditionally skipped, e.g. reid when ReID is disabled).
+        self._frame_stages: Dict[int, deque] = {}
+
+        # Per-camera background stream-read decode cost + timestamps (LSO-66).
+        # Separate from _frame_stages/_frame_ts: StreamHandler's capture
+        # thread for RTSP/live sources runs unthrottled at the stream's own
+        # native rate, independent of detection_interval — a genuinely
+        # different, continuous cost, not one more slice of a detection
+        # frame's blocking span. Mixing it into the stage pct-sum would be
+        # wrong; it's reported alongside the stage breakdown instead.
+        self._stream_decode_ms: Dict[int, deque] = {}
+        self._stream_read_ts: Dict[int, deque] = {}
+
     # ── FPS / frame tracking ──────────────────────────────────────────────────
 
     def record_frame(self, camera_idx: int) -> None:
@@ -100,6 +120,46 @@ class MetricsCollector:
         """Return per-camera FPS over the rolling FPS_WINDOW_SEC window."""
         with self._lock:
             ts = self._frame_ts.get(camera_idx)
+            if not ts or len(ts) < 2:
+                return 0.0
+            cutoff = time.monotonic() - self.FPS_WINDOW_SEC
+            window = [t for t in ts if t >= cutoff]
+            if len(window) < 2:
+                return 0.0
+            return (len(window) - 1) / (window[-1] - window[0])
+
+    # ── Background stream decode (StreamHandler capture thread) ────────────────
+
+    def record_stream_read(self, camera_idx: int, ms: float) -> None:
+        """Record one background capture-thread read/decode duration for this camera.
+
+        Called from StreamHandler.update() — the thread that continuously
+        pulls and decodes frames for RTSP/live sources, independent of
+        whatever rate the pipeline actually consumes them at.
+        """
+        now = time.monotonic()
+        with self._lock:
+            dq = self._stream_decode_ms.get(camera_idx)
+            if dq is None:
+                dq = deque(maxlen=self.LATENCY_BUFFER)
+                self._stream_decode_ms[camera_idx] = dq
+            dq.append(ms)
+
+            ts = self._stream_read_ts.get(camera_idx)
+            if ts is None:
+                ts = deque(maxlen=self.FPS_DEQUE_MAX)
+                self._stream_read_ts[camera_idx] = ts
+            ts.append(now)
+
+    def get_stream_fps(self, camera_idx: int) -> float:
+        """Return the background capture thread's own native read rate.
+
+        Same rolling-window method as get_fps(), but over _stream_read_ts —
+        this is how fast frames actually arrive off the wire, not how fast
+        the (detection_interval-throttled) pipeline consumes them.
+        """
+        with self._lock:
+            ts = self._stream_read_ts.get(camera_idx)
             if not ts or len(ts) < 2:
                 return 0.0
             cutoff = time.monotonic() - self.FPS_WINDOW_SEC
@@ -140,6 +200,25 @@ class MetricsCollector:
             self._action_counts[status] += 1
             self._action_queue_depth = queue_depth
 
+    def record_frame_stages(
+        self, camera_idx: int, frame_ms: float, stages: Dict[str, float]
+    ) -> None:
+        """Record one detection-frame's wall-clock breakdown for this camera.
+
+        Args:
+            camera_idx: Camera index.
+            frame_ms: Wall-clock gap since the previous detection frame finished.
+            stages: {stage_name: elapsed_ms}, e.g. {"detect": 31.0, "track": 12.0, ...}.
+                    Every stage should be present (0.0 if it didn't run this frame)
+                    so the rolling window stays aligned across stages.
+        """
+        with self._lock:
+            dq = self._frame_stages.get(camera_idx)
+            if dq is None:
+                dq = deque(maxlen=self.LATENCY_BUFFER)
+                self._frame_stages[camera_idx] = dq
+            dq.append((frame_ms, dict(stages)))
+
     # ── System resource stats (static helpers) ────────────────────────────────
 
     @staticmethod
@@ -176,6 +255,59 @@ class MetricsCollector:
             logger.debug(f"GPU metrics read error: {e}")
             return None
 
+    # ── Per-camera pipeline stage breakdown ───────────────────────────────────
+
+    # Stages that partition a detection frame's wall time; their `ms` values
+    # are expected to sum to ~frame_ms (the remainder lands in "other").
+    _PRIMARY_STAGES: Tuple[str, ...] = (
+        "decode", "detect", "track", "reid", "face", "match", "identity", "publish", "other",
+    )
+    # (primary stage, wait sub-key, gpu sub-key) — auxiliary breakdown of a
+    # primary stage's blocking span into "waiting for the shared GPU worker"
+    # vs "this camera's amortized share of the batch inference itself".
+    _AUX_STAGE_KEYS: Tuple[Tuple[str, str, str], ...] = (
+        ("detect", "detect_wait", "detect_gpu"),
+        ("face", "face_wait", "face_gpu"),
+    )
+
+    @staticmethod
+    def _percentile(values: List[float], pct: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        k = max(0, min(len(ordered) - 1, int(round(pct / 100 * (len(ordered) - 1)))))
+        return ordered[k]
+
+    def _stage_snapshot(
+        self, records: List[Tuple[float, Dict[str, float]]]
+    ) -> Tuple[float, Dict[str, Dict]]:
+        """Aggregate a camera's rolling window of per-frame stage records.
+
+        Returns (avg_frame_ms, {stage_name: {ms, pct, p95_ms, ...}}).
+        """
+        if not records:
+            return 0.0, {}
+
+        avg_frame_ms = sum(r[0] for r in records) / len(records)
+
+        stages: Dict[str, Dict] = {}
+        for stage in self._PRIMARY_STAGES:
+            values = [r[1].get(stage, 0.0) for r in records]
+            mean_ms = sum(values) / len(values)
+            stages[stage] = {
+                "ms": round(mean_ms, 1),
+                "pct": round((mean_ms / avg_frame_ms * 100) if avg_frame_ms else 0.0, 1),
+                "p95_ms": round(self._percentile(values, 95), 1),
+            }
+
+        for primary, wait_key, gpu_key in self._AUX_STAGE_KEYS:
+            wait_values = [r[1].get(wait_key, 0.0) for r in records]
+            gpu_values = [r[1].get(gpu_key, 0.0) for r in records]
+            stages[primary]["wait_ms"] = round(sum(wait_values) / len(wait_values), 1)
+            stages[primary]["gpu_ms"] = round(sum(gpu_values) / len(gpu_values), 1)
+
+        return avg_frame_ms, stages
+
     # ── Full snapshot ─────────────────────────────────────────────────────────
 
     def snapshot(self, camera_indices: Optional[List[int]] = None) -> Dict:
@@ -194,22 +326,48 @@ class MetricsCollector:
             action_avg = sum(self._action_ms) / len(self._action_ms) if self._action_ms else 0.0
             action_counts = dict(self._action_counts)
             action_queue_depth = self._action_queue_depth
+            # Copy each camera's deque while holding the lock (cheap: a list()
+            # of tuples), then aggregate outside it — snapshot() is polled by
+            # the dashboard, the store writer and periodic reporting, so the
+            # lock every camera thread hits per-frame shouldn't be held while
+            # summing up to LATENCY_BUFFER records x N cameras.
+            stage_records = {
+                idx: list(self._frame_stages.get(idx, ())) for idx in indices
+            }
+            stream_decode_records = {
+                idx: list(self._stream_decode_ms.get(idx, ())) for idx in indices
+            }
+            # Pooled across all requested cameras — same "global average"
+            # semantics as yolo_avg/arcface_avg above, not a mean-of-means.
+            all_stream_decode = [v for vals in stream_decode_records.values() for v in vals]
+            stream_decode_avg = sum(all_stream_decode) / len(all_stream_decode) if all_stream_decode else 0.0
+
+        cameras = {}
+        for idx in indices:
+            frame_ms, stages = self._stage_snapshot(stage_records.get(idx, []))
+            decode_vals = stream_decode_records.get(idx, [])
+            cameras[str(idx)] = {
+                "fps": round(self.get_fps(idx), 2),
+                "frame_drops": self.get_drops(idx),
+                "frame_ms": round(frame_ms, 1),
+                "stages": stages,
+                "stream": {
+                    "native_fps": round(self.get_stream_fps(idx), 2),
+                    "decode_ms": round(sum(decode_vals) / len(decode_vals), 2) if decode_vals else 0.0,
+                    "decode_p95_ms": round(self._percentile(decode_vals, 95), 2),
+                },
+            }
 
         return {
             "timestamp": time.time(),
             "cpu_percent": self.cpu_percent(),
             "memory": self.memory(),
             "gpu": self.gpu(),
-            "cameras": {
-                str(idx): {
-                    "fps": round(self.get_fps(idx), 2),
-                    "frame_drops": self.get_drops(idx),
-                }
-                for idx in indices
-            },
+            "cameras": cameras,
             "inference": {
                 "yolo_avg_ms": round(yolo_avg, 1),
                 "arcface_avg_ms": round(arcface_avg, 1),
+                "stream_decode_avg_ms": round(stream_decode_avg, 1),
             },
             "action": {
                 "avg_ms": round(action_avg, 1),

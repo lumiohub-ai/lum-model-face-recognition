@@ -155,6 +155,15 @@ class StreamManager:
             logger.exception(f"Exception initializing video writer: {filename} - {e}")
             return None
 
+    def set_metrics(self, metrics_collector) -> None:
+        """Wire the shared MetricsCollector into every stream's background thread.
+
+        Called after MetricsCollector exists (it's built after init_streams()
+        in SmartOfficeEngine's startup sequence) — see StreamHandler.set_metrics().
+        """
+        for idx, stream in enumerate(self.streams):
+            stream.set_metrics(metrics_collector, idx)
+
     def start_streams(self) -> None:
         """Start all non-video file streams (RTSP, webcam)."""
         if not self._initialized:

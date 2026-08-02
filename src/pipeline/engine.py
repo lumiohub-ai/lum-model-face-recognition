@@ -168,6 +168,9 @@ class SmartOfficeEngine:
             self._metrics_store = None
             self._metrics_dashboard = None
 
+        if self.metrics is not None:
+            self.stream_manager.set_metrics(self.metrics)
+
         # GPU worker (shared across all cameras)
         n_cameras = len(self.camera_configs)
         self.gpu_worker = GPUInferenceWorker(
@@ -182,6 +185,14 @@ class SmartOfficeEngine:
             entry_logger=self.entry_logger,
             async_queue_size=self._async_queue_size,
         )
+
+        # The action worker is constructed early (before models/metrics/logger
+        # exist) so it can start its threads as soon as models are ready. Wire
+        # its late-bound dependencies now that both exist — without this,
+        # action-recognition metrics stay permanently zero (LSO-66) and
+        # activity proof images are silently dropped rather than uploaded.
+        self.action_worker.set_metrics_collector(self.metrics)
+        self.action_worker.set_async_logger(self.async_logger)
 
         # One CameraWorker per camera
         self.camera_workers = self._init_camera_workers()

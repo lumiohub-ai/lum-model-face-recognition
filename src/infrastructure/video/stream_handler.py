@@ -63,6 +63,25 @@ class StreamHandler:
         self._last_frame_at: Optional[float] = None
         self._reconnecting = False
 
+        # Optional metrics wiring (LSO-66) — set after construction, since the
+        # MetricsCollector isn't built yet when streams are first initialized.
+        # See set_metrics().
+        self._metrics = None
+        self._camera_idx: Optional[int] = None
+
+    def set_metrics(self, metrics_collector, camera_idx: int) -> None:
+        """Wire in metrics recording for the background capture thread's decode cost.
+
+        For RTSP/live sources, `update()` runs unthrottled at the stream's own
+        native rate — independent of (and typically faster than) the
+        pipeline's detection_interval-gated processing. That decode cost is
+        real and ongoing, but invisible to anything only watching the
+        detection-frame path, so it's recorded separately here rather than
+        folded into CameraWorker's per-detection-frame stage breakdown.
+        """
+        self._metrics = metrics_collector
+        self._camera_idx = camera_idx
+
         ret, frame = self.cap.read()
         if not ret:
             if self.is_video:
@@ -250,7 +269,9 @@ class StreamHandler:
                 consecutive_failures = 0
                 continue
 
+            _t0 = time.perf_counter()
             ret, frame = self.cap.read()
+            decode_ms = (time.perf_counter() - _t0) * 1000
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures >= 3:
@@ -264,6 +285,8 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
             self._mark_frame_received()
+            if self._metrics is not None and self._camera_idx is not None:
+                self._metrics.record_stream_read(self._camera_idx, decode_ms)
 
             # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
             # This prevents jitter by ensuring we never show old frames

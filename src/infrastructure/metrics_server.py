@@ -63,6 +63,14 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   .cam-fps{font-size:32px;font-weight:700;color:var(--blue);line-height:1}
   .cam-fps.low{color:var(--red)}.cam-fps.mid{color:var(--yellow)}
   .cam-drops{font-size:12px;color:var(--muted);margin-top:4px}
+  .cam-frame-ms{font-size:11px;color:var(--muted);margin-top:10px;display:flex;justify-content:space-between}
+  .stage-bar{display:flex;height:9px;border-radius:4px;overflow:hidden;margin-top:4px;background:var(--border)}
+  .stage-bar div{height:100%}
+  .action-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 18px;margin-bottom:20px}
+  .action-card h2{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}
+  .action-stats{display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+  .action-stats .a-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px}
+  .action-stats .a-value{font-size:20px;font-weight:700;line-height:1}
   .alert-box{background:var(--surface);border:1px solid #f8514944;border-radius:8px;padding:14px 18px;margin-bottom:20px;display:none}
   .alert-box h2{font-size:13px;font-weight:600;color:var(--red);margin-bottom:10px;text-transform:uppercase}
   .alert-item{font-size:13px;color:var(--text);padding:6px 0;border-bottom:1px solid var(--border)}
@@ -107,6 +115,22 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="card"><h2>Inference Latency (ms)</h2><canvas id="chart-lat" height="140"></canvas></div>
   </div>
   <div class="card" style="margin-bottom:20px"><h2>Per-Camera FPS</h2><canvas id="chart-fps" height="90"></canvas></div>
+
+  <div class="action-card">
+    <h2>Action Recognition (VLM)</h2>
+    <div class="action-stats">
+      <div><div class="a-label">Avg latency</div><div class="a-value" id="a-avg-ms">—</div></div>
+      <div><div class="a-label">Queue depth</div><div class="a-value" id="a-queue">—</div></div>
+      <div><div class="a-label">OK (total)</div><div class="a-value" id="a-ok">—</div></div>
+      <div><div class="a-label">Errors (total)</div><div class="a-value" id="a-error">—</div></div>
+      <div><div class="a-label">Timeouts (total)</div><div class="a-value" id="a-timeout">—</div></div>
+      <div><div class="a-label">Parse fails (total)</div><div class="a-value" id="a-parse-fail">—</div></div>
+    </div>
+  </div>
+
+  <!-- Per-camera stage breakdown: which stage ate this camera's frame time.
+       "wait" = queued for the shared GPU worker, not model compute — see the
+       global YOLO/ArcFace ms above for actual model cost (LSO-66). -->
   <div class="cam-grid" id="cam-grid"></div>
 </div>
 
@@ -125,6 +149,12 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <div class="card" style="margin-bottom:20px"><h2>Inference Latency (ms)</h2><canvas id="h-lat" height="110"></canvas></div>
   <div class="card" style="margin-bottom:20px"><h2>Per-Camera FPS</h2><canvas id="h-fps" height="110"></canvas></div>
+  <div class="card" style="margin-bottom:20px">
+    <h2>Stage Breakdown (% of frame time)
+      &nbsp;<select id="hist-cam-sel" style="font-size:12px;padding:2px 8px"></select>
+    </h2>
+    <canvas id="h-stage" height="130"></canvas>
+  </div>
 </div>
 
 <footer>Smart Office Monitoring Dashboard &nbsp;·&nbsp; Live refreshes every 2 s &nbsp;·&nbsp; History retained 30 days</footer>
@@ -173,7 +203,7 @@ const sysChart = new Chart(document.getElementById('chart-sys'), {
 
 const latChart = new Chart(document.getElementById('chart-lat'), {
   type:'line', data:{labels:Array(WINDOW).fill(''),
-    datasets:[mkDataset('YOLO ms','#f78166'),mkDataset('ArcFace ms','#ffa657')]},
+    datasets:[mkDataset('YOLO ms','#f78166'),mkDataset('ArcFace ms','#ffa657'),mkDataset('Stream decode ms','#e3b341')]},
   options:baseOpts(null,'ms')});
 
 const fpsChart = new Chart(document.getElementById('chart-fps'), {
@@ -191,6 +221,50 @@ function kpiState(id, pct, warnAt, alertAt) {
 }
 function fpsColor(fps) {
   return fps < 5 ? '#f85149' : fps < 15 ? '#d29922' : '#58a6ff';
+}
+
+// ── Stage breakdown (LSO-66) ─────────────────────────────────────────────────
+// "wait" = queued for the shared GPU worker (contention); "gpu" = this
+// camera's amortized share of batch compute. Neither is exact — see the
+// dashboard note above the camera grid and the LSO-66 plan's Known Limitations.
+const STAGE_META = [
+  {key:'decode',   label:'Video decode (read)',       color:'#e3b341'},
+  {key:'detect',   label:'Detect (YOLO)',             color:'#58a6ff'},
+  {key:'track',    label:'Track (BoT-SORT)',          color:'#bc8cff'},
+  {key:'reid',     label:'Cross-camera ReID',         color:'#f78166'},
+  {key:'face',     label:'Face (detect + embed)',     color:'#ffa657'},
+  {key:'match',    label:'Face DB match',             color:'#3fb950'},
+  {key:'identity', label:'Identity / state update',   color:'#39c5cf'},
+  {key:'publish',  label:'Position publish (Redis)',  color:'#db61a2'},
+  {key:'other',    label:'Other',                     color:'#484f58'},
+];
+// RTSP sources: StreamHandler.read() (what the "decode" stage measures) is a
+// cheap non-blocking cache lookup by design — the real decode cost runs in a
+// separate background thread, continuously, at the stream's own native rate.
+// A stage-bar segment sized by the (near-zero, correct-but-uninformative)
+// in-pipeline value would be invisible or absent. When background stream
+// data is available, the decode segment shows THAT instead, at a fixed
+// legible width — it isn't part of this frame's blocking budget (so it
+// isn't drawn to scale with the other pct-of-frame_ms segments), but it's
+// real, ongoing cost worth surfacing over a misleadingly-empty slot.
+const DECODE_SEGMENT_FLEX = 4;
+
+function renderStageBar(stages, stream) {
+  if (!stages) return '';
+  return STAGE_META.map(s => {
+    if (s.key === 'decode' && stream && stream.decode_ms > 0) {
+      const title = 'Video decode (background capture thread): '+stream.decode_ms+'ms'
+        +', p95 '+stream.decode_p95_ms+'ms, @ '+stream.native_fps+'fps native'
+        +' — runs continuously, independent of this frame’s budget';
+      return '<div style="flex:'+DECODE_SEGMENT_FLEX+' 0 auto;background:'+s.color+'" title="'+title+'"></div>';
+    }
+    const st = stages[s.key];
+    if (!st || st.pct <= 0) return '';
+    let title = s.label+': '+st.ms+'ms ('+st.pct+'%)';
+    if (st.wait_ms !== undefined) title += ' — wait '+st.wait_ms+'ms, gpu '+st.gpu_ms+'ms (amortized)';
+    if (st.p95_ms !== undefined) title += ', p95 '+st.p95_ms+'ms';
+    return '<div style="flex:'+st.pct+' 0 auto;background:'+s.color+'" title="'+title+'"></div>';
+  }).join('');
 }
 
 // ── Live polling ──────────────────────────────────────────────────────────────
@@ -232,8 +306,16 @@ async function fetchLive() {
     sysChart.update();
 
     const inf = d.inference||{};
-    push(latChart,0,inf.yolo_avg_ms||0); push(latChart,1,inf.arcface_avg_ms||0);
+    push(latChart,0,inf.yolo_avg_ms||0); push(latChart,1,inf.arcface_avg_ms||0); push(latChart,2,inf.stream_decode_avg_ms||0);
     latChart.update();
+
+    const action = d.action||{};
+    document.getElementById('a-avg-ms').textContent = (action.avg_ms||0).toFixed(0)+'ms';
+    document.getElementById('a-queue').textContent = action.queue_depth||0;
+    document.getElementById('a-ok').textContent = action.ok||0;
+    document.getElementById('a-error').textContent = action.error||0;
+    document.getElementById('a-timeout').textContent = action.timeout||0;
+    document.getElementById('a-parse-fail').textContent = action.parse_fail||0;
 
     const cameras = d.cameras||{};
     const ks = Object.keys(cameras).sort((a,b)=>+a-+b);
@@ -248,10 +330,14 @@ async function fetchLive() {
     grid.innerHTML = ks.map(k => {
       const cam=cameras[k], fps=cam.fps;
       const cls=fps<5?'low':fps<15?'mid':'';
+      const frameMs = cam.frame_ms;
+      const stream = cam.stream || {native_fps:0, decode_ms:0, decode_p95_ms:0};
       return `<div class="cam-card">
         <div class="cam-title">Camera ${k}</div>
         <div class="cam-fps ${cls}">${fps.toFixed(1)}</div>
         <div class="cam-drops">fps &nbsp;·&nbsp; ${cam.frame_drops} drops</div>
+        <div class="stage-bar">${renderStageBar(cam.stages, stream)}</div>
+        <div class="cam-frame-ms"><span>frame</span><span>${frameMs?frameMs.toFixed(1)+'ms':'—'}</span></div>
       </div>`;
     }).join('');
 
@@ -274,7 +360,8 @@ fetchLive();
 setInterval(fetchLive, 2000);
 
 // ── History ───────────────────────────────────────────────────────────────────
-let hSys=null, hGpu=null, hLat=null, hFps=null;
+let hSys=null, hGpu=null, hLat=null, hFps=null, hStage=null;
+let _histSampled=null;
 
 function histLineOpts(unit) {
   return {responsive:true,maintainAspectRatio:true,animation:false,
@@ -323,6 +410,7 @@ async function loadHistory() {
     const gpuM = sampled.map(r => r.gpu_mem_pct??null);
     const yolo = sampled.map(r => r.yolo_ms??null);
     const arc  = sampled.map(r => r.arcface_ms??null);
+    const streamDec = sampled.map(r => r.stream_decode_ms??null);
 
     // All camera keys found in the data
     const camKeys = [...new Set(sampled.flatMap(r=>Object.keys(r.cameras||{})))].sort((a,b)=>+a-+b);
@@ -341,7 +429,7 @@ async function loadHistory() {
 
     if (hLat) hLat.destroy();
     hLat = new Chart(document.getElementById('h-lat'), {
-      type:'line', data:{labels:ts, datasets:[mkHistDs('YOLO ms','#f78166',yolo),mkHistDs('ArcFace ms','#ffa657',arc)]},
+      type:'line', data:{labels:ts, datasets:[mkHistDs('YOLO ms','#f78166',yolo),mkHistDs('ArcFace ms','#ffa657',arc),mkHistDs('Stream decode ms','#e3b341',streamDec)]},
       options:histLineOpts('ms')});
 
     if (hFps) hFps.destroy();
@@ -350,9 +438,94 @@ async function loadHistory() {
         mkHistDs('cam'+k, camColors[i%camColors.length], sampled.map(r=>(r.cameras[k]||{}).fps??null)))},
       options:histLineOpts(' fps')});
 
+    // Stage breakdown — one camera at a time (8 stages × N cameras would be
+    // unreadable as a single chart); selector defaults to the first camera
+    // and re-renders from cached data with no re-fetch on change.
+    _histSampled = sampled;
+    const camSel = document.getElementById('hist-cam-sel');
+    const prevSel = camSel.value;
+    camSel.innerHTML = camKeys.map(k=>`<option value="${k}">cam${k}</option>`).join('');
+    camSel.value = camKeys.includes(prevSel) ? prevSel : (camKeys[0]||'');
+    camSel.onchange = () => renderStageHistory(_histSampled, camSel.value);
+    renderStageHistory(sampled, camSel.value);
+
   } catch(e) {
     document.getElementById('hist-status').textContent = 'Error: '+e.message;
   }
+}
+
+function renderStageHistory(sampled, camKey) {
+  if (hStage) { hStage.destroy(); hStage = null; }
+  if (!sampled || !camKey) return;
+
+  const ts = sampled.map(r => new Date(r.ts*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
+  // Same reasoning as the Live view's stage bar: on RTSP cameras the
+  // in-pipeline "decode" stage is correctly ~0 (StreamHandler.read() is a
+  // non-blocking cache lookup there), which plots as a flat zero line —
+  // reading as "decode is free" rather than "not measured on this path".
+  // Where background stream data was captured for a point, plot a small
+  // fixed band instead (matching the Live bar's DECODE_SEGMENT_FLEX) and
+  // show the real numbers in the tooltip. Falls back to the real per-frame
+  // pct when no stream data exists for that point (video-file sources, or
+  // history written before this instrumentation existed).
+  //
+  // This is a stacked-to-100% chart, unlike the Live view's bar — so the
+  // fixed decode slice has to come FROM somewhere, not just get tacked on
+  // top (that quietly pushed the real per-point total to ~104%, which
+  // either overflows the 100% axis or visibly shoves every other stage's
+  // band up by 4 points, depending on how the last dataset in the stack
+  // happens to clip). Instead, whenever the placeholder applies, the other
+  // 8 stages are rescaled down so they sum to (100 - DECODE_SEGMENT_FLEX)
+  // — their relative shares versus each other are unchanged, decode just
+  // takes its fixed slice out of the same 100% total instead of on top of it.
+  const perPointStages = sampled.map(r => {
+    const cam = (r.cameras||{})[camKey];
+    const useStream = !!(cam && cam.stream && cam.stream.decode_ms > 0);
+    const real = {};
+    let realSum = 0;
+    for (const s of STAGE_META) {
+      const st = cam && cam.stages ? cam.stages[s.key] : null;
+      const v = st ? st.pct : 0;
+      real[s.key] = v;
+      if (s.key !== 'decode') realSum += v;
+    }
+    const scale = useStream && realSum > 0 ? (100 - DECODE_SEGMENT_FLEX) / realSum : 1;
+    return { useStream, real, scale };
+  });
+
+  const datasets = STAGE_META.map(s => ({
+    label: s.label,
+    data: perPointStages.map(p => {
+      if (s.key === 'decode') return p.useStream ? DECODE_SEGMENT_FLEX : (p.real.decode || 0);
+      return p.real[s.key] * p.scale;
+    }),
+    borderColor: s.color, backgroundColor: s.color+'aa',
+    fill: true, stack: 'stages', tension: .25, pointRadius: 0, borderWidth: 1,
+  }));
+
+  hStage = new Chart(document.getElementById('h-stage'), {
+    type: 'line',
+    data: { labels: ts, datasets },
+    options: {
+      responsive:true, maintainAspectRatio:true, animation:false,
+      plugins:{
+        legend:{labels:{color:'#8b949e',boxWidth:12,font:{size:11}}},
+        tooltip:{callbacks:{label: ctx => {
+          if (ctx.dataset.label !== 'Video decode (read)') return ctx.dataset.label+': '+ctx.raw+'%';
+          const cam = (sampled[ctx.dataIndex].cameras||{})[camKey];
+          const stream = cam && cam.stream;
+          if (stream && stream.decode_ms > 0) {
+            return 'Video decode (background thread): '+stream.decode_ms+'ms, p95 '+stream.decode_p95_ms+'ms, @ '+stream.native_fps+'fps native';
+          }
+          const st = cam && cam.stages && cam.stages.decode;
+          return 'Video decode (read): '+(st?st.pct:0)+'%';
+        }}}
+      },
+      scales:{
+        x:{ticks:{color:'#8b949e',font:{size:10},maxTicksLimit:12,maxRotation:0},grid:{color:'#30363d'}},
+        y:{min:0,max:100,stacked:true,ticks:{color:'#8b949e',font:{size:11},callback:v=>v+'%'},grid:{color:'#30363d'}}}
+    }
+  });
 }
 </script>
 </body>
