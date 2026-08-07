@@ -421,7 +421,14 @@ class CameraEngine:
             if face_image is not None:
                 _max_crop_frames = 30
                 crop_history = self.track_manager.track_crop_history.setdefault(track_id, {})
-                crop_history[frame_num] = {"face": face_image, "bbox": bbox, "frame": frame.copy()}
+                crop_history[frame_num] = {
+                    "face": face_image, "bbox": bbox, "frame": frame.copy(),
+                    # For the unrecognized-case frontality/pitch gate (LSO-7).
+                    "landmarks": face_data.get("face_landmarks"),
+                    "det_score": face_data.get("det_score", 0.0),
+                    "frontality": face_data.get("frontality"),
+                    "pitch": face_data.get("pitch"),
+                }
                 if len(crop_history) > _max_crop_frames:
                     for old_key in sorted(crop_history)[:-_max_crop_frames]:
                         del crop_history[old_key]
@@ -432,7 +439,13 @@ class CameraEngine:
             state = self.state_manager.get_state(track_id)
 
             if state and not state.identity_locked:
-                person_image = self._get_best_person_image(track_id)
+                # Orientation gate signals for this unrecognized track (LSO-7).
+                face_frontality, face_det_score, face_pitch, best_crop = (
+                    self._best_face_signals(track_id)
+                )
+                # Card image = the gate frame, so it matches the face that
+                # passed the gate (not _get_best_person_image's last-frame fallback).
+                person_image = self._unrecognized_card_image(best_crop, track_id)
                 if person_image is not None and person_image.size > 0:
                     global_track_id = None
                     if self.global_track_manager and self.global_track_manager.enabled:
@@ -446,6 +459,9 @@ class CameraEngine:
                             "name": None,
                             "recognized": False,
                             "confidence": 0.0,
+                            "face_frontality": face_frontality,
+                            "face_pitch": face_pitch,
+                            "face_det_score": face_det_score,
                             "appear_time": state.first_seen,
                             "camera_name": self.camera_name,
                             "camera_id": self.camera_id,
@@ -682,6 +698,50 @@ class CameraEngine:
             return self._read_crop_image(crops[key])
 
         return None
+
+    def _best_face_signals(self, track_id: int) -> Tuple[float, float, float, Optional[dict]]:
+        """Signals for the clearest (best yaw×pitch) frame of an unrecognized track.
+
+        Returns (frontality, det_score, pitch, crop_data):
+          - frontality : [0,1], 1 = frontal (not sideways)
+          - det_score  : detector confidence for that frame
+          - pitch      : [0,1], 1 = level (not looking down)
+          - crop_data  : that frame's stored dict, for the card image
+        Returns (0.0, 0.0, 0.0, None) if no frame has usable orientation.
+
+        frontality/pitch come from the lum-model-vision package (stored in
+        crop_history at capture); this only picks the best frame across the track.
+        """
+        crops = self.track_manager.track_crop_history.get(track_id, {})
+        best_score = -1.0
+        best = (0.0, 0.0, 0.0, None)
+        for crop_data in crops.values():
+            if not isinstance(crop_data, dict):
+                continue
+            fr = crop_data.get("frontality")
+            pi = crop_data.get("pitch")
+            if fr is None or pi is None:
+                continue
+            score = fr * pi
+            if score > best_score:
+                best_score = score
+                best = (fr, float(crop_data.get("det_score", 0.0) or 0.0), pi, crop_data)
+        return best
+
+    def _unrecognized_card_image(self, best_crop: Optional[dict], track_id: int) -> Optional[np.ndarray]:
+        """Card image for an UNRECOGNIZED case: the person ROI of the gate frame
+        (best yaw×pitch), so the card matches the frontal face that passed the
+        gate. Sidesteps _get_best_person_image's quality-blind last-frame
+        fallback, which stays untouched for the recognized/attendance path.
+        Falls back to it only if the gate frame is somehow unavailable.
+        """
+        if best_crop is not None:
+            frame, bbox = best_crop.get("frame"), best_crop.get("bbox")
+            if frame is not None and bbox is not None:
+                roi, _ = crop_person_roi(frame, np.asarray(bbox, dtype=float), expand=0.1)
+                if roi is not None and roi.size:
+                    return roi
+        return self._get_best_person_image(track_id)
 
     def _find_track_with_identity(
         self, identity_name: str, exclude_track_id: Optional[int] = None
