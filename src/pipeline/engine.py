@@ -197,6 +197,10 @@ class SmartOfficeEngine:
     def _init_camera_engines(self) -> List[CameraEngine]:
         engines = []
         for config in self.camera_configs:
+            # Gate thresholds (LSO-7) are global config.yaml, not per-camera DB —
+            # inject so CameraEngine._best_face_signals can prefer passing frames.
+            config["unrecognized_frontality_min"] = self.config.get("unrecognized_frontality_min", 0.6)
+            config["unrecognized_pitch_min"] = self.config.get("unrecognized_pitch_min", 0.4)
             engine = CameraEngine(
                 camera_config=config,
                 face_detector=self.models.face_detector,
