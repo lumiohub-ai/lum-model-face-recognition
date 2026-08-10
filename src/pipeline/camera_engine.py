@@ -731,9 +731,10 @@ class CameraEngine:
     def _unrecognized_card_image(self, best_crop: Optional[dict], track_id: int) -> Optional[np.ndarray]:
         """Card image for an UNRECOGNIZED case: the person ROI of the gate frame
         (best yaw×pitch), so the card matches the frontal face that passed the
-        gate. Sidesteps _get_best_person_image's quality-blind last-frame
-        fallback, which stays untouched for the recognized/attendance path.
-        Falls back to it only if the gate frame is somehow unavailable.
+        gate. Returns None if there's no usable gate frame — the case is then
+        skipped rather than falling back to _get_best_person_image's quality-blind
+        last frame (which stays for the recognized/attendance path). A None
+        best_crop means no orientation was scored, so the gate drops it anyway.
         """
         if best_crop is not None:
             frame, bbox = best_crop.get("frame"), best_crop.get("bbox")
@@ -741,7 +742,7 @@ class CameraEngine:
                 roi, _ = crop_person_roi(frame, np.asarray(bbox, dtype=float), expand=0.1)
                 if roi is not None and roi.size:
                     return roi
-        return self._get_best_person_image(track_id)
+        return None
 
     def _find_track_with_identity(
         self, identity_name: str, exclude_track_id: Optional[int] = None
