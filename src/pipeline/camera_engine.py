@@ -70,6 +70,10 @@ class CameraEngine:
         self.application = camera_config.get('application', ['attendance'])
         self.match_threshold = camera_config.get('match_threshold', 0.3)
         self.min_face_size = camera_config.get('min_face_size', 150)  # Minimum face size for quality check
+        # Unrecognized-case gate thresholds (LSO-7); injected from config.yaml by
+        # the engine so _best_face_signals prefers frames that clear both.
+        self.unrecognized_frontality_min = camera_config.get('unrecognized_frontality_min', 0.6)
+        self.unrecognized_pitch_min = camera_config.get('unrecognized_pitch_min', 0.4)
         self.roi = camera_config.get('roi')
         self.line_points = camera_config.get('line_points')
 
@@ -700,21 +704,32 @@ class CameraEngine:
         return None
 
     def _best_face_signals(self, track_id: int) -> Tuple[float, float, float, Optional[dict]]:
-        """Signals for the clearest (best yaw×pitch) frame of an unrecognized track.
+        """Signals for the best gate-passing frame of an unrecognized track.
 
-        Returns (frontality, det_score, pitch, crop_data):
-          - frontality : [0,1], 1 = frontal (not sideways)
-          - det_score  : detector confidence for that frame
-          - pitch      : [0,1], 1 = level (not looking down)
-          - crop_data  : that frame's stored dict, for the card image
-        Returns (0.0, 0.0, 0.0, None) if no frame has usable orientation.
-
-        frontality/pitch come from the lum-model-vision package (stored in
-        crop_history at capture); this only picks the best frame across the track.
+        Returns (frontality, det_score, pitch, crop_data). See _pick_best_signals
+        for the selection rule; frontality/pitch come from the lum-model-vision
+        package (stored in crop_history at capture).
         """
         crops = self.track_manager.track_crop_history.get(track_id, {})
-        best_score = -1.0
-        best = (0.0, 0.0, 0.0, None)
+        return self._pick_best_signals(
+            crops, self.unrecognized_frontality_min, self.unrecognized_pitch_min
+        )
+
+    @staticmethod
+    def _pick_best_signals(
+        crops: Dict, fr_min: float, pi_min: float
+    ) -> Tuple[float, float, float, Optional[dict]]:
+        """Pick the highest yaw×pitch frame that clears BOTH thresholds; only if
+        none do, return the best-effort frame (which the gate then drops).
+
+        Picking by product alone can return a frame that fails one threshold
+        while another frame passes both — silently dropping a valid case. Returns
+        (0.0, 0.0, 0.0, None) when no frame has usable orientation.
+        """
+        best_pass = (0.0, 0.0, 0.0, None)
+        best_any = (0.0, 0.0, 0.0, None)
+        best_pass_score = -1.0
+        best_any_score = -1.0
         for crop_data in crops.values():
             if not isinstance(crop_data, dict):
                 continue
@@ -723,10 +738,14 @@ class CameraEngine:
             if fr is None or pi is None:
                 continue
             score = fr * pi
-            if score > best_score:
-                best_score = score
-                best = (fr, float(crop_data.get("det_score", 0.0) or 0.0), pi, crop_data)
-        return best
+            cand = (fr, float(crop_data.get("det_score", 0.0) or 0.0), pi, crop_data)
+            if score > best_any_score:
+                best_any_score = score
+                best_any = cand
+            if fr >= fr_min and pi >= pi_min and score > best_pass_score:
+                best_pass_score = score
+                best_pass = cand
+        return best_pass if best_pass[3] is not None else best_any
 
     def _unrecognized_card_image(self, best_crop: Optional[dict], track_id: int) -> Optional[np.ndarray]:
         """Card image for an UNRECOGNIZED case: the person ROI of the gate frame
