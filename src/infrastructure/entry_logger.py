@@ -21,6 +21,12 @@ class EntryLogger:
         self.recent_entries = deque(maxlen=max_entries)
         self.max_track_lifetime_seconds = getattr(args, 'max_track_lifetime_seconds', 120)
 
+        # Unrecognized-case gate (LSO-7): a case reaches the dashboard only if a
+        # clear frontal, level face was seen. Below either threshold -> dropped
+        # (logged, not uploaded/persisted).
+        self.unrecognized_frontality_min = getattr(args, 'unrecognized_frontality_min', 0.6)
+        self.unrecognized_pitch_min = getattr(args, 'unrecognized_pitch_min', 0.4)
+
         # Track last seen location (camera) for each person
         self.person_last_camera: Dict[str, str] = {}
 
@@ -203,9 +209,32 @@ class EntryLogger:
         face: np.ndarray,
         status: str,
         camera_id: Optional[int] = None,
-        camera_name: Optional[str] = None
+        camera_name: Optional[str] = None,
+        face_frontality: float = 0.0,
+        face_pitch: float = 0.0,
+        face_det_score: float = 0.0,
     ) -> bool:
-        """Send unrecognized face via Celery task."""
+        """Send unrecognized face via Celery task, gated on face orientation.
+
+        Only a clear frontal, level face reaches the dashboard. Backs of heads,
+        profiles, and looking-down faces score low and are dropped (logged as
+        UNRECOGNIZED_DROPPED, no upload/persist). Returns False when dropped.
+        """
+        if face_frontality < self.unrecognized_frontality_min:
+            logger.info(
+                f"UNRECOGNIZED_DROPPED | camera={camera_id} "
+                f"frontality={face_frontality:.3f} pitch={face_pitch:.3f} "
+                f"det={face_det_score:.3f} (< {self.unrecognized_frontality_min} frontality)"
+            )
+            return False
+        if face_pitch < self.unrecognized_pitch_min:
+            logger.info(
+                f"UNRECOGNIZED_DROPPED | camera={camera_id} "
+                f"frontality={face_frontality:.3f} pitch={face_pitch:.3f} "
+                f"det={face_det_score:.3f} (< {self.unrecognized_pitch_min} pitch)"
+            )
+            return False
+
         # Upload face image to GCS
         image_url = None
         try:
