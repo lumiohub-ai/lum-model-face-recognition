@@ -103,6 +103,9 @@ class SmartOfficeEngine:
             client_slug=client_slug,
             max_queue_size=action_cfg.get("max_queue_size", 50),
             num_workers=action_cfg.get("async_workers", 1),
+            min_crop_height=action_cfg.get("min_crop_height", 0),
+            min_crop_width=action_cfg.get("min_crop_width", 0),
+            min_crop_area=action_cfg.get("min_crop_area", 0),
         )
         self.action_worker.start_workers()
 

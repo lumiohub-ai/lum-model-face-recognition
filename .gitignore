@@ -346,3 +346,10 @@ CLAUDE.md
 
 # Rendered output from notebooks/lum_vision_demo.ipynb (.venv is covered above)
 notebooks/output/
+notebooks/eval
+
+# Action-recognition eval set (LSO-68). The crops stay ignored under the *.jpg
+# rule above, but the hand-assigned labels and the recorded baseline are the
+# expensive part and have to survive a clone - *.json is blanket-ignored above.
+!notebooks/eval/action/labels.json
+!notebooks/eval/action/summary.json

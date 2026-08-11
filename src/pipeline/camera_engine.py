@@ -837,6 +837,12 @@ class CameraEngine:
         if proof_image is None or proof_image.size == 0:
             return
 
+        # Size gate first, before the throttle slot is reserved: a crop too small
+        # to read tells the VLM nothing, and burning this identity's interval on
+        # it would mean skipping the moment they walk closer.
+        if self.action_recognizer.should_skip_small(proof_image):
+            return
+
         # Engine-wide reservation: at most one inference per identity per
         # interval, however many cameras can see them right now.
         if not self.action_recognizer.reserve_check(identity):
