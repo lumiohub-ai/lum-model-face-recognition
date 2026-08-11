@@ -197,6 +197,10 @@ class SmartOfficeEngine:
     def _init_camera_engines(self) -> List[CameraEngine]:
         engines = []
         for config in self.camera_configs:
+            # Gate thresholds (LSO-7) are global config.yaml, not per-camera DB —
+            # inject so CameraEngine._best_face_signals can prefer passing frames.
+            config["unrecognized_frontality_min"] = self.config.get("unrecognized_frontality_min", 0.6)
+            config["unrecognized_pitch_min"] = self.config.get("unrecognized_pitch_min", 0.4)
             engine = CameraEngine(
                 camera_config=config,
                 face_detector=self.models.face_detector,
@@ -218,6 +222,9 @@ class SmartOfficeEngine:
         args.logger = logger
         args.db_names = self.models.face_matcher.db_names
         args.production = True
+        # Unrecognized-case orientation gate thresholds (LSO-7), from config.yaml.
+        args.unrecognized_frontality_min = self.config.get("unrecognized_frontality_min", 0.6)
+        args.unrecognized_pitch_min = self.config.get("unrecognized_pitch_min", 0.4)
         return EntryLogger(args=args)
 
     def _init_camera_workers(self) -> List[CameraWorker]:
@@ -397,7 +404,16 @@ class SmartOfficeEngine:
             logger.exception(f"Failed to reload embeddings: {e}")
             return False
 
-    def capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
+    def capture_frame(
+        self,
+        camera_id: int,
+        command_id: str,
+        frame_index: int = 1,
+        undistort: bool = False,
+        camera_matrix: list = None,
+        dist_coeffs: list = None,
+        calibration_model: str = 'fisheye',
+    ) -> None:
         """Capture a single frame for camera calibration.
 
         Non-blocking — spawns a daemon thread so the main pipeline is never paused.
@@ -406,13 +422,22 @@ class SmartOfficeEngine:
         """
         threading.Thread(
             target=self._do_capture_frame,
-            args=(camera_id, command_id, frame_index),
+            args=(camera_id, command_id, frame_index, undistort, camera_matrix, dist_coeffs, calibration_model),
             daemon=True,
             name=f"capture-{camera_id}",
         ).start()
 
-    def _do_capture_frame(self, camera_id: int, command_id: str, frame_index: int = 1) -> None:
-        """Background: grab latest frame → upload to GCS → save to DB → publish event."""
+    def _do_capture_frame(
+        self,
+        camera_id: int,
+        command_id: str,
+        frame_index: int = 1,
+        undistort: bool = False,
+        camera_matrix: list = None,
+        dist_coeffs: list = None,
+        calibration_model: str = 'fisheye',
+    ) -> None:
+        """Background: grab latest frame → optionally undistort → upload to GCS → save to DB → publish event."""
         from messaging.publisher import MDAPublisher
 
         publisher = MDAPublisher(self.client_slug)
@@ -433,6 +458,18 @@ class SmartOfficeEngine:
                     error=error,
                 )
                 return
+
+            was_undistorted = False
+            if undistort and camera_matrix and dist_coeffs:
+                try:
+                    from domain.calibration.camera_calibrator import CameraCalibrator
+                    calibrator = CameraCalibrator(fisheye=(calibration_model == 'fisheye'))
+                    frame = calibrator.undistort(frame, camera_matrix, dist_coeffs, calibration_model)
+                    was_undistorted = True
+                except Exception as e:
+                    # Best-effort — fall back to the raw frame rather than
+                    # failing the whole capture over a bad undistort.
+                    logger.exception(f"capture_frame: undistort failed for camera {camera_id}: {e}")
 
             h, w = frame.shape[:2]
 
@@ -458,9 +495,9 @@ class SmartOfficeEngine:
                 command_id=command_id,
                 camera_id=camera_id,
                 image_url=image_url,
-                metadata={'width': w, 'height': h, 'source': 'OpenCV'},
+                metadata={'width': w, 'height': h, 'source': 'OpenCV', 'undistorted': was_undistorted},
             )
-            logger.info(f"Frame captured: camera={camera_id}, command={command_id}")
+            logger.info(f"Frame captured: camera={camera_id}, command={command_id}, undistorted={was_undistorted}")
 
         except Exception as e:
             logger.exception(f"capture_frame failed for camera {camera_id}: {e}")

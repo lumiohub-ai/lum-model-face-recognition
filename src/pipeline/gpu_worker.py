@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from loguru import logger
 
+from lum_vision.face_detection import frontality, pitch
+
 
 class GPUInferenceWorker:
     """Batched GPU inference worker shared across all camera threads.
@@ -273,6 +275,10 @@ class GPUInferenceWorker:
                         ),
                         "face_bbox": [x1, y1, x2, y2],
                         "face_landmarks": kps,
+                        # Orientation proxies from the package (single source of
+                        # truth); the unrecognized-case gate reads these.
+                        "frontality": frontality(kps),
+                        "pitch": pitch(kps),
                     }
             except Exception as e:
                 logger.debug(f"Face detection error on ROI: {e}")

@@ -108,7 +108,9 @@ class DetectionRepository:
         proof_image_url: Optional[str] = None,
         confidence: Optional[float] = None,
     ) -> int:
-        """Insert an activity record.
+        """Insert an activity record and upsert the user's current-activity
+        row, matching FastAPI's `activity/service.py::async_record` (which
+        this call bypasses — the AI service writes directly to the DB).
 
         Returns:
             New record ID
@@ -130,9 +132,30 @@ class DetectionRepository:
                 'confidence_score': confidence,
                 'created_at': timestamp,
             })
-            conn.commit()
             row = result.fetchone()
-            return row[0] if row else 0
+            record_id = row[0] if row else 0
+
+            conn.execute(text(f"""
+                INSERT INTO {self.schema}.user_current_activities
+                (user_id, camera_id, activity_type, detected_at, confidence_score, updated_at)
+                VALUES (:user_id, :camera_id, :activity_type, :detected_at, :confidence_score, :updated_at)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    camera_id = EXCLUDED.camera_id,
+                    activity_type = EXCLUDED.activity_type,
+                    detected_at = EXCLUDED.detected_at,
+                    confidence_score = EXCLUDED.confidence_score,
+                    updated_at = EXCLUDED.updated_at
+            """), {
+                'user_id': user_id,
+                'camera_id': camera_id,
+                'activity_type': activity_type,
+                'detected_at': timestamp,
+                'confidence_score': confidence,
+                'updated_at': timestamp,
+            })
+
+            conn.commit()
+            return record_id
 
     def save_calibration_frame(
         self,

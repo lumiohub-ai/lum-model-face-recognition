@@ -11,6 +11,11 @@ match_threshold: 0.3  # Face similarity threshold for matching
 person_detection_threshold: 0.45  # Person detection confidence threshold (0.0-1.0)
 person_detection_model: yolo26  # Detection model: 'yolo26' (NMS-free, faster) or 'yolov8'
 
+# Unrecognized-case gate (LSO-7): a case reaches the dashboard only when a clear,
+# frontal, level face was seen; otherwise it is logged as UNRECOGNIZED_DROPPED.
+unrecognized_frontality_min: 0.6  # min yaw frontality [0,1] (1 = frontal, not profile)
+unrecognized_pitch_min: 0.4       # min pitch [0,1] (1 = level, not looking down)
+
 # Feature flags
 enable_global_tracking: true  # Enable cross-camera global track IDs (MCMOT ReID)
 face_detection_padding: 20.0  # Padding % around detected faces for better recognition (0-100)

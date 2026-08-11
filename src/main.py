@@ -231,9 +231,19 @@ class MDAManager:
         elif command_type == 'CaptureFrame':
             command_id = payload.get('command_id')
             frame_index = int(payload.get('frame_index', 1))
-            logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}, frame_index={frame_index}")
+            undistort = bool(payload.get('undistort', False))
+            camera_matrix = payload.get('camera_matrix')
+            dist_coeffs = payload.get('dist_coeffs')
+            calibration_model = payload.get('calibration_model', 'fisheye')
+            logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}, frame_index={frame_index}, undistort={undistort}")
             if self.engine:
-                self.engine.capture_frame(camera_id, command_id, frame_index)
+                self.engine.capture_frame(
+                    camera_id, command_id, frame_index,
+                    undistort=undistort,
+                    camera_matrix=camera_matrix,
+                    dist_coeffs=dist_coeffs,
+                    calibration_model=calibration_model,
+                )
             else:
                 logger.warning("Engine not available for frame capture")
 
