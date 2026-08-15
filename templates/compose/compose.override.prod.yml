@@ -6,8 +6,33 @@ services:
     restart: unless-stopped
     environment:
       SO_LOG_LEVEL: INFO
+    deploy:
+      resources:
+        reservations:
+          # Pin to a specific GPU (LSO-89) rather than the base compose.yml's
+          # unpinned "any 1 GPU". On a multi-GPU host, letting Docker hand out
+          # a device to person-tracking and celery-worker independently means
+          # they can land on the same card with no guarantee of which — that
+          # ambiguous concurrent-session condition is what's tied to
+          # CUDNN_BACKEND_API_FAILED crashes under real GPU contention.
+          # Compose appends device lists on merge by default; !override forces
+          # this to replace the base file's `count: 1` entry instead of
+          # sitting alongside it as a second, conflicting reservation.
+          # Adjust the device_ids below to the target host's actual GPU
+          # indices (see `nvidia-smi -L`).
+          devices: !override
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
 
   celery-worker:
     restart: unless-stopped
     environment:
       SO_LOG_LEVEL: INFO
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
