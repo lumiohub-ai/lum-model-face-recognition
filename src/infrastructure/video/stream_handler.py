@@ -69,19 +69,6 @@ class StreamHandler:
         self._metrics = None
         self._camera_idx: Optional[int] = None
 
-    def set_metrics(self, metrics_collector, camera_idx: int) -> None:
-        """Wire in metrics recording for the background capture thread's decode cost.
-
-        For RTSP/live sources, `update()` runs unthrottled at the stream's own
-        native rate — independent of (and typically faster than) the
-        pipeline's detection_interval-gated processing. That decode cost is
-        real and ongoing, but invisible to anything only watching the
-        detection-frame path, so it's recorded separately here rather than
-        folded into CameraWorker's per-detection-frame stage breakdown.
-        """
-        self._metrics = metrics_collector
-        self._camera_idx = camera_idx
-
         ret, frame = self.cap.read()
         if not ret:
             if self.is_video:
@@ -110,6 +97,19 @@ class StreamHandler:
             # For streams, these values might not be accurate
             self.last_frame = float('inf')
             self.fps = 30  # Default assumption
+
+    def set_metrics(self, metrics_collector, camera_idx: int) -> None:
+        """Wire in metrics recording for the background capture thread's decode cost.
+
+        For RTSP/live sources, `update()` runs unthrottled at the stream's own
+        native rate — independent of (and typically faster than) the
+        pipeline's detection_interval-gated processing. That decode cost is
+        real and ongoing, but invisible to anything only watching the
+        detection-frame path, so it's recorded separately here rather than
+        folded into CameraWorker's per-detection-frame stage breakdown.
+        """
+        self._metrics = metrics_collector
+        self._camera_idx = camera_idx
 
     def _mark_frame_received(self) -> None:
         """Record a successful frame read for health reporting."""
