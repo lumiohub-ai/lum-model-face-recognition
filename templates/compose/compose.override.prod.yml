@@ -1,6 +1,23 @@
+# GPU device_ids below assume the host has >= 2 GPUs (see `nvidia-smi -L`).
+# On a single-GPU host, device_ids: ['1'] fails outright — do not apply this
+# override there; the base compose.yml's unpinned `count: 1` is correct as-is
+# for single-GPU hosts.
 services:
   ollama:
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          # Doesn't share person-tracking's onnxruntime/cuDNN session, but it's
+          # still a GPU-memory consumer — leaving it unpinned would let Docker
+          # place it on GPU 1 too, silently reintroducing the contention this
+          # PR pins person-tracking away from. Grouped with celery-worker
+          # (GPU 0) since both are lighter, intermittent load next to
+          # person-tracking's continuous inference.
+          devices: !override
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
 
   person-tracking:
     restart: unless-stopped
@@ -32,6 +49,9 @@ services:
     deploy:
       resources:
         reservations:
+          # See person-tracking's device-pin comment above — same reasoning,
+          # grouped onto GPU 0 with ollama since both are lighter than
+          # person-tracking's continuous inference load.
           devices: !override
             - driver: nvidia
               device_ids: ['0']
