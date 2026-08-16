@@ -171,10 +171,17 @@ class PgVectorStore:
         """
         try:
             with self.db_config.get_connection() as conn:
+                # LSO-13: only load embeddings for ACTIVE users, so inactive
+                # users are ignored by recognition. Join users (face_embeddings.user_id
+                # is varchar → cast users.id to text). Orphan embeddings whose user_id
+                # has no matching users row are also excluded.
                 result = conn.execute(text(f"""
-                    SELECT user_name, embedding
-                    FROM {self.schema_name}.face_embeddings
-                    ORDER BY id
+                    SELECT fe.user_name, fe.embedding
+                    FROM {self.schema_name}.face_embeddings AS fe
+                    JOIN {self.schema_name}.users AS u
+                      ON fe.user_id = u.id::text
+                    WHERE u.employment_status = 'active'
+                    ORDER BY fe.id
                 """))
 
                 rows = result.fetchall()
