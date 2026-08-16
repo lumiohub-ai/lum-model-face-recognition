@@ -55,8 +55,13 @@ RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true &&
 # Swap the CPU onnxruntime that lum-model-vision depends on for the GPU build. They
 # share the same `onnxruntime/` install directory, so this is a replace, not an
 # addition — which is why lum-model-vision has no `[gpu]` extra.
+#
+# Also upgrade cuDNN: onnxruntime-gpu 1.21 (CUDA 12.x) needs cuDNN >= ~9.7, but
+# torch 2.4 pins nvidia-cudnn-cu12 9.1.0.70 — too old, so ORT's cuDNN-frontend
+# Conv execute fails at runtime (CUDNN_BACKEND_API_FAILED). torch tolerates 9.8.
+# See lum-model-vision/requirements/requirements.gpu.txt.
 RUN pip uninstall -y onnxruntime 2>/dev/null || true && \
-    pip install --no-cache-dir onnxruntime-gpu~=1.21.0
+    pip install --no-cache-dir onnxruntime-gpu~=1.21.0 "nvidia-cudnn-cu12>=9.8,<10"
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
@@ -65,6 +70,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH="/app/src:/app"
+
+# onnxruntime-gpu loads cuDNN 9 from the pip nvidia-cudnn-cu12 package, whose lib
+# dir is NOT on the default loader path — so ORT would otherwise fall back to the
+# base image's system cuDNN 8 (or fail to resolve libcudnn.so.9). Prepend the pip
+# cuDNN + cuBLAS dirs so ORT's CUDA EP finds cuDNN 9.
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH}"
 
 WORKDIR /app
 
