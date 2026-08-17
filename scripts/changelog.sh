@@ -75,7 +75,7 @@ main()
 	_release_tag=$(gh release view --json tagName -q ".tagName")
 	_release_notes=$(gh release view --json body -q ".body")
 
-	if ! grep -q "^${_title}" "${CHANGELOG_FILE_PATH}"; then
+	if [ ! -f "${CHANGELOG_FILE_PATH}" ] || ! grep -q "^${_title}" "${CHANGELOG_FILE_PATH}"; then
 		echo -e "${_title}\n\n" > "${CHANGELOG_FILE_PATH}"
 	fi
 
