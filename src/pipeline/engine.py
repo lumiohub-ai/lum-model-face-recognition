@@ -273,6 +273,13 @@ class SmartOfficeEngine:
         # Start async logger workers
         self.async_logger.start()
 
+        # ActionRecognitionWorker is constructed before async_logger exists
+        # (it needs the recognizer up front, this doesn't need to run until
+        # streams start) - wire it in now via the late-binding setter, or
+        # every activity proof image silently gets dropped (action_worker.py
+        # treats a None async_logger the same as a full GCS queue).
+        self.action_worker.set_async_logger(self.async_logger)
+
         # Start camera worker threads
         for worker in self.camera_workers:
             worker.start()
