@@ -754,6 +754,24 @@ class SmartOfficeEngine:
         crops each, so `tracks` multiplied by that is the real memory driver.
         """
         engines = self.camera_engines
+        _MISSING = object()  # distinguishes "attribute doesn't exist" from "value is None"
+
+        def _check_attr_chain(label: str, attr: str, sub: str) -> None:
+            """Verify attr/sub actually resolve on a live engine, once at
+            startup. _sum()'s getattr(..., None) fallback means a renamed
+            attribute (this reaches into lum_vision, an external package not
+            visible in this repo) would otherwise report a silent, permanent
+            0 forever - indistinguishable from "genuinely empty" and exactly
+            the false-flat signal that could mislead the next leak
+            investigation this instrumentation exists to catch."""
+            if not engines:
+                return
+            mgr = getattr(engines[0], attr, _MISSING)
+            if mgr is _MISSING:
+                logger.warning(f"[metrics] gauge '{label}': camera engine has no attribute '{attr}' - will always report 0")
+                return
+            if getattr(mgr, sub, _MISSING) is _MISSING:
+                logger.warning(f"[metrics] gauge '{label}': '{attr}' has no attribute '{sub}' - will always report 0")
 
         def _sum(attr: str, sub: str) -> int:
             total = 0
@@ -763,6 +781,11 @@ class SmartOfficeEngine:
                 if coll is not None:
                     total += len(coll)
             return total
+
+        _check_attr_chain("tracks", "track_manager", "track_bbox_history")
+        _check_attr_chain("crops", "track_manager", "track_crop_history")
+        _check_attr_chain("identities", "identity_manager", "locked_identities")
+        _check_attr_chain("states", "state_manager", "person_states")
 
         self.metrics.register_gauge("tracks", lambda: _sum("track_manager", "track_bbox_history"))
         self.metrics.register_gauge("crops", lambda: sum(
@@ -775,6 +798,8 @@ class SmartOfficeEngine:
 
         gtm = self.models.global_track_manager
         if gtm is not None:
+            if getattr(gtm, "global_tracks", _MISSING) is _MISSING:
+                logger.warning("[metrics] gauge 'global_tracks': global_track_manager has no attribute 'global_tracks' - will always report 0")
             self.metrics.register_gauge("global_tracks", lambda: len(gtm.global_tracks))
 
         # Split cap.read() into its two halves: grab() (read_ms) is time spent

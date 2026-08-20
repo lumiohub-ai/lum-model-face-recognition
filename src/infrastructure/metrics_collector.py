@@ -51,9 +51,10 @@ class MetricsCollector:
         # In camera worker — call each processed detection-frame
         metrics.record_frame(camera_idx)
 
-        # In GPU worker — call after each batch inference
-        metrics.record_yolo_ms(elapsed_ms)
-        metrics.record_arcface_ms(elapsed_ms)
+        # In GPU worker — call after each batch inference, with the real
+        # batch size (frame/crop count), not left at the batch_size=1 default
+        metrics.record_yolo_ms(elapsed_ms, batch_size=len(frames))
+        metrics.record_arcface_ms(elapsed_ms, batch_size=len(person_rois))
 
         # On queue-full frame drop
         metrics.record_drop(camera_idx)
@@ -229,19 +230,25 @@ class MetricsCollector:
         thing growing — which is exactly the question during a leak. rss_gb is
         the number to watch/alert on; threads and fds catch leaks of those too.
         """
+        # rss_gb is the field that actually matters here (it's what a leak
+        # investigation watches); num_fds() in particular can fail on
+        # non-Linux/sandboxed environments. Read it separately so a failure
+        # there doesn't take rss_gb down with it.
+        out: Dict[str, Any] = {}
         try:
             with _PROC.oneshot():
                 mem = _PROC.memory_info()
-                return {
-                    "rss_gb": round(mem.rss / 1e9, 2),
-                    "vms_gb": round(mem.vms / 1e9, 2),
-                    "threads": _PROC.num_threads(),
-                    "open_fds": _PROC.num_fds(),
-                    "uptime_sec": round(time.time() - _PROC.create_time()),
-                }
+                out["rss_gb"] = round(mem.rss / 1e9, 2)
+                out["vms_gb"] = round(mem.vms / 1e9, 2)
+                out["threads"] = _PROC.num_threads()
+                out["uptime_sec"] = round(time.time() - _PROC.create_time())
         except Exception as e:
             logger.debug(f"process metrics read error: {e}")
-            return {}
+        try:
+            out["open_fds"] = _PROC.num_fds()
+        except Exception as e:
+            logger.debug(f"process open_fds read error: {e}")
+        return out
 
     @staticmethod
     def gpu() -> Optional[Dict]:

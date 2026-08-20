@@ -283,8 +283,14 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
             self._mark_frame_received()
-            self._read_ms.append(read_ms)
-            self._decode_ms.append(decode_ms)
+            # Same lock as latest_frame/latest_ret below: these deques are now
+            # read cross-thread by the metrics gauges (get_read_avg_ms /
+            # get_decode_avg_ms), and an unguarded deque.append() racing a
+            # sum()-over-iteration read can raise "deque mutated during
+            # iteration".
+            with self.lock:
+                self._read_ms.append(read_ms)
+                self._decode_ms.append(decode_ms)
 
             # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
             # This prevents jitter by ensuring we never show old frames
@@ -303,17 +309,17 @@ class StreamHandler:
         reads) - time blocked waiting for the next frame off the
         network/demuxer. A spike here means the STREAM stalled, not that
         decode got slow. 0.0 if none recorded yet."""
-        if not self._read_ms:
-            return 0.0
-        return sum(self._read_ms) / len(self._read_ms)
+        with self.lock:
+            vals = list(self._read_ms)
+        return sum(vals) / len(vals) if vals else 0.0
 
     def get_decode_avg_ms(self) -> float:
         """Rolling average cap.retrieve() duration in ms (last 50 successful
         reads) - actual CPU cost of decoding a grabbed frame. 0.0 if none
         recorded yet."""
-        if not self._decode_ms:
-            return 0.0
-        return sum(self._decode_ms) / len(self._decode_ms)
+        with self.lock:
+            vals = list(self._decode_ms)
+        return sum(vals) / len(vals) if vals else 0.0
 
     def read(self) -> Tuple[bool, Any]:
         """Read the next frame from the video source.
