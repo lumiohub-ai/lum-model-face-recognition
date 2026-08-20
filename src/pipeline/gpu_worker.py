@@ -248,7 +248,7 @@ class GPUInferenceWorker:
         results: List[Dict] = []
         # (result_idx, face) for every ROI that had >=1 detected face with
         # landmarks; parallel to crops so embed_batch()'s output lines up.
-        faces_to_embed: List[tuple] = []
+        faces_to_embed: List[Tuple[int, Any]] = []
         crops: List[np.ndarray] = []
 
         # Timed separately from embedding below (LSO-117): detection is still
@@ -291,12 +291,33 @@ class GPUInferenceWorker:
                 ## every face found above, embedded together.
                 embeddings = self._face_detector.embed_batch(crops)
             except Exception as e:
-                logger.debug(f"Batch face embedding error: {e}")
+                # Unlike a per-ROI detect_and_align failure above (which only
+                # blanks one face), this blanks EVERY face found this cycle -
+                # a real reduction in fault isolation, the tradeoff for
+                # batching. warning, not debug, since "recognition went dark
+                # for a whole cycle" should be visible in production logs,
+                # not require someone to already be looking.
+                logger.warning(f"Batch face embedding error ({len(crops)} faces lost this cycle): {e}")
                 embeddings = None
             if self._metrics is not None:
                 self._metrics.record_arcface_embed_ms(
                     (time.time() - embed_t0) * 1000, batch_size=len(crops)
                 )
+
+            if embeddings is not None and len(embeddings) != len(faces_to_embed):
+                # embed_batch's ordering/count contract ("one embedding per
+                # input crop, same order") lives in lum-model-vision, an
+                # external package not visible from this repo - if it's ever
+                # violated, zip() below would silently truncate/misalign
+                # embeddings to the wrong faces (wrong person gets someone
+                # else's identity match). Loud failure instead of silent
+                # corruption.
+                logger.error(
+                    f"embed_batch returned {len(embeddings)} embeddings for "
+                    f"{len(faces_to_embed)} faces - discarding this cycle's "
+                    "embeddings rather than risk misaligning them to the wrong face"
+                )
+                embeddings = None
 
             if embeddings is not None:
                 for (i, face), embedding in zip(faces_to_embed, embeddings):

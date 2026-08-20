@@ -222,7 +222,8 @@ class MetricsCollector:
         """Record ArcFace embedding time (LSO-117): ONE embed_batch() call
         for every face found this cycle. batch_size is the real batch size -
         the number that should climb with occupancy, and the one worth
-        watching to see the LSO-117 win hold up under production load."""
+        watching to see the LSO-117 win hold up under production load.
+        """
         with self._lock:
             self._arcface_embed_ms.append((ms, max(1, batch_size)))
 
