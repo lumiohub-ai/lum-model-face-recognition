@@ -5,7 +5,7 @@
 # time (docker build --ssh default; see Dockerfile).
 # Brings in opencv, ultralytics, onnxruntime, loguru, gdown, lap, filterpy,
 # ollama and boxmot.
-lum-model-vision @ git+ssh://git@github.com/lumiohub-ai/lum-model-vision.git@v0.1.2
+lum-model-vision @ git+ssh://git@github.com/lumiohub-ai/lum-model-vision.git@v0.2.0
 
 # To iterate on model code locally instead, clone the package repo alongside
 # this one and comment out the line above in favor of:
