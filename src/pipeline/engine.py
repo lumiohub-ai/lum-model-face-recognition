@@ -163,6 +163,7 @@ class SmartOfficeEngine:
                 camera_indices=_cam_indices,
                 port=settings.metrics_port,
             )
+            self._register_pipeline_gauges()
         else:
             self.metrics = None
             self._metrics_store = None
@@ -740,6 +741,58 @@ class SmartOfficeEngine:
             publisher.publish_homography_failed(command_id, camera_id, str(e))
 
     # ── Metrics reporting ─────────────────────────────────────────────────────
+
+    def _register_pipeline_gauges(self) -> None:
+        """Expose live pipeline sizes to the metrics collector.
+
+        These are the counts that reveal *why* memory moves. Per-track state is
+        bounded (history capped, `remove_track` on disappearance), so total
+        memory scales with how many tracks are alive — without these gauges a
+        growing footprint is indistinguishable from a leak.
+
+        Crops dominate the per-track cost: `max_crops` full-resolution person
+        crops each, so `tracks` multiplied by that is the real memory driver.
+        """
+        engines = self.camera_engines
+
+        def _sum(attr: str, sub: str) -> int:
+            total = 0
+            for e in engines:
+                mgr = getattr(e, attr, None)
+                coll = getattr(mgr, sub, None) if mgr is not None else None
+                if coll is not None:
+                    total += len(coll)
+            return total
+
+        self.metrics.register_gauge("tracks", lambda: _sum("track_manager", "track_bbox_history"))
+        self.metrics.register_gauge("crops", lambda: sum(
+            len(frames)
+            for e in engines
+            for frames in getattr(getattr(e, "track_manager", None), "track_crop_history", {}).values()
+        ))
+        self.metrics.register_gauge("identities", lambda: _sum("identity_manager", "locked_identities"))
+        self.metrics.register_gauge("states", lambda: _sum("state_manager", "person_states"))
+
+        gtm = self.models.global_track_manager
+        if gtm is not None:
+            self.metrics.register_gauge("global_tracks", lambda: len(gtm.global_tracks))
+
+        # Decode: per-camera cv2 read cost and stream state. Decode is the
+        # dominant CPU consumer at high camera counts, and a stalled stream is
+        # otherwise only visible as fps quietly going to zero.
+        streams = self.stream_manager.streams
+
+        def _decode_ms(idx: int) -> float:
+            return streams[idx].get_decode_avg_ms() if idx < len(streams) else 0.0
+
+        def _stream_state(idx: int):
+            return streams[idx].get_health()["state"] if idx < len(streams) else None
+
+        self.metrics.register_camera_gauge("decode_ms", _decode_ms)
+        self.metrics.register_camera_gauge("stream_state", _stream_state)
+        self.metrics.register_gauge("decode_ms_avg", lambda: round(
+            sum(s.get_decode_avg_ms() for s in streams) / len(streams), 1
+        ) if streams else 0.0)
 
     def _report_metrics(self) -> None:
         """Log a metrics summary and publish alerts for critical conditions."""

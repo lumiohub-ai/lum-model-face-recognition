@@ -6,6 +6,7 @@ import threading
 import time
 import logging
 import gc
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -62,6 +63,11 @@ class StreamHandler:
         self.thread = None  # Store reference to thread
         self._last_frame_at: Optional[float] = None
         self._reconnecting = False
+        # Rolling buffer of cap.read() wall-clock duration (ms) in the hot
+        # loop below - kept local rather than pushed into a shared
+        # MetricsCollector, since that's constructed after StreamManager in
+        # engine.py and this class has no reason to depend on report timing.
+        self._decode_ms: deque = deque(maxlen=50)
 
         ret, frame = self.cap.read()
         if not ret:
@@ -250,7 +256,9 @@ class StreamHandler:
                 consecutive_failures = 0
                 continue
 
+            _decode_start = time.monotonic()
             ret, frame = self.cap.read()
+            decode_ms = (time.monotonic() - _decode_start) * 1000.0
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures >= 3:
@@ -264,6 +272,7 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
             self._mark_frame_received()
+            self._decode_ms.append(decode_ms)
 
             # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
             # This prevents jitter by ensuring we never show old frames
@@ -276,6 +285,13 @@ class StreamHandler:
             if current_time - self.last_gc_time > self.gc_interval:
                 gc.collect()
                 self.last_gc_time = current_time
+
+    def get_decode_avg_ms(self) -> float:
+        """Return the rolling average cap.read() duration in milliseconds
+        (last 50 successful reads), or 0.0 if none recorded yet."""
+        if not self._decode_ms:
+            return 0.0
+        return sum(self._decode_ms) / len(self._decode_ms)
 
     def read(self) -> Tuple[bool, Any]:
         """Read the next frame from the video source.

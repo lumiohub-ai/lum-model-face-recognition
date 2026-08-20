@@ -95,6 +95,9 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="kpi" id="kpi-ram"><div class="label">RAM</div><div class="value" id="v-ram">—</div><div class="sub" id="v-ram-sub">—</div></div>
     <div class="kpi" id="kpi-gpu"><div class="label">GPU</div><div class="value" id="v-gpu">—</div><div class="sub" id="v-gpu-sub">—</div></div>
     <div class="kpi" id="kpi-vram"><div class="label">VRAM</div><div class="value" id="v-vram">—</div><div class="sub" id="v-vram-sub">—</div></div>
+    <!-- Process RSS is this service's own footprint; the RAM kpi above is host-wide
+         and cannot show whether *we* are the thing growing. -->
+    <div class="kpi" id="kpi-rss"><div class="label">Process RSS</div><div class="value" id="v-rss">—</div><div class="sub" id="v-rss-sub">—</div></div>
   </div>
 
   <div id="alert-box" class="alert-box">
@@ -105,6 +108,14 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="charts">
     <div class="card"><h2>System Resources (%)</h2><canvas id="chart-sys" height="140"></canvas></div>
     <div class="card"><h2>Inference Latency (ms)</h2><canvas id="chart-lat" height="140"></canvas></div>
+  </div>
+  <div class="charts">
+    <div class="card"><h2>Process Memory (GB)</h2><canvas id="chart-mem" height="140"></canvas></div>
+    <div class="card">
+      <h2>Pipeline State (over time)</h2>
+      <canvas id="chart-pipe" height="140"></canvas>
+      <div id="pipe-grid" class="cam-grid" style="margin-top:12px"></div>
+    </div>
   </div>
   <div class="card" style="margin-bottom:20px"><h2>Per-Camera FPS</h2><canvas id="chart-fps" height="90"></canvas></div>
   <div class="cam-grid" id="cam-grid"></div>
@@ -176,6 +187,23 @@ const latChart = new Chart(document.getElementById('chart-lat'), {
     datasets:[mkDataset('YOLO ms','#f78166'),mkDataset('ArcFace ms','#ffa657')]},
   options:baseOpts(null,'ms')});
 
+// Process RSS over time — a straight rising line here with flat Pipeline State
+// below is the signature of a leak outside the tracked structures.
+const memChart = new Chart(document.getElementById('chart-mem'), {
+  type:'line', data:{labels:Array(WINDOW).fill(''),
+    datasets:[mkDataset('RSS GB','#bc8cff'),mkDataset('Threads/100','#58a6ff')]},
+  options:baseOpts(null,'')});
+
+// Pipeline counts over time. crops is scaled /10 to share an axis with the
+// others (it runs an order of magnitude higher) — decode_ms_avg is left out
+// here since it's milliseconds, not a count, and would flatten this scale;
+// it's still shown as a live number in the grid below the chart.
+const pipeChart = new Chart(document.getElementById('chart-pipe'), {
+  type:'line', data:{labels:Array(WINDOW).fill(''),
+    datasets:[mkDataset('tracks','#58a6ff'),mkDataset('crops /10','#f78166'),
+              mkDataset('identities','#3fb950'),mkDataset('global_tracks','#bc8cff')]},
+  options:baseOpts(null,'')});
+
 const fpsChart = new Chart(document.getElementById('chart-fps'), {
   type:'bar', data:{labels:[],datasets:[]},
   options:{responsive:true,maintainAspectRatio:true,animation:false,
@@ -227,9 +255,38 @@ async function fetchLive() {
       ['v-gpu','v-vram'].forEach(id => document.getElementById(id).textContent='N/A');
     }
 
+    const proc = d.process||{};
+    if (proc.rss_gb !== undefined) {
+      document.getElementById('v-rss').textContent = proc.rss_gb.toFixed(2)+' GB';
+      document.getElementById('v-rss-sub').textContent =
+        proc.threads+' threads · '+proc.open_fds+' fds';
+      // Percent of host RAM, so the colour reflects real pressure on the box.
+      kpiState('kpi-rss', mem.total_gb ? (proc.rss_gb/mem.total_gb*100) : 0, 40, 60);
+    }
+
+    const pipe = d.pipeline||{};
+    const pipeGrid = document.getElementById('pipe-grid');
+    const pipeKeys = Object.keys(pipe).sort();
+    pipeGrid.innerHTML = pipeKeys.length
+      ? pipeKeys.map(k =>
+          '<div class="cam-card"><div class="cam-title">'+k.replace(/_/g,' ')+'</div>'+
+          '<div style="font-size:22px;font-weight:600">'+(pipe[k]===null?'—':pipe[k])+'</div></div>'
+        ).join('')
+      : '<div class="cam-card"><div class="cam-title">no gauges</div></div>';
+
     push(sysChart,0,cpu); push(sysChart,1,mem.percent||0);
     push(sysChart,2,gpu?gpu.util_percent:null);
     sysChart.update();
+
+    push(memChart,0,proc.rss_gb!==undefined?proc.rss_gb:null);
+    push(memChart,1,proc.threads!==undefined?proc.threads/100:null);
+    memChart.update();
+
+    push(pipeChart,0,pipe.tracks!==undefined?pipe.tracks:null);
+    push(pipeChart,1,pipe.crops!==undefined?pipe.crops/10:null);
+    push(pipeChart,2,pipe.identities!==undefined?pipe.identities:null);
+    push(pipeChart,3,pipe.global_tracks!==undefined?pipe.global_tracks:null);
+    pipeChart.update();
 
     const inf = d.inference||{};
     push(latChart,0,inf.yolo_avg_ms||0); push(latChart,1,inf.arcface_avg_ms||0);
@@ -248,10 +305,11 @@ async function fetchLive() {
     grid.innerHTML = ks.map(k => {
       const cam=cameras[k], fps=cam.fps;
       const cls=fps<5?'low':fps<15?'mid':'';
+      const stateCls = cam.stream_state==='streaming' ? 'ok' : 'low';
       return `<div class="cam-card">
-        <div class="cam-title">Camera ${k}</div>
+        <div class="cam-title">Camera ${k} <span class="cam-state ${stateCls}">${cam.stream_state||'unknown'}</span></div>
         <div class="cam-fps ${cls}">${fps.toFixed(1)}</div>
-        <div class="cam-drops">fps &nbsp;·&nbsp; ${cam.frame_drops} drops</div>
+        <div class="cam-drops">fps &nbsp;·&nbsp; ${cam.frame_drops} drops &nbsp;·&nbsp; ${cam.decode_ms!=null?cam.decode_ms.toFixed(0):'—'}ms read</div>
       </div>`;
     }).join('');
 
