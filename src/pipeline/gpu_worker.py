@@ -236,25 +236,92 @@ class GPUInferenceWorker:
             return [[] for _ in frames]
 
     def _run_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
-        """Detect face and extract embedding for each person ROI."""
+        """Detect face and extract embedding for each person ROI.
+
+        Detection is still per-ROI (SCRFD has no batch path in this
+        insightface version), but embedding is now ONE detect_and_align() +
+        embed_batch() call across every ROI in this batch, instead of the
+        old per-ROI detect() (which internally did N separate single-face
+        embedding calls for N faces) - LSO-117.
+        """
         t0 = time.time()
-        results = []
-        for roi in person_rois:
+        results: List[Dict] = []
+        # (result_idx, face) for every ROI that had >=1 detected face with
+        # landmarks; parallel to crops so embed_batch()'s output lines up.
+        faces_to_embed: List[Tuple[int, Any]] = []
+        crops: List[np.ndarray] = []
+
+        # Timed separately from embedding below (LSO-117): detection is still
+        # N per-ROI calls (SCRFD has no batch path - LSO-118), so this number
+        # won't move with batch size the way embedding does. An offline
+        # benchmark (lum-model-vision#16) found detection at ~93% of total
+        # ArcFace time at N=362 faces - det_t0/det_ms_total is what confirms
+        # (or updates) that under real production load.
+        det_t0 = time.time()
+        for i, roi in enumerate(person_rois):
             result: Dict = {
                 "embedding": None,
                 "face_image": None,
                 "face_detected": False,
                 "det_score": 0.0,
             }
+            results.append(result)
             if roi is None or roi.size == 0:
-                results.append(result)
                 continue
             try:
-                ## Here we inference the face detection model on the ROI
-                ## The function calls both RetinaFace and Arcface inside of InsideFace.
-                faces = self._face_detector.detect(roi)
-                if faces:
-                    face = faces[0]
+                ## Detect + align faces in the ROI (no embedding yet - that
+                ## happens once, batched, after this loop over all ROIs).
+                faces = self._face_detector.detect_and_align(roi)
+                if faces and faces[0].aligned_crop is not None:
+                    faces_to_embed.append((i, faces[0]))
+                    crops.append(faces[0].aligned_crop)
+                # A face with no landmarks (aligned_crop is None) can't be
+                # embedded, same as the old per-face path (alignment there
+                # required kps too) - result stays the default no-face dict.
+            except Exception as e:
+                logger.debug(f"Face detection error on ROI: {e}")
+        det_ms_total = (time.time() - det_t0) * 1000
+        if self._metrics is not None:
+            self._metrics.record_arcface_det_ms(det_ms_total, batch_size=len(person_rois))
+
+        if crops:
+            embed_t0 = time.time()
+            try:
+                ## The one GPU call this method exists to make possible -
+                ## every face found above, embedded together.
+                embeddings = self._face_detector.embed_batch(crops)
+            except Exception as e:
+                # Unlike a per-ROI detect_and_align failure above (which only
+                # blanks one face), this blanks EVERY face found this cycle -
+                # a real reduction in fault isolation, the tradeoff for
+                # batching. warning, not debug, since "recognition went dark
+                # for a whole cycle" should be visible in production logs,
+                # not require someone to already be looking.
+                logger.warning(f"Batch face embedding error ({len(crops)} faces lost this cycle): {e}")
+                embeddings = None
+            if self._metrics is not None:
+                self._metrics.record_arcface_embed_ms(
+                    (time.time() - embed_t0) * 1000, batch_size=len(crops)
+                )
+
+            if embeddings is not None and len(embeddings) != len(faces_to_embed):
+                # embed_batch's ordering/count contract ("one embedding per
+                # input crop, same order") lives in lum-model-vision, an
+                # external package not visible from this repo - if it's ever
+                # violated, zip() below would silently truncate/misalign
+                # embeddings to the wrong faces (wrong person gets someone
+                # else's identity match). Loud failure instead of silent
+                # corruption.
+                logger.error(
+                    f"embed_batch returned {len(embeddings)} embeddings for "
+                    f"{len(faces_to_embed)} faces - discarding this cycle's "
+                    "embeddings rather than risk misaligning them to the wrong face"
+                )
+                embeddings = None
+
+            if embeddings is not None:
+                for (i, face), embedding in zip(faces_to_embed, embeddings):
+                    roi = person_rois[i]
                     # face.bbox / face.kps are already in ROI coordinates; the
                     # detector's internal padding is undone before it returns.
                     x1, y1, x2, y2 = face.bbox.astype(int)
@@ -264,8 +331,8 @@ class GPUInferenceWorker:
                     if hasattr(face, "kps") and face.kps is not None:
                         kps = face.kps.astype(int).tolist()
 
-                    result = {
-                        "embedding": face.embedding,
+                    results[i] = {
+                        "embedding": embedding,
                         "face_image": face_crop if face_crop.size > 0 else None,
                         "face_detected": True,
                         "det_score": (
@@ -280,9 +347,7 @@ class GPUInferenceWorker:
                         "frontality": frontality(kps),
                         "pitch": pitch(kps),
                     }
-            except Exception as e:
-                logger.debug(f"Face detection error on ROI: {e}")
-            results.append(result)
+
         duration_ms = (time.time() - t0) * 1000
         if self._metrics is not None and results:
             self._metrics.record_arcface_ms(duration_ms, batch_size=len(results))

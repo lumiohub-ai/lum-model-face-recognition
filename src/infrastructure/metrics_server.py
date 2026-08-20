@@ -110,6 +110,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="card"><h2>System Resources (%)</h2><canvas id="chart-sys" height="140"></canvas></div>
     <div class="card"><h2>Inference Latency (ms)</h2><canvas id="chart-lat" height="140"></canvas></div>
     <div class="card"><h2>Stream Read / Decode (ms, avg across cameras)</h2><canvas id="chart-io" height="140"></canvas></div>
+    <div class="card"><h2>ArcFace Detect / Embed (ms)</h2><canvas id="chart-arc" height="140"></canvas></div>
   </div>
   <div class="card">
     <h2>Pipeline State (over time)</h2>
@@ -137,6 +138,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   <!-- process/pipeline history is only present on rows written after this
        feature shipped - older DBs simply render flat/empty here. -->
   <div class="card" style="margin-bottom:20px"><h2>Stream Read / Decode (ms, avg)</h2><canvas id="h-io" height="110"></canvas></div>
+  <div class="card" style="margin-bottom:20px"><h2>ArcFace Detect / Embed (ms)</h2><canvas id="h-arc" height="110"></canvas></div>
   <div class="card" style="margin-bottom:20px"><h2>Pipeline State (tracks / crops / identities / global_tracks)</h2><canvas id="h-pipe" height="110"></canvas></div>
   <div class="card" style="margin-bottom:20px"><h2>Per-Camera FPS</h2><canvas id="h-fps" height="110"></canvas></div>
 </div>
@@ -196,6 +198,15 @@ const latChart = new Chart(document.getElementById('chart-lat'), {
 const ioChart = new Chart(document.getElementById('chart-io'), {
   type:'line', data:{labels:Array(WINDOW).fill(''),
     datasets:[mkDataset('Read ms','#58a6ff'),mkDataset('Decode ms','#3fb950')]},
+  options:baseOpts(null,'ms')});
+
+// arcface_avg_ms (unchanged total) is det + embed + Python overhead. Detect
+// is still per-ROI/unbatched (LSO-118); embed is the batched LSO-117 call -
+// this is the chart that shows whether the batching win is holding, and
+// which phase actually dominates under real load.
+const arcChart = new Chart(document.getElementById('chart-arc'), {
+  type:'line', data:{labels:Array(WINDOW).fill(''),
+    datasets:[mkDataset('Detect ms','#f78166'),mkDataset('Embed ms','#3fb950')]},
   options:baseOpts(null,'ms')});
 
 // Pipeline counts over time. crops is scaled /10 to share an axis with the
@@ -287,6 +298,10 @@ async function fetchLive() {
     push(ioChart,1,pipe.decode_ms_avg!==undefined?pipe.decode_ms_avg:null);
     ioChart.update();
 
+    push(arcChart,0,inf.arcface_det_avg_ms!==undefined?inf.arcface_det_avg_ms:null);
+    push(arcChart,1,inf.arcface_embed_avg_ms!==undefined?inf.arcface_embed_avg_ms:null);
+    arcChart.update();
+
     const cameras = d.cameras||{};
     const ks = Object.keys(cameras).sort((a,b)=>+a-+b);
     fpsChart.data.labels = ks.map(k=>'cam'+k);
@@ -328,7 +343,7 @@ fetchLive();
 setInterval(fetchLive, 2000);
 
 // ── History ───────────────────────────────────────────────────────────────────
-let hSys=null, hGpu=null, hLat=null, hFps=null, hIo=null, hPipe=null;
+let hSys=null, hGpu=null, hLat=null, hFps=null, hIo=null, hArc=null, hPipe=null;
 
 function histLineOpts(unit) {
   return {responsive:true,maintainAspectRatio:true,animation:false,
@@ -386,6 +401,10 @@ async function loadHistory() {
     const crops   = sampled.map(r => (r.pipeline||{}).crops!=null?(r.pipeline||{}).crops/10:null);
     const idents  = sampled.map(r => (r.pipeline||{}).identities??null);
     const gtracks = sampled.map(r => (r.pipeline||{}).global_tracks??null);
+    // arcface_det_ms/arcface_embed_ms are their own SQL columns (not in the
+    // pipeline blob) - same "rows before this shipped have no value" caveat.
+    const arcDetMs   = sampled.map(r => r.arcface_det_ms ?? null);
+    const arcEmbedMs = sampled.map(r => r.arcface_embed_ms ?? null);
 
     // All camera keys found in the data
     const camKeys = [...new Set(sampled.flatMap(r=>Object.keys(r.cameras||{})))].sort((a,b)=>+a-+b);
@@ -416,6 +435,11 @@ async function loadHistory() {
     if (hIo) hIo.destroy();
     hIo = new Chart(document.getElementById('h-io'), {
       type:'line', data:{labels:ts, datasets:[mkHistDs('Read ms','#58a6ff',readMs),mkHistDs('Decode ms','#3fb950',decodeMs)]},
+      options:histLineOpts('ms')});
+
+    if (hArc) hArc.destroy();
+    hArc = new Chart(document.getElementById('h-arc'), {
+      type:'line', data:{labels:ts, datasets:[mkHistDs('Detect ms','#f78166',arcDetMs),mkHistDs('Embed ms','#3fb950',arcEmbedMs)]},
       options:histLineOpts('ms')});
 
     if (hPipe) hPipe.destroy();
