@@ -95,6 +95,10 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="kpi" id="kpi-ram"><div class="label">RAM</div><div class="value" id="v-ram">—</div><div class="sub" id="v-ram-sub">—</div></div>
     <div class="kpi" id="kpi-gpu"><div class="label">GPU</div><div class="value" id="v-gpu">—</div><div class="sub" id="v-gpu-sub">—</div></div>
     <div class="kpi" id="kpi-vram"><div class="label">VRAM</div><div class="value" id="v-vram">—</div><div class="sub" id="v-vram-sub">—</div></div>
+    <!-- Process RSS/CPU/GPU/VRAM tiles were removed here - Beszel already
+         tracks per-container CPU/memory and per-GPU util/VRAM/power with
+         history, so duplicating them added nothing. This dashboard now only
+         carries pipeline-internal state Beszel has no visibility into. -->
   </div>
 
   <div id="alert-box" class="alert-box">
@@ -105,6 +109,12 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="charts">
     <div class="card"><h2>System Resources (%)</h2><canvas id="chart-sys" height="140"></canvas></div>
     <div class="card"><h2>Inference Latency (ms)</h2><canvas id="chart-lat" height="140"></canvas></div>
+    <div class="card"><h2>Stream Read / Decode (ms, avg across cameras)</h2><canvas id="chart-io" height="140"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Pipeline State (over time)</h2>
+    <canvas id="chart-pipe" height="140"></canvas>
+    <div id="pipe-grid" class="cam-grid" style="margin-top:12px"></div>
   </div>
   <div class="card" style="margin-bottom:20px"><h2>Per-Camera FPS</h2><canvas id="chart-fps" height="90"></canvas></div>
   <div class="cam-grid" id="cam-grid"></div>
@@ -124,6 +134,10 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="card"><h2>GPU Utilization &amp; VRAM (%)</h2><canvas id="h-gpu" height="160"></canvas></div>
   </div>
   <div class="card" style="margin-bottom:20px"><h2>Inference Latency (ms)</h2><canvas id="h-lat" height="110"></canvas></div>
+  <!-- process/pipeline history is only present on rows written after this
+       feature shipped - older DBs simply render flat/empty here. -->
+  <div class="card" style="margin-bottom:20px"><h2>Stream Read / Decode (ms, avg)</h2><canvas id="h-io" height="110"></canvas></div>
+  <div class="card" style="margin-bottom:20px"><h2>Pipeline State (tracks / crops / identities / global_tracks)</h2><canvas id="h-pipe" height="110"></canvas></div>
   <div class="card" style="margin-bottom:20px"><h2>Per-Camera FPS</h2><canvas id="h-fps" height="110"></canvas></div>
 </div>
 
@@ -176,6 +190,24 @@ const latChart = new Chart(document.getElementById('chart-lat'), {
     datasets:[mkDataset('YOLO ms','#f78166'),mkDataset('ArcFace ms','#ffa657')]},
   options:baseOpts(null,'ms')});
 
+// read = blocked waiting for the next frame off the network/demuxer (camera
+// is slow). decode = actual CPU cost of decoding a frame already received
+// (we are slow). Split so the two causes don't hide each other.
+const ioChart = new Chart(document.getElementById('chart-io'), {
+  type:'line', data:{labels:Array(WINDOW).fill(''),
+    datasets:[mkDataset('Read ms','#58a6ff'),mkDataset('Decode ms','#3fb950')]},
+  options:baseOpts(null,'ms')});
+
+// Pipeline counts over time. crops is scaled /10 to share an axis with the
+// others (it runs an order of magnitude higher) — decode_ms_avg is left out
+// here since it's milliseconds, not a count, and would flatten this scale;
+// it's still shown as a live number in the grid below the chart.
+const pipeChart = new Chart(document.getElementById('chart-pipe'), {
+  type:'line', data:{labels:Array(WINDOW).fill(''),
+    datasets:[mkDataset('tracks','#58a6ff'),mkDataset('crops /10','#f78166'),
+              mkDataset('identities','#3fb950'),mkDataset('global_tracks','#bc8cff')]},
+  options:baseOpts(null,'')});
+
 const fpsChart = new Chart(document.getElementById('chart-fps'), {
   type:'bar', data:{labels:[],datasets:[]},
   options:{responsive:true,maintainAspectRatio:true,animation:false,
@@ -227,13 +259,33 @@ async function fetchLive() {
       ['v-gpu','v-vram'].forEach(id => document.getElementById(id).textContent='N/A');
     }
 
+    const pipe = d.pipeline||{};
+    const pipeGrid = document.getElementById('pipe-grid');
+    const pipeKeys = Object.keys(pipe).sort();
+    pipeGrid.innerHTML = pipeKeys.length
+      ? pipeKeys.map(k =>
+          '<div class="cam-card"><div class="cam-title">'+k.replace(/_/g,' ')+'</div>'+
+          '<div style="font-size:22px;font-weight:600">'+(pipe[k]===null?'—':pipe[k])+'</div></div>'
+        ).join('')
+      : '<div class="cam-card"><div class="cam-title">no gauges</div></div>';
+
     push(sysChart,0,cpu); push(sysChart,1,mem.percent||0);
     push(sysChart,2,gpu?gpu.util_percent:null);
     sysChart.update();
 
+    push(pipeChart,0,pipe.tracks!==undefined?pipe.tracks:null);
+    push(pipeChart,1,pipe.crops!==undefined?pipe.crops/10:null);
+    push(pipeChart,2,pipe.identities!==undefined?pipe.identities:null);
+    push(pipeChart,3,pipe.global_tracks!==undefined?pipe.global_tracks:null);
+    pipeChart.update();
+
     const inf = d.inference||{};
     push(latChart,0,inf.yolo_avg_ms||0); push(latChart,1,inf.arcface_avg_ms||0);
     latChart.update();
+
+    push(ioChart,0,pipe.read_ms_avg!==undefined?pipe.read_ms_avg:null);
+    push(ioChart,1,pipe.decode_ms_avg!==undefined?pipe.decode_ms_avg:null);
+    ioChart.update();
 
     const cameras = d.cameras||{};
     const ks = Object.keys(cameras).sort((a,b)=>+a-+b);
@@ -248,10 +300,12 @@ async function fetchLive() {
     grid.innerHTML = ks.map(k => {
       const cam=cameras[k], fps=cam.fps;
       const cls=fps<5?'low':fps<15?'mid':'';
+      const stateCls = cam.stream_state==='streaming' ? 'ok' : 'low';
       return `<div class="cam-card">
-        <div class="cam-title">Camera ${k}</div>
+        <div class="cam-title">Camera ${k} <span class="cam-state ${stateCls}">${cam.stream_state||'unknown'}</span></div>
         <div class="cam-fps ${cls}">${fps.toFixed(1)}</div>
         <div class="cam-drops">fps &nbsp;·&nbsp; ${cam.frame_drops} drops</div>
+        <div class="cam-drops">read ${cam.read_ms!=null?cam.read_ms.toFixed(0):'—'}ms &nbsp;·&nbsp; decode ${cam.decode_ms!=null?cam.decode_ms.toFixed(0):'—'}ms</div>
       </div>`;
     }).join('');
 
@@ -274,7 +328,7 @@ fetchLive();
 setInterval(fetchLive, 2000);
 
 // ── History ───────────────────────────────────────────────────────────────────
-let hSys=null, hGpu=null, hLat=null, hFps=null;
+let hSys=null, hGpu=null, hLat=null, hFps=null, hIo=null, hPipe=null;
 
 function histLineOpts(unit) {
   return {responsive:true,maintainAspectRatio:true,animation:false,
@@ -323,6 +377,15 @@ async function loadHistory() {
     const gpuM = sampled.map(r => r.gpu_mem_pct??null);
     const yolo = sampled.map(r => r.yolo_ms??null);
     const arc  = sampled.map(r => r.arcface_ms??null);
+    // process/pipeline are only present on rows written after this feature
+    // shipped - .get()-style access via (r.process||{}) so older rows in the
+    // same day just render as gaps rather than breaking the chart.
+    const readMs   = sampled.map(r => (r.pipeline||{}).read_ms_avg??null);
+    const decodeMs = sampled.map(r => (r.pipeline||{}).decode_ms_avg??null);
+    const tracks  = sampled.map(r => (r.pipeline||{}).tracks??null);
+    const crops   = sampled.map(r => (r.pipeline||{}).crops!=null?(r.pipeline||{}).crops/10:null);
+    const idents  = sampled.map(r => (r.pipeline||{}).identities??null);
+    const gtracks = sampled.map(r => (r.pipeline||{}).global_tracks??null);
 
     // All camera keys found in the data
     const camKeys = [...new Set(sampled.flatMap(r=>Object.keys(r.cameras||{})))].sort((a,b)=>+a-+b);
@@ -349,6 +412,17 @@ async function loadHistory() {
       type:'line', data:{labels:ts, datasets:camKeys.map((k,i)=>
         mkHistDs('cam'+k, camColors[i%camColors.length], sampled.map(r=>(r.cameras[k]||{}).fps??null)))},
       options:histLineOpts(' fps')});
+
+    if (hIo) hIo.destroy();
+    hIo = new Chart(document.getElementById('h-io'), {
+      type:'line', data:{labels:ts, datasets:[mkHistDs('Read ms','#58a6ff',readMs),mkHistDs('Decode ms','#3fb950',decodeMs)]},
+      options:histLineOpts('ms')});
+
+    if (hPipe) hPipe.destroy();
+    hPipe = new Chart(document.getElementById('h-pipe'), {
+      type:'line', data:{labels:ts, datasets:[mkHistDs('tracks','#58a6ff',tracks),mkHistDs('crops /10','#f78166',crops),
+        mkHistDs('identities','#3fb950',idents),mkHistDs('global_tracks','#bc8cff',gtracks)]},
+      options:histLineOpts('')});
 
   } catch(e) {
     document.getElementById('hist-status').textContent = 'Error: '+e.message;
