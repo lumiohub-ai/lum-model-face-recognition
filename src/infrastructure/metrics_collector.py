@@ -79,6 +79,11 @@ class MetricsCollector:
         # Inference latency buffers (milliseconds)
         self._yolo_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
         self._arcface_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
+        # arcface_ms is the WHOLE _run_arcface_batch call (detect + embed +
+        # Python overhead); these two split it (LSO-117). See
+        # record_arcface_det_ms/record_arcface_embed_ms for why.
+        self._arcface_det_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
+        self._arcface_embed_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
 
         # Action recognition (Ollama VLM): latency plus per-outcome counters
         self._action_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
@@ -186,9 +191,41 @@ class MetricsCollector:
         batch_size is how many person crops (across all cameras) were
         processed sequentially in that call - same per-call-total caveat
         as record_yolo_ms.
+
+        This is the WHOLE _run_arcface_batch call - detection (still
+        per-ROI/unbatched, LSO-118) plus embedding (batched, LSO-117) plus
+        Python overhead. Kept unchanged in meaning, specifically so it stays
+        comparable before/after LSO-117: a history recorded under the old
+        unbatched-embedding code is still a fair baseline against this same
+        field under the new code. Use record_arcface_det_ms /
+        record_arcface_embed_ms below to see which of the two phases a given
+        change actually moved - an offline benchmark (lum-model-vision#16)
+        found detection is ~93% of this total at N=362 faces, so embedding
+        batching alone won't move this number much; that finding is exactly
+        what these two fields exist to confirm (or update) under real load.
         """
         with self._lock:
             self._arcface_ms.append((ms, max(1, batch_size)))
+
+    def record_arcface_det_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record ArcFace face-detection+alignment time (LSO-117).
+
+        Still N separate per-ROI detect_and_align() calls (SCRFD has no batch
+        path - LSO-118), so batch_size here is "how many ROIs were looped
+        over," not a real batch. ms is the summed wall time across that loop
+        for one _run_arcface_batch cycle.
+        """
+        with self._lock:
+            self._arcface_det_ms.append((ms, max(1, batch_size)))
+
+    def record_arcface_embed_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record ArcFace embedding time (LSO-117): ONE embed_batch() call
+        for every face found this cycle. batch_size is the real batch size -
+        the number that should climb with occupancy, and the one worth
+        watching to see the LSO-117 win hold up under production load.
+        """
+        with self._lock:
+            self._arcface_embed_ms.append((ms, max(1, batch_size)))
 
     def record_action_inference(
         self, ms: float, status: str, queue_depth: int = 0
@@ -298,6 +335,8 @@ class MetricsCollector:
         with self._lock:
             yolo_stats = _batch_stats(self._yolo_ms)
             arcface_stats = _batch_stats(self._arcface_ms)
+            arcface_det_stats = _batch_stats(self._arcface_det_ms)
+            arcface_embed_stats = _batch_stats(self._arcface_embed_ms)
             action_avg = sum(self._action_ms) / len(self._action_ms) if self._action_ms else 0.0
             action_counts = dict(self._action_counts)
             action_queue_depth = self._action_queue_depth
@@ -335,6 +374,17 @@ class MetricsCollector:
                 "yolo_ms_per_frame": round(yolo_stats["avg_item_ms"], 1),
                 "arcface_avg_batch_size": round(arcface_stats["avg_batch_size"], 1),
                 "arcface_ms_per_face": round(arcface_stats["avg_item_ms"], 1),
+                # LSO-117 split of the arcface_* fields above: detection is
+                # still per-ROI/unbatched (LSO-118), embedding is batched.
+                # An offline benchmark (lum-model-vision#16) found detection
+                # at ~93% of total ArcFace time at N=362 - these two fields
+                # are what would confirm or update that under real load.
+                "arcface_det_avg_ms": round(arcface_det_stats["avg_call_ms"], 1),
+                "arcface_det_avg_rois": round(arcface_det_stats["avg_batch_size"], 1),
+                "arcface_det_ms_per_roi": round(arcface_det_stats["avg_item_ms"], 1),
+                "arcface_embed_avg_ms": round(arcface_embed_stats["avg_call_ms"], 1),
+                "arcface_embed_avg_batch_size": round(arcface_embed_stats["avg_batch_size"], 1),
+                "arcface_embed_ms_per_face": round(arcface_embed_stats["avg_item_ms"], 1),
             },
             "action": {
                 "avg_ms": round(action_avg, 1),
@@ -384,6 +434,10 @@ class MetricsCollector:
             f" ArcFace={snap['inference']['arcface_avg_ms']:.0f}ms/batch"
             f"(avg {snap['inference']['arcface_avg_batch_size']:.1f} faces,"
             f" {snap['inference']['arcface_ms_per_face']:.0f}ms/face)"
+            f" [det={snap['inference']['arcface_det_avg_ms']:.0f}ms"
+            f"/{snap['inference']['arcface_det_avg_rois']:.1f}rois"
+            f" embed={snap['inference']['arcface_embed_avg_ms']:.0f}ms"
+            f"/{snap['inference']['arcface_embed_avg_batch_size']:.1f}faces]"
         )
 
     def check_alerts(

@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS metrics (
     arcface_ms  REAL,
     cameras_json TEXT,
     process_json TEXT,
-    pipeline_json TEXT
+    pipeline_json TEXT,
+    arcface_det_ms REAL,
+    arcface_embed_ms REAL
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics(ts);
 """
@@ -53,13 +55,18 @@ CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics(ts);
 _MIGRATIONS = [
     "ALTER TABLE metrics ADD COLUMN process_json TEXT",
     "ALTER TABLE metrics ADD COLUMN pipeline_json TEXT",
+    # LSO-117: split of arcface_ms (see MetricsCollector.record_arcface_ms's
+    # docstring) - detection (unbatched) vs. embedding (batched) time.
+    "ALTER TABLE metrics ADD COLUMN arcface_det_ms REAL",
+    "ALTER TABLE metrics ADD COLUMN arcface_embed_ms REAL",
 ]
 
 _INSERT_SQL = """
 INSERT INTO metrics
     (ts, cpu_percent, ram_percent, ram_used_gb, gpu_util, gpu_mem_pct,
-     yolo_ms, arcface_ms, cameras_json, process_json, pipeline_json)
-VALUES (?,?,?,?,?,?,?,?,?,?,?)
+     yolo_ms, arcface_ms, cameras_json, process_json, pipeline_json,
+     arcface_det_ms, arcface_embed_ms)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 # Keep 30 days of data; prune rows older than this on startup
@@ -146,6 +153,8 @@ class MetricsStore:
             json.dumps(snap.get("cameras", {})),
             json.dumps(snap.get("process") or {}),
             json.dumps(snap.get("pipeline") or {}),
+            inf.get("arcface_det_avg_ms"),
+            inf.get("arcface_embed_avg_ms"),
         )
 
         with self._connect() as conn:
@@ -171,7 +180,7 @@ class MetricsStore:
         sql = """
         SELECT ts, cpu_percent, ram_percent, ram_used_gb,
                gpu_util, gpu_mem_pct, yolo_ms, arcface_ms, cameras_json,
-               process_json, pipeline_json
+               process_json, pipeline_json, arcface_det_ms, arcface_embed_ms
         FROM metrics
         WHERE ts >= ? AND ts < ?
         ORDER BY ts ASC
@@ -201,6 +210,8 @@ class MetricsStore:
                     # can use .get() uniformly across old and new rows.
                     "process": _load(r[9]),
                     "pipeline": _load(r[10]),
+                    "arcface_det_ms": r[11],
+                    "arcface_embed_ms": r[12],
                 })
         return rows
 
