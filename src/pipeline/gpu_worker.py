@@ -251,6 +251,13 @@ class GPUInferenceWorker:
         faces_to_embed: List[tuple] = []
         crops: List[np.ndarray] = []
 
+        # Timed separately from embedding below (LSO-117): detection is still
+        # N per-ROI calls (SCRFD has no batch path - LSO-118), so this number
+        # won't move with batch size the way embedding does. An offline
+        # benchmark (lum-model-vision#16) found detection at ~93% of total
+        # ArcFace time at N=362 faces - det_t0/det_ms_total is what confirms
+        # (or updates) that under real production load.
+        det_t0 = time.time()
         for i, roi in enumerate(person_rois):
             result: Dict = {
                 "embedding": None,
@@ -273,8 +280,12 @@ class GPUInferenceWorker:
                 # required kps too) - result stays the default no-face dict.
             except Exception as e:
                 logger.debug(f"Face detection error on ROI: {e}")
+        det_ms_total = (time.time() - det_t0) * 1000
+        if self._metrics is not None:
+            self._metrics.record_arcface_det_ms(det_ms_total, batch_size=len(person_rois))
 
         if crops:
+            embed_t0 = time.time()
             try:
                 ## The one GPU call this method exists to make possible -
                 ## every face found above, embedded together.
@@ -282,6 +293,10 @@ class GPUInferenceWorker:
             except Exception as e:
                 logger.debug(f"Batch face embedding error: {e}")
                 embeddings = None
+            if self._metrics is not None:
+                self._metrics.record_arcface_embed_ms(
+                    (time.time() - embed_t0) * 1000, batch_size=len(crops)
+                )
 
             if embeddings is not None:
                 for (i, face), embedding in zip(faces_to_embed, embeddings):
