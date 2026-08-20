@@ -63,10 +63,14 @@ class StreamHandler:
         self.thread = None  # Store reference to thread
         self._last_frame_at: Optional[float] = None
         self._reconnecting = False
-        # Rolling buffer of cap.read() wall-clock duration (ms) in the hot
-        # loop below - kept local rather than pushed into a shared
-        # MetricsCollector, since that's constructed after StreamManager in
-        # engine.py and this class has no reason to depend on report timing.
+        # cap.read() = grab() + retrieve(). grab() blocks waiting for the next
+        # frame off the network/demuxer (so it tracks stream cadence, not CPU
+        # cost); retrieve() is the actual decode. Timed separately so "the
+        # stream stalled" and "decode got slow" aren't the same number.
+        # Kept local rather than pushed into a shared MetricsCollector, since
+        # that's constructed after StreamManager in engine.py and this class
+        # has no reason to depend on report timing.
+        self._read_ms: deque = deque(maxlen=50)
         self._decode_ms: deque = deque(maxlen=50)
 
         ret, frame = self.cap.read()
@@ -256,9 +260,16 @@ class StreamHandler:
                 consecutive_failures = 0
                 continue
 
-            _decode_start = time.monotonic()
-            ret, frame = self.cap.read()
-            decode_ms = (time.monotonic() - _decode_start) * 1000.0
+            _grab_start = time.monotonic()
+            ret = self.cap.grab()
+            read_ms = (time.monotonic() - _grab_start) * 1000.0
+            if ret:
+                _decode_start = time.monotonic()
+                ret, frame = self.cap.retrieve()
+                decode_ms = (time.monotonic() - _decode_start) * 1000.0
+            else:
+                frame = None
+                decode_ms = 0.0
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures >= 3:
@@ -272,6 +283,7 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
             self._mark_frame_received()
+            self._read_ms.append(read_ms)
             self._decode_ms.append(decode_ms)
 
             # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
@@ -286,9 +298,19 @@ class StreamHandler:
                 gc.collect()
                 self.last_gc_time = current_time
 
+    def get_read_avg_ms(self) -> float:
+        """Rolling average cap.grab() duration in ms (last 50 successful
+        reads) - time blocked waiting for the next frame off the
+        network/demuxer. A spike here means the STREAM stalled, not that
+        decode got slow. 0.0 if none recorded yet."""
+        if not self._read_ms:
+            return 0.0
+        return sum(self._read_ms) / len(self._read_ms)
+
     def get_decode_avg_ms(self) -> float:
-        """Return the rolling average cap.read() duration in milliseconds
-        (last 50 successful reads), or 0.0 if none recorded yet."""
+        """Rolling average cap.retrieve() duration in ms (last 50 successful
+        reads) - actual CPU cost of decoding a grabbed frame. 0.0 if none
+        recorded yet."""
         if not self._decode_ms:
             return 0.0
         return sum(self._decode_ms) / len(self._decode_ms)

@@ -777,10 +777,16 @@ class SmartOfficeEngine:
         if gtm is not None:
             self.metrics.register_gauge("global_tracks", lambda: len(gtm.global_tracks))
 
-        # Decode: per-camera cv2 read cost and stream state. Decode is the
-        # dominant CPU consumer at high camera counts, and a stalled stream is
-        # otherwise only visible as fps quietly going to zero.
+        # Split cap.read() into its two halves: grab() (read_ms) is time spent
+        # BLOCKED waiting for the next frame off the network/demuxer - a
+        # stalled camera shows up here. retrieve() (decode_ms) is the actual
+        # CPU cost of decoding a frame that already arrived - the dominant CPU
+        # consumer at high camera counts. Conflating them (as one cap.read()
+        # timer previously did) hides which one is actually the problem.
         streams = self.stream_manager.streams
+
+        def _read_ms(idx: int) -> float:
+            return streams[idx].get_read_avg_ms() if idx < len(streams) else 0.0
 
         def _decode_ms(idx: int) -> float:
             return streams[idx].get_decode_avg_ms() if idx < len(streams) else 0.0
@@ -788,8 +794,12 @@ class SmartOfficeEngine:
         def _stream_state(idx: int):
             return streams[idx].get_health()["state"] if idx < len(streams) else None
 
+        self.metrics.register_camera_gauge("read_ms", _read_ms)
         self.metrics.register_camera_gauge("decode_ms", _decode_ms)
         self.metrics.register_camera_gauge("stream_state", _stream_state)
+        self.metrics.register_gauge("read_ms_avg", lambda: round(
+            sum(s.get_read_avg_ms() for s in streams) / len(streams), 1
+        ) if streams else 0.0)
         self.metrics.register_gauge("decode_ms_avg", lambda: round(
             sum(s.get_decode_avg_ms() for s in streams) / len(streams), 1
         ) if streams else 0.0)

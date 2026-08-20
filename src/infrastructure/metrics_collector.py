@@ -306,8 +306,13 @@ class MetricsCollector:
                 str(idx): {
                     "fps": round(self.get_fps(idx), 2),
                     "frame_drops": self.get_drops(idx),
-                    # Decode cost is the dominant CPU consumer at high camera
-                    # counts, so it belongs next to fps rather than buried.
+                    # read_ms = blocked waiting for the next frame (network/
+                    # demux stall). decode_ms = actual CPU cost of decoding a
+                    # frame that already arrived - the dominant CPU consumer
+                    # at high camera counts. Keep these separate: a high
+                    # read_ms means the CAMERA is slow, a high decode_ms means
+                    # WE are slow.
+                    "read_ms": round(self._read_camera_gauge(idx, "read_ms"), 1),
                     "decode_ms": round(self._read_camera_gauge(idx, "decode_ms"), 1),
                     "stream_state": self._read_camera_gauge(idx, "stream_state"),
                 }
@@ -345,6 +350,7 @@ class MetricsCollector:
         fps_parts = [
             f"cam{idx}={snap['cameras'][str(idx)]['fps']:.1f}fps"
             f"(drops={snap['cameras'][str(idx)]['frame_drops']},"
+            f"read={snap['cameras'][str(idx)]['read_ms']:.0f}ms,"
             f"dec={snap['cameras'][str(idx)]['decode_ms']:.0f}ms)"
             for idx in (camera_indices or [])
         ]

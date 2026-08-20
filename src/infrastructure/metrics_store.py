@@ -12,7 +12,11 @@ Schema (one row per snapshot):
     gpu_mem_percent float  (NULL if no GPU)
     yolo_ms         float
     arcface_ms      float
-    cameras_json    TEXT   JSON {"0": {"fps": 32.1, "drops": 0}, ...}
+    cameras_json    TEXT   JSON {"0": {"fps": 32.1, "drops": 0, "read_ms": .., "decode_ms": ..}, ...}
+    process_json    TEXT   JSON {"rss_gb": .., "threads": .., "open_fds": .., "uptime_sec": ..}
+    pipeline_json   TEXT   JSON {"tracks": .., "crops": .., "read_ms_avg": .., ...} - whatever
+                           gauges are registered; stored as a blob rather than
+                           fixed columns since the gauge set changes over time.
 """
 
 import json
@@ -35,16 +39,27 @@ CREATE TABLE IF NOT EXISTS metrics (
     gpu_mem_pct REAL,
     yolo_ms     REAL,
     arcface_ms  REAL,
-    cameras_json TEXT
+    cameras_json TEXT,
+    process_json TEXT,
+    pipeline_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics(ts);
 """
 
+# Columns added after the initial release - CREATE TABLE IF NOT EXISTS above
+# is a no-op on a DB that already has the `metrics` table, so an existing DB
+# needs these added explicitly. _init_db applies them, ignoring "duplicate
+# column" if they're already there.
+_MIGRATIONS = [
+    "ALTER TABLE metrics ADD COLUMN process_json TEXT",
+    "ALTER TABLE metrics ADD COLUMN pipeline_json TEXT",
+]
+
 _INSERT_SQL = """
 INSERT INTO metrics
     (ts, cpu_percent, ram_percent, ram_used_gb, gpu_util, gpu_mem_pct,
-     yolo_ms, arcface_ms, cameras_json)
-VALUES (?,?,?,?,?,?,?,?,?)
+     yolo_ms, arcface_ms, cameras_json, process_json, pipeline_json)
+VALUES (?,?,?,?,?,?,?,?,?,?,?)
 """
 
 # Keep 30 days of data; prune rows older than this on startup
@@ -129,6 +144,8 @@ class MetricsStore:
             inf.get("yolo_avg_ms"),
             inf.get("arcface_avg_ms"),
             json.dumps(snap.get("cameras", {})),
+            json.dumps(snap.get("process") or {}),
+            json.dumps(snap.get("pipeline") or {}),
         )
 
         with self._connect() as conn:
@@ -153,19 +170,22 @@ class MetricsStore:
 
         sql = """
         SELECT ts, cpu_percent, ram_percent, ram_used_gb,
-               gpu_util, gpu_mem_pct, yolo_ms, arcface_ms, cameras_json
+               gpu_util, gpu_mem_pct, yolo_ms, arcface_ms, cameras_json,
+               process_json, pipeline_json
         FROM metrics
         WHERE ts >= ? AND ts < ?
         ORDER BY ts ASC
         """
+
+        def _load(blob: Optional[str]) -> Dict[str, Any]:
+            try:
+                return json.loads(blob) if blob else {}
+            except Exception:
+                return {}
+
         rows = []
         with self._connect() as conn:
             for r in conn.execute(sql, (day_start, day_end)):
-                cameras = {}
-                try:
-                    cameras = json.loads(r[8]) if r[8] else {}
-                except Exception:
-                    pass
                 rows.append({
                     "ts": r[0],
                     "cpu_percent": r[1],
@@ -175,7 +195,12 @@ class MetricsStore:
                     "gpu_mem_pct": r[5],
                     "yolo_ms": r[6],
                     "arcface_ms": r[7],
-                    "cameras": cameras,
+                    "cameras": _load(r[8]),
+                    # Rows written before this field existed have no process/
+                    # pipeline data - {} rather than a missing key, so callers
+                    # can use .get() uniformly across old and new rows.
+                    "process": _load(r[9]),
+                    "pipeline": _load(r[10]),
                 })
         return rows
 
@@ -199,6 +224,12 @@ class MetricsStore:
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(_CREATE_SQL)
+            for stmt in _MIGRATIONS:
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
             # Prune old data
             cutoff = time.time() - _RETENTION_DAYS * 86400
             conn.execute("DELETE FROM metrics WHERE ts < ?", (cutoff,))
