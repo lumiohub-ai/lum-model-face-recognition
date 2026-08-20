@@ -229,7 +229,7 @@ class GPUInferenceWorker:
             )
             duration_ms = (time.time() - t0) * 1000
             if self._metrics is not None:
-                self._metrics.record_yolo_ms(duration_ms)
+                self._metrics.record_yolo_ms(duration_ms, batch_size=len(frames))
             return [self._parse_yolo_result(r) for r in results]
         except Exception as e:
             logger.exception(f"YOLO batch inference failed: {e}")
@@ -285,7 +285,7 @@ class GPUInferenceWorker:
             results.append(result)
         duration_ms = (time.time() - t0) * 1000
         if self._metrics is not None and results:
-            self._metrics.record_arcface_ms(duration_ms)
+            self._metrics.record_arcface_ms(duration_ms, batch_size=len(results))
         return results
 
     @staticmethod

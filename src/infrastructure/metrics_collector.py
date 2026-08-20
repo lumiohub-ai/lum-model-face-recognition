@@ -15,10 +15,13 @@ Designed to be low-overhead: data is only aggregated when snapshot() is called.
 import threading
 import time
 from collections import Counter, deque
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import psutil
 from loguru import logger
+
+# This process — used for our own RSS/threads/fds (see MetricsCollector.process).
+_PROC = psutil.Process()
 
 # ── GPU monitoring via pynvml (nvidia-ml-py) — optional ──────────────────────
 _pynvml = None
@@ -48,9 +51,10 @@ class MetricsCollector:
         # In camera worker — call each processed detection-frame
         metrics.record_frame(camera_idx)
 
-        # In GPU worker — call after each batch inference
-        metrics.record_yolo_ms(elapsed_ms)
-        metrics.record_arcface_ms(elapsed_ms)
+        # In GPU worker — call after each batch inference, with the real
+        # batch size (frame/crop count), not left at the batch_size=1 default
+        metrics.record_yolo_ms(elapsed_ms, batch_size=len(frames))
+        metrics.record_arcface_ms(elapsed_ms, batch_size=len(person_rois))
 
         # On queue-full frame drop
         metrics.record_drop(camera_idx)
@@ -80,6 +84,56 @@ class MetricsCollector:
         self._action_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
         self._action_counts: Counter = Counter()
         self._action_queue_depth: int = 0
+
+        # Live gauges: name -> zero-arg callable, polled at snapshot() time.
+        # Lets pipeline components (track managers, stream handlers, GPU worker)
+        # expose current sizes without this module importing them.
+        self._gauges: Dict[str, Callable[[], Any]] = {}
+        # Per-camera gauges: name -> fn(camera_idx) -> value
+        self._camera_gauges: Dict[str, Callable[[int], Any]] = {}
+
+    # ── Live gauges ───────────────────────────────────────────────────────────
+
+    def register_gauge(self, name: str, fn: Callable[[], Any]) -> None:
+        """Register a live value polled on every snapshot.
+
+        A failing gauge must never break metrics collection, so poll errors are
+        swallowed and reported as None rather than propagating.
+        """
+        with self._lock:
+            self._gauges[name] = fn
+
+    def register_camera_gauge(self, name: str, fn: Callable[[int], Any]) -> None:
+        """Register a per-camera gauge: fn(camera_idx) -> value.
+
+        Kept separate from register_gauge so per-camera values land inside each
+        camera's block rather than as a flat pile of `decode_ms_0`, `decode_ms_1`…
+        """
+        with self._lock:
+            self._camera_gauges[name] = fn
+
+    def _read_camera_gauge(self, camera_idx: int, name: str) -> Any:
+        with self._lock:
+            fn = self._camera_gauges.get(name)
+        if fn is None:
+            return 0.0 if name.endswith("_ms") else None
+        try:
+            return fn(camera_idx)
+        except Exception as e:
+            logger.debug(f"camera gauge '{name}'[{camera_idx}] read error: {e}")
+            return 0.0 if name.endswith("_ms") else None
+
+    def _read_gauges(self) -> Dict[str, Any]:
+        with self._lock:
+            gauges = dict(self._gauges)
+        out: Dict[str, Any] = {}
+        for name, fn in gauges.items():
+            try:
+                out[name] = fn()
+            except Exception as e:  # a broken gauge must not kill the snapshot
+                logger.debug(f"gauge '{name}' read error: {e}")
+                out[name] = None
+        return out
 
     # ── FPS / frame tracking ──────────────────────────────────────────────────
 
@@ -115,15 +169,26 @@ class MetricsCollector:
 
     # ── Inference latency ─────────────────────────────────────────────────────
 
-    def record_yolo_ms(self, ms: float) -> None:
-        """Record one YOLO batch inference duration in milliseconds."""
-        with self._lock:
-            self._yolo_ms.append(ms)
+    def record_yolo_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record one YOLO batch inference duration in milliseconds.
 
-    def record_arcface_ms(self, ms: float) -> None:
-        """Record one ArcFace batch inference duration in milliseconds."""
+        batch_size is how many camera frames were in that call (1-7 here,
+        whatever was ready when the loop collected the batch) - without it,
+        the raw ms is a per-call total that swings with batch size and
+        can't be compared to a per-frame number like decode time.
+        """
         with self._lock:
-            self._arcface_ms.append(ms)
+            self._yolo_ms.append((ms, max(1, batch_size)))
+
+    def record_arcface_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record one ArcFace batch inference duration in milliseconds.
+
+        batch_size is how many person crops (across all cameras) were
+        processed sequentially in that call - same per-call-total caveat
+        as record_yolo_ms.
+        """
+        with self._lock:
+            self._arcface_ms.append((ms, max(1, batch_size)))
 
     def record_action_inference(
         self, ms: float, status: str, queue_depth: int = 0
@@ -149,13 +214,41 @@ class MetricsCollector:
 
     @staticmethod
     def memory() -> Dict:
-        """System RAM stats."""
+        """System RAM stats (whole host, not this process)."""
         m = psutil.virtual_memory()
         return {
             "used_gb": round(m.used / 1e9, 2),
             "total_gb": round(m.total / 1e9, 2),
             "percent": round(m.percent, 1),
         }
+
+    @staticmethod
+    def process() -> Dict:
+        """This process's own footprint.
+
+        `memory()` above is host-wide, so it cannot show whether *we* are the
+        thing growing — which is exactly the question during a leak. rss_gb is
+        the number to watch/alert on; threads and fds catch leaks of those too.
+        """
+        # rss_gb is the field that actually matters here (it's what a leak
+        # investigation watches); num_fds() in particular can fail on
+        # non-Linux/sandboxed environments. Read it separately so a failure
+        # there doesn't take rss_gb down with it.
+        out: Dict[str, Any] = {}
+        try:
+            with _PROC.oneshot():
+                mem = _PROC.memory_info()
+                out["rss_gb"] = round(mem.rss / 1e9, 2)
+                out["vms_gb"] = round(mem.vms / 1e9, 2)
+                out["threads"] = _PROC.num_threads()
+                out["uptime_sec"] = round(time.time() - _PROC.create_time())
+        except Exception as e:
+            logger.debug(f"process metrics read error: {e}")
+        try:
+            out["open_fds"] = _PROC.num_fds()
+        except Exception as e:
+            logger.debug(f"process open_fds read error: {e}")
+        return out
 
     @staticmethod
     def gpu() -> Optional[Dict]:
@@ -188,9 +281,23 @@ class MetricsCollector:
         """
         indices = camera_indices if camera_indices is not None else list(self._frame_ts.keys())
 
+        def _batch_stats(buf: deque) -> Dict[str, float]:
+            """Per-call average ms/batch-size, plus the honest per-item cost
+            (total ms / total items) - the per-call average alone hides
+            whether a slow reading is "GPU is slow" or "batch was big"."""
+            if not buf:
+                return {"avg_call_ms": 0.0, "avg_batch_size": 0.0, "avg_item_ms": 0.0}
+            total_ms = sum(ms for ms, _ in buf)
+            total_items = sum(n for _, n in buf)
+            return {
+                "avg_call_ms": total_ms / len(buf),
+                "avg_batch_size": total_items / len(buf),
+                "avg_item_ms": (total_ms / total_items) if total_items else 0.0,
+            }
+
         with self._lock:
-            yolo_avg = sum(self._yolo_ms) / len(self._yolo_ms) if self._yolo_ms else 0.0
-            arcface_avg = sum(self._arcface_ms) / len(self._arcface_ms) if self._arcface_ms else 0.0
+            yolo_stats = _batch_stats(self._yolo_ms)
+            arcface_stats = _batch_stats(self._arcface_ms)
             action_avg = sum(self._action_ms) / len(self._action_ms) if self._action_ms else 0.0
             action_counts = dict(self._action_counts)
             action_queue_depth = self._action_queue_depth
@@ -199,17 +306,35 @@ class MetricsCollector:
             "timestamp": time.time(),
             "cpu_percent": self.cpu_percent(),
             "memory": self.memory(),
+            "process": self.process(),
+            "pipeline": self._read_gauges(),
             "gpu": self.gpu(),
             "cameras": {
                 str(idx): {
                     "fps": round(self.get_fps(idx), 2),
                     "frame_drops": self.get_drops(idx),
+                    # read_ms = blocked waiting for the next frame (network/
+                    # demux stall). decode_ms = actual CPU cost of decoding a
+                    # frame that already arrived - the dominant CPU consumer
+                    # at high camera counts. Keep these separate: a high
+                    # read_ms means the CAMERA is slow, a high decode_ms means
+                    # WE are slow.
+                    "read_ms": round(self._read_camera_gauge(idx, "read_ms"), 1),
+                    "decode_ms": round(self._read_camera_gauge(idx, "decode_ms"), 1),
+                    "stream_state": self._read_camera_gauge(idx, "stream_state"),
                 }
                 for idx in indices
             },
             "inference": {
-                "yolo_avg_ms": round(yolo_avg, 1),
-                "arcface_avg_ms": round(arcface_avg, 1),
+                # Kept for existing consumers (metrics_server dashboard,
+                # metrics_store) - per-call total, swings with batch size.
+                "yolo_avg_ms": round(yolo_stats["avg_call_ms"], 1),
+                "arcface_avg_ms": round(arcface_stats["avg_call_ms"], 1),
+                # Normalized per-item cost - the actually comparable number.
+                "yolo_avg_batch_size": round(yolo_stats["avg_batch_size"], 1),
+                "yolo_ms_per_frame": round(yolo_stats["avg_item_ms"], 1),
+                "arcface_avg_batch_size": round(arcface_stats["avg_batch_size"], 1),
+                "arcface_ms_per_face": round(arcface_stats["avg_item_ms"], 1),
             },
             "action": {
                 "avg_ms": round(action_avg, 1),
@@ -231,15 +356,34 @@ class MetricsCollector:
         )
         fps_parts = [
             f"cam{idx}={snap['cameras'][str(idx)]['fps']:.1f}fps"
-            f"(drops={snap['cameras'][str(idx)]['frame_drops']})"
+            f"(drops={snap['cameras'][str(idx)]['frame_drops']},"
+            f"read={snap['cameras'][str(idx)]['read_ms']:.0f}ms,"
+            f"dec={snap['cameras'][str(idx)]['decode_ms']:.0f}ms)"
             for idx in (camera_indices or [])
         ]
+        proc = snap.get("process") or {}
+        proc_str = (
+            f"RSS={proc['rss_gb']:.2f}GB thr={proc['threads']} fds={proc['open_fds']} "
+            if proc else ""
+        )
+        pipe = snap.get("pipeline") or {}
+        # Only render gauges that reported a value, so a broken one is visibly
+        # absent rather than silently logged as 0.
+        pipe_str = (
+            "| " + " ".join(f"{k}={v}" for k, v in sorted(pipe.items()) if v is not None) + " "
+            if pipe else ""
+        )
         logger.info(
             f"[Metrics] CPU={snap['cpu_percent']:.0f}% "
             f"RAM={snap['memory']['used_gb']:.1f}/{snap['memory']['total_gb']:.1f}GB({snap['memory']['percent']:.0f}%) "
-            f"{gpu_str} | "
+            f"{proc_str}{gpu_str} {pipe_str}| "
             + (", ".join(fps_parts) if fps_parts else "no cameras yet")
-            + f" | YOLO={snap['inference']['yolo_avg_ms']:.0f}ms ArcFace={snap['inference']['arcface_avg_ms']:.0f}ms"
+            + f" | YOLO={snap['inference']['yolo_avg_ms']:.0f}ms/batch"
+            f"(avg {snap['inference']['yolo_avg_batch_size']:.1f} frames,"
+            f" {snap['inference']['yolo_ms_per_frame']:.0f}ms/frame)"
+            f" ArcFace={snap['inference']['arcface_avg_ms']:.0f}ms/batch"
+            f"(avg {snap['inference']['arcface_avg_batch_size']:.1f} faces,"
+            f" {snap['inference']['arcface_ms_per_face']:.0f}ms/face)"
         )
 
     def check_alerts(

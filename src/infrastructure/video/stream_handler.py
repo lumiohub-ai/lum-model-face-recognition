@@ -6,6 +6,7 @@ import threading
 import time
 import logging
 import gc
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -62,6 +63,15 @@ class StreamHandler:
         self.thread = None  # Store reference to thread
         self._last_frame_at: Optional[float] = None
         self._reconnecting = False
+        # cap.read() = grab() + retrieve(). grab() blocks waiting for the next
+        # frame off the network/demuxer (so it tracks stream cadence, not CPU
+        # cost); retrieve() is the actual decode. Timed separately so "the
+        # stream stalled" and "decode got slow" aren't the same number.
+        # Kept local rather than pushed into a shared MetricsCollector, since
+        # that's constructed after StreamManager in engine.py and this class
+        # has no reason to depend on report timing.
+        self._read_ms: deque = deque(maxlen=50)
+        self._decode_ms: deque = deque(maxlen=50)
 
         ret, frame = self.cap.read()
         if not ret:
@@ -250,7 +260,16 @@ class StreamHandler:
                 consecutive_failures = 0
                 continue
 
-            ret, frame = self.cap.read()
+            _grab_start = time.monotonic()
+            ret = self.cap.grab()
+            read_ms = (time.monotonic() - _grab_start) * 1000.0
+            if ret:
+                _decode_start = time.monotonic()
+                ret, frame = self.cap.retrieve()
+                decode_ms = (time.monotonic() - _decode_start) * 1000.0
+            else:
+                frame = None
+                decode_ms = 0.0
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures >= 3:
@@ -264,6 +283,14 @@ class StreamHandler:
             # Reset failure counter on successful read
             consecutive_failures = 0
             self._mark_frame_received()
+            # Same lock as latest_frame/latest_ret below: these deques are now
+            # read cross-thread by the metrics gauges (get_read_avg_ms /
+            # get_decode_avg_ms), and an unguarded deque.append() racing a
+            # sum()-over-iteration read can raise "deque mutated during
+            # iteration".
+            with self.lock:
+                self._read_ms.append(read_ms)
+                self._decode_ms.append(decode_ms)
 
             # LATEST FRAME ONLY: Always overwrite with newest frame (no queue accumulation)
             # This prevents jitter by ensuring we never show old frames
@@ -276,6 +303,23 @@ class StreamHandler:
             if current_time - self.last_gc_time > self.gc_interval:
                 gc.collect()
                 self.last_gc_time = current_time
+
+    def get_read_avg_ms(self) -> float:
+        """Rolling average cap.grab() duration in ms (last 50 successful
+        reads) - time blocked waiting for the next frame off the
+        network/demuxer. A spike here means the STREAM stalled, not that
+        decode got slow. 0.0 if none recorded yet."""
+        with self.lock:
+            vals = list(self._read_ms)
+        return sum(vals) / len(vals) if vals else 0.0
+
+    def get_decode_avg_ms(self) -> float:
+        """Rolling average cap.retrieve() duration in ms (last 50 successful
+        reads) - actual CPU cost of decoding a grabbed frame. 0.0 if none
+        recorded yet."""
+        with self.lock:
+            vals = list(self._decode_ms)
+        return sum(vals) / len(vals) if vals else 0.0
 
     def read(self) -> Tuple[bool, Any]:
         """Read the next frame from the video source.
