@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.1 (2026-08-22)
+
+## What's Changed
+* Add process/pipeline/decode visibility to metrics by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/76
+* Batch ArcFace embedding across all ROIs in a cycle by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/77
+* Embed one face per ArcFace call, not one batch per cycle (LSO-117) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/81
+* Fix ArcFace embedding perf regression shipped in 0.3.0 (LSO-117) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/82
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.3.0...v0.3.1
+
 ## v0.3.0 (2026-08-20)
 
 ## What's Changed
