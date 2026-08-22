@@ -1,9 +1,8 @@
 """Unit tests for GPUInferenceWorker._run_arcface_batch (LSO-117).
 
 Covers the index bookkeeping across detect_and_align() (per-ROI) ->
-embed_batch() (one batched call) -> results[i] (scattered back by index) -
-exactly the kind of filter/batch/scatter logic that breaks silently if it
-regresses, per repeated code review feedback on PR #77.
+embed_batch() (one crop per call) -> results[i] (scattered back by index) -
+exactly the kind of filter/scatter logic that breaks silently if it regresses.
 
 Run: PYTHONPATH=src python tests/test_gpu_worker.py
 """
@@ -70,7 +69,7 @@ def make_worker(face_detector):
 
 
 class TestRunArcfaceBatch(unittest.TestCase):
-    def test_multiple_rois_batch_into_a_single_embed_batch_call(self):
+    def test_each_crop_is_embedded_in_its_own_fixed_shape_call(self):
         rois = [roi(1), roi(2), roi(3)]
         crops = [crop(1), crop(2), crop(3)]
         faces = [FakeFace([0, 0, 1, 1], [[1, 1]], 0.9, c) for c in crops]
@@ -81,9 +80,10 @@ class TestRunArcfaceBatch(unittest.TestCase):
 
         results = make_worker(fd)._run_arcface_batch(rois)
 
-        # The whole point of LSO-117: one call for every ROI's face, not one per face.
-        self.assertEqual(len(fd.embed_calls), 1)
-        self.assertEqual(len(fd.embed_calls[0]), 3)
+        # One call per crop, each of size 1 - a varying batch size makes ORT
+        # re-plan and costs ~30x (see _run_arcface_batch).
+        self.assertEqual(len(fd.embed_calls), 3)
+        self.assertTrue(all(len(c) == 1 for c in fd.embed_calls))
         self.assertTrue(all(r["face_detected"] for r in results))
 
     def test_none_and_empty_roi_short_circuit_before_detection(self):
@@ -118,41 +118,45 @@ class TestRunArcfaceBatch(unittest.TestCase):
         # Only the alignable face's crop reached embed_batch.
         self.assertEqual(len(fd.embed_calls[0]), 1)
 
-    def test_embed_batch_raising_blanks_the_whole_cycle(self):
-        # Both ROIs detect fine; embedding then fails for the whole batch -
-        # both must fall back to "no face," not just one.
+    def test_embed_failure_blanks_only_that_face(self):
+        # Embedding fails for crop(1) only; crop(2) must still come back.
         rois = [roi(1), roi(2)]
         faces = [
             [FakeFace([0, 0, 1, 1], [[1, 1]], 0.9, crop(1))],
             [FakeFace([0, 0, 1, 1], [[1, 1]], 0.9, crop(2))],
         ]
-        fd = FakeFaceDetector(detect_results=faces, embed_exception=RuntimeError("CUDA OOM"))
+        def flaky(cs):
+            if cs[0][0, 0, 0] == 1:
+                raise RuntimeError("CUDA OOM")
+            return [np.full(4, 2.0)]
+
+        fd = FakeFaceDetector(detect_results=faces, embed_fn=flaky)
 
         results = make_worker(fd)._run_arcface_batch(rois)
 
-        self.assertFalse(any(r["face_detected"] for r in results))
+        self.assertFalse(results[0]["face_detected"])
         self.assertIsNone(results[0]["embedding"])
-        self.assertIsNone(results[1]["embedding"])
+        self.assertTrue(results[1]["face_detected"])
+        self.assertTrue(np.array_equal(results[1]["embedding"], np.full(4, 2.0)))
 
-    def test_embed_batch_length_mismatch_is_discarded_not_misaligned(self):
-        # embed_batch violates its "one embedding per crop" contract by
-        # returning fewer items than it was given. Must NOT zip() the
-        # mismatched lists (which would silently attach face 2's embedding
-        # to face 1, etc.) - every face this cycle must come back as
-        # "no face" instead, loudly logged elsewhere.
-        rois = [roi(1), roi(2), roi(3)]
+    def test_empty_embed_result_leaves_that_face_unrecognized(self):
+        # embed_batch returns nothing for a crop - that face must stay
+        # "no face" rather than being paired with a neighbour's embedding.
+        rois = [roi(1), roi(2)]
         faces = [
-            [FakeFace([0, 0, 1, 1], [[1, 1]], 0.9, crop(i))] for i in (1, 2, 3)
+            [FakeFace([0, 0, 1, 1], [[1, 1]], 0.9, crop(i))] for i in (1, 2)
         ]
-        fd = FakeFaceDetector(
-            detect_results=faces,
-            embed_fn=lambda cs: [np.ones(4)],  # 1 embedding for 3 crops - contract violation
-        )
+
+        def empty_for_first(cs):
+            return [] if cs[0][0, 0, 0] == 1 else [np.full(4, 2.0)]
+
+        fd = FakeFaceDetector(detect_results=faces, embed_fn=empty_for_first)
 
         results = make_worker(fd)._run_arcface_batch(rois)
 
-        self.assertFalse(any(r["face_detected"] for r in results))
-        self.assertTrue(all(r["embedding"] is None for r in results))
+        self.assertFalse(results[0]["face_detected"])
+        self.assertTrue(results[1]["face_detected"])
+        self.assertTrue(np.array_equal(results[1]["embedding"], np.full(4, 2.0)))
 
     def test_mixed_hit_and_miss_rois_keep_correct_index_alignment(self):
         # roi(1): no face at all. roi(2): a face. roi(3): no face. roi(4): a face.
@@ -166,7 +170,7 @@ class TestRunArcfaceBatch(unittest.TestCase):
         ]
         fd = FakeFaceDetector(
             detect_results=faces,
-            embed_fn=lambda cs: [np.full(4, 2.0), np.full(4, 4.0)],
+            embed_fn=lambda cs: [np.full(4, float(cs[0][0, 0, 0]))],
         )
 
         results = make_worker(fd)._run_arcface_batch(rois)
