@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.0 (2026-08-20)
+
+## What's Changed
+* Add process/pipeline/decode visibility to metrics (LSO-115) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/79
+* Batch ArcFace embedding across all ROIs in a cycle (LSO-117) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/80
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.2.3...v0.3.0
+
 ## v0.2.3 (2026-08-19)
 
 ## What's Changed
@@ -25,5 +34,3 @@
 
 
 **Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.1.0...v0.2.3
-
-
