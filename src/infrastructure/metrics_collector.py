@@ -192,17 +192,13 @@ class MetricsCollector:
         processed sequentially in that call - same per-call-total caveat
         as record_yolo_ms.
 
-        This is the WHOLE _run_arcface_batch call - detection (still
-        per-ROI/unbatched, LSO-118) plus embedding (batched, LSO-117) plus
-        Python overhead. Kept unchanged in meaning, specifically so it stays
-        comparable before/after LSO-117: a history recorded under the old
-        unbatched-embedding code is still a fair baseline against this same
-        field under the new code. Use record_arcface_det_ms /
-        record_arcface_embed_ms below to see which of the two phases a given
-        change actually moved - an offline benchmark (lum-model-vision#16)
-        found detection is ~93% of this total at N=362 faces, so embedding
-        batching alone won't move this number much; that finding is exactly
-        what these two fields exist to confirm (or update) under real load.
+        This is the WHOLE _run_arcface_batch call - detection plus embedding
+        (both per-item, see gpu_worker) plus Python overhead. Kept unchanged
+        in meaning across LSO-117 so history stays comparable: a baseline
+        recorded before that work is still a fair comparison against this
+        field today. Use record_arcface_det_ms / record_arcface_embed_ms
+        below to see which phase a given change actually moved - detection
+        currently dominates, at roughly 85-90% of this total.
         """
         with self._lock:
             self._arcface_ms.append((ms, max(1, batch_size)))
@@ -219,10 +215,12 @@ class MetricsCollector:
             self._arcface_det_ms.append((ms, max(1, batch_size)))
 
     def record_arcface_embed_ms(self, ms: float, batch_size: int = 1) -> None:
-        """Record ArcFace embedding time (LSO-117): ONE embed_batch() call
-        for every face found this cycle. batch_size is the real batch size -
-        the number that should climb with occupancy, and the one worth
-        watching to see the LSO-117 win hold up under production load.
+        """Record ArcFace embedding time (LSO-117).
+
+        N separate embed_batch() calls, each of exactly one crop - a varying
+        batch size makes onnxruntime re-plan and costs ~30x (see the embed
+        loop in gpu_worker). batch_size is "how many faces were embedded this
+        cycle," not a real batch, so ms should scale roughly linearly with it.
         """
         with self._lock:
             self._arcface_embed_ms.append((ms, max(1, batch_size)))

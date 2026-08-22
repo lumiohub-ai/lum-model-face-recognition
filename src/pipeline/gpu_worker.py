@@ -238,11 +238,10 @@ class GPUInferenceWorker:
     def _run_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
         """Detect face and extract embedding for each person ROI.
 
-        Detection is still per-ROI (SCRFD has no batch path in this
-        insightface version), but embedding is now ONE detect_and_align() +
-        embed_batch() call across every ROI in this batch, instead of the
-        old per-ROI detect() (which internally did N separate single-face
-        embedding calls for N faces) - LSO-117.
+        Detection and embedding are separate calls (LSO-117) so each can be
+        timed on its own, but both run one ROI/crop at a time: SCRFD has no
+        batch path (LSO-118), and embedding at a varying batch size is far
+        slower than at a fixed one - see the comment on the embed loop below.
         """
         t0 = time.time()
         results: List[Dict] = []
@@ -286,67 +285,65 @@ class GPUInferenceWorker:
 
         if crops:
             embed_t0 = time.time()
-            try:
-                ## The one GPU call this method exists to make possible -
-                ## every face found above, embedded together.
-                embeddings = self._face_detector.embed_batch(crops)
-            except Exception as e:
-                # Unlike a per-ROI detect_and_align failure above (which only
-                # blanks one face), this blanks EVERY face found this cycle -
-                # a real reduction in fault isolation, the tradeoff for
-                # batching. warning, not debug, since "recognition went dark
-                # for a whole cycle" should be visible in production logs,
-                # not require someone to already be looking.
-                logger.warning(f"Batch face embedding error ({len(crops)} faces lost this cycle): {e}")
-                embeddings = None
+            # One crop per call, deliberately: ORT's CUDA EP re-plans on every
+            # input-shape change, so a batch size that varies cycle-to-cycle
+            # costs ~80ms vs ~2.6ms at a fixed shape. Batching all crops in one
+            # call shipped as 0.3.0 and halved prod FPS. Don't reintroduce it.
+            embeddings: List[Any] = []
+            last_error: Optional[Exception] = None
+            for crop in crops:
+                try:
+                    out = self._face_detector.embed_batch([crop])
+                except Exception as e:
+                    last_error = e
+                    out = None
+                embeddings.append(out[0] if out is not None and len(out) > 0 else None)
+            failed = sum(1 for e in embeddings if e is None)
+            if failed:
+                # One line per cycle, not per face: a hard embedder failure
+                # (CUDA OOM, model unloaded) would otherwise log once per face
+                # per cycle across every camera.
+                reason = last_error if last_error is not None else "embedder returned no result"
+                logger.warning(
+                    f"Face embedding failed for {failed}/{len(crops)} faces "
+                    f"this cycle: {reason}"
+                )
             if self._metrics is not None:
                 self._metrics.record_arcface_embed_ms(
                     (time.time() - embed_t0) * 1000, batch_size=len(crops)
                 )
 
-            if embeddings is not None and len(embeddings) != len(faces_to_embed):
-                # embed_batch's ordering/count contract ("one embedding per
-                # input crop, same order") lives in lum-model-vision, an
-                # external package not visible from this repo - if it's ever
-                # violated, zip() below would silently truncate/misalign
-                # embeddings to the wrong faces (wrong person gets someone
-                # else's identity match). Loud failure instead of silent
-                # corruption.
-                logger.error(
-                    f"embed_batch returned {len(embeddings)} embeddings for "
-                    f"{len(faces_to_embed)} faces - discarding this cycle's "
-                    "embeddings rather than risk misaligning them to the wrong face"
-                )
-                embeddings = None
+            for (i, face), embedding in zip(faces_to_embed, embeddings):
+                if embedding is None:
+                    # Failed embedding stays "no face", as before 0.3.0 —
+                    # downstream treats face_detected as "has an embedding".
+                    continue
+                roi = person_rois[i]
+                # face.bbox / face.kps are already in ROI coordinates; the
+                # detector's internal padding is undone before it returns.
+                x1, y1, x2, y2 = face.bbox.astype(int)
+                face_crop = roi[max(0, y1):y2, max(0, x1):x2]
 
-            if embeddings is not None:
-                for (i, face), embedding in zip(faces_to_embed, embeddings):
-                    roi = person_rois[i]
-                    # face.bbox / face.kps are already in ROI coordinates; the
-                    # detector's internal padding is undone before it returns.
-                    x1, y1, x2, y2 = face.bbox.astype(int)
-                    face_crop = roi[max(0, y1):y2, max(0, x1):x2]
+                kps = None
+                if hasattr(face, "kps") and face.kps is not None:
+                    kps = face.kps.astype(int).tolist()
 
-                    kps = None
-                    if hasattr(face, "kps") and face.kps is not None:
-                        kps = face.kps.astype(int).tolist()
-
-                    results[i] = {
-                        "embedding": embedding,
-                        "face_image": face_crop if face_crop.size > 0 else None,
-                        "face_detected": True,
-                        "det_score": (
-                            float(face.det_score)
-                            if hasattr(face, "det_score")
-                            else 0.0
-                        ),
-                        "face_bbox": [x1, y1, x2, y2],
-                        "face_landmarks": kps,
-                        # Orientation proxies from the package (single source of
-                        # truth); the unrecognized-case gate reads these.
-                        "frontality": frontality(kps),
-                        "pitch": pitch(kps),
-                    }
+                results[i] = {
+                    "embedding": embedding,
+                    "face_image": face_crop if face_crop.size > 0 else None,
+                    "face_detected": True,
+                    "det_score": (
+                        float(face.det_score)
+                        if hasattr(face, "det_score")
+                        else 0.0
+                    ),
+                    "face_bbox": [x1, y1, x2, y2],
+                    "face_landmarks": kps,
+                    # Orientation proxies from the package (single source of
+                    # truth); the unrecognized-case gate reads these.
+                    "frontality": frontality(kps),
+                    "pitch": pitch(kps),
+                }
 
         duration_ms = (time.time() - t0) * 1000
         if self._metrics is not None and results:
