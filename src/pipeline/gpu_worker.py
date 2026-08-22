@@ -290,13 +290,24 @@ class GPUInferenceWorker:
             # costs ~80ms vs ~2.6ms at a fixed shape. Batching all crops in one
             # call shipped as 0.3.0 and halved prod FPS. Don't reintroduce it.
             embeddings: List[Any] = []
+            last_error: Optional[Exception] = None
             for crop in crops:
                 try:
                     out = self._face_detector.embed_batch([crop])
                 except Exception as e:
-                    logger.warning(f"Face embedding error (1 face lost this cycle): {e}")
+                    last_error = e
                     out = None
                 embeddings.append(out[0] if out is not None and len(out) > 0 else None)
+            failed = sum(1 for e in embeddings if e is None)
+            if failed:
+                # One line per cycle, not per face: a hard embedder failure
+                # (CUDA OOM, model unloaded) would otherwise log once per face
+                # per cycle across every camera.
+                reason = last_error if last_error is not None else "embedder returned no result"
+                logger.warning(
+                    f"Face embedding failed for {failed}/{len(crops)} faces "
+                    f"this cycle: {reason}"
+                )
             if self._metrics is not None:
                 self._metrics.record_arcface_embed_ms(
                     (time.time() - embed_t0) * 1000, batch_size=len(crops)
