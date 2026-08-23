@@ -95,12 +95,12 @@ class MetricsStore:
         metrics,
         db_path: str = "metrics.db",
         interval_sec: float = 30.0,
-        camera_indices: Optional[List[int]] = None,
+        camera_ids: Optional[List[int]] = None,
     ):
         self._metrics = metrics
         self._db_path = db_path
         self._interval = interval_sec
-        self._camera_indices = camera_indices or []
+        self._camera_indices = camera_ids or []
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()

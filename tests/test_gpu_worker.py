@@ -64,7 +64,7 @@ class FakeFaceDetector:
 
 def make_worker(face_detector):
     return GPUInferenceWorker(
-        detector=None, face_detector=face_detector, num_cameras=1, metrics_collector=None
+        detector=None, face_detector=face_detector, camera_ids=[1], metrics_collector=None
     )
 
 
@@ -185,3 +185,63 @@ class TestRunArcfaceBatch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCameraSetKeying(unittest.TestCase):
+    """LSO-130: queues are keyed by DB camera id, not list position.
+
+    With positional keys, removing a camera from the middle of the set shifted
+    every later camera's index by one — silently re-pointing their GPU queues
+    at a different camera. That is why the engine rebuilt everything on a set
+    change instead of removing one camera.
+    """
+
+    def _worker(self, ids):
+        return GPUInferenceWorker(
+            detector=None, face_detector=None, camera_ids=ids, metrics_collector=None
+        )
+
+    def test_ids_need_not_be_contiguous_or_ordered(self):
+        w = self._worker([7, 22, 5])
+        self.assertEqual(sorted(w._frame_in_queues), [5, 7, 22])
+
+    def test_removing_a_middle_camera_leaves_the_others_addressable(self):
+        w = self._worker([7, 22, 5])
+        q7, q5 = w._frame_in_queues[7], w._frame_in_queues[5]
+
+        w.remove_camera(22)
+
+        # The exact objects must survive — not merely "a queue still exists".
+        self.assertIs(w._frame_in_queues[7], q7)
+        self.assertIs(w._frame_in_queues[5], q5)
+        self.assertNotIn(22, w._frame_in_queues)
+        self.assertEqual(w.camera_ids, [7, 5])
+
+    def test_added_camera_gets_its_own_queues(self):
+        w = self._worker([7])
+        w.add_camera(31)
+        for d in (
+            w._frame_in_queues,
+            w._detection_out_queues,
+            w._face_in_queues,
+            w._embedding_out_queues,
+        ):
+            self.assertIn(31, d)
+        self.assertIsNot(w._frame_in_queues[31], w._frame_in_queues[7])
+
+    def test_add_and_remove_are_idempotent(self):
+        w = self._worker([7])
+        w.add_camera(7)          # already present
+        self.assertEqual(w.camera_ids, [7])
+        w.remove_camera(99)      # never present
+        self.assertEqual(w.camera_ids, [7])
+
+    def test_submitting_to_a_removed_camera_is_a_noop(self):
+        """A camera worker can still be draining its last cycle after removal —
+        that must not raise into its thread."""
+        w = self._worker([7])
+        w.remove_camera(7)
+        w.submit_frame(7, np.zeros((4, 4, 3), dtype=np.uint8), 1)
+        w.submit_faces(7, [], [])
+        self.assertEqual(w.get_detections(7, timeout=0.01), [])
+        self.assertEqual(w.get_embeddings(7, timeout=0.01), {})

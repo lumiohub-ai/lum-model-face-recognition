@@ -526,7 +526,7 @@ class MetricsDashboardServer:
 
     Usage::
 
-        server = MetricsDashboardServer(metrics, store, camera_indices=[0,1], port=8765)
+        server = MetricsDashboardServer(metrics, store, camera_ids=[0,1], port=8765)
         server.start()
         ...
         server.stop()
@@ -536,12 +536,12 @@ class MetricsDashboardServer:
         self,
         metrics,
         store=None,
-        camera_indices: Optional[List[int]] = None,
+        camera_ids: Optional[List[int]] = None,
         port: int = 8765,
     ):
         self._metrics = metrics
         self._store = store
-        self._camera_indices = camera_indices or []
+        self._camera_indices = camera_ids or []
         self._port = port
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
