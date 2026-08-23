@@ -353,3 +353,13 @@ notebooks/eval
 # expensive part and have to survive a clone - *.json is blanket-ignored above.
 !notebooks/eval/action/labels.json
 !notebooks/eval/action/summary.json
+
+# Celery YOLO worker spike artifacts. Ignore the bulk (65 MB of extracted
+# frames, plus per-run worker logs) but keep results.json — it is 7 KB and is
+# the record the LSO-100 writeup and the README tables are derived from.
+# Note: *.json / *.csv / *.jpg above already ignore these by accident; these
+# entries state the intent explicitly, and cover *.ndjson which they do not.
+# (git will not re-include a file inside an excluded directory, so ignore the
+# contents rather than the directory itself, then negate the one file we keep.)
+tests/workers/output/*
+!tests/workers/output/results.json
