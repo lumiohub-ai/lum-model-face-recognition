@@ -9,7 +9,7 @@ Not a unit test — needs a GPU, a live Redis and minutes of wall time. The name
 has no ``test_`` prefix so ``pytest tests/`` will not collect it.
 
     docker run --rm -d --name yolobench-redis -p 6401:6379 redis:7-alpine
-    PYTHONPATH=tests .venv/bin/python tests/workers/run_bench.py
+    PYTHONPATH=benchmarks .venv/bin/python benchmarks/celery_worker/run_bench.py
 """
 
 import argparse
@@ -23,13 +23,13 @@ from concurrent.futures import ThreadPoolExecutor
 from statistics import median
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
-sys.path.insert(0, os.path.join(REPO, "tests"))
+sys.path.insert(0, os.path.join(REPO, "benchmarks"))
 
 import psutil  # noqa: E402
 import pynvml  # noqa: E402
 from celery import group  # noqa: E402
 
-from workers.bench_app import app  # noqa: E402
+from celery_worker.bench_app import app  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(__file__), "output")
 FRAMES_DIR = os.path.join(OUT, "frames")
@@ -182,7 +182,7 @@ def spawn(pool, conc, share, cell, prefetch):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("SO_CELERY", "SO_REDIS"))}  # never inherit prod pointers
     env.update(
-        PYTHONPATH=os.path.join(REPO, "tests"),
+        PYTHONPATH=os.path.join(REPO, "benchmarks"),
         CUDA_VISIBLE_DEVICES="0",
         YOLOBENCH_WEIGHTS=WEIGHTS,
         YOLOBENCH_SHARE=share,
@@ -192,7 +192,7 @@ def spawn(pool, conc, share, cell, prefetch):
         OPENCV_NUM_THREADS="1",
         YOLO_VERBOSE="false",
     )
-    argv = [VENV_CELERY, "-A", "workers.bench_app", "worker",
+    argv = [VENV_CELERY, "-A", "celery_worker.bench_app", "worker",
             "--loglevel=WARNING", f"--pool={pool}", "--queues=yolobench",
             # %d not %h: a reused node name lets a slow-dying worker from the
             # previous cell consume this cell's tasks.
@@ -229,7 +229,7 @@ def reap_stale_workers():
     killed = []
     for proc in psutil.process_iter(["pid", "cmdline"]):
         cmd = " ".join(proc.info.get("cmdline") or [])
-        if "workers.bench_app" in cmd and proc.info["pid"] != os.getpid():
+        if "celery_worker.bench_app" in cmd and proc.info["pid"] != os.getpid():
             try:
                 proc.kill()
                 killed.append(proc.info["pid"])
@@ -384,7 +384,7 @@ def main():
 
     shm = shm_shape = None # shared memory handle and shape, if any cell uses shm mode
     if any(c.get("mode") == "shm" for c in cells):
-        from workers import frame_store
+        from celery_worker import frame_store
         shm, shm_shape = frame_store.create(frames, SHM_NAME)
         print(f"shared block {SHM_NAME}: {shm_shape}, "
               f"{shm.size / 2 ** 20:.0f} MiB (decoded once, reused by every task)")

@@ -8,15 +8,22 @@ This is a spike, deliberately small. It exercises **only** YOLO through Celery,
 in isolation from the application. It imports `lum_vision`, `ultralytics` and
 `celery`, and **nothing from `src/`**.
 
-## Why not the usual `tests/` conventions
+## Why this lives in `benchmarks/`, not `tests/`
 
-The other tests do `sys.path.insert(0, ".../src")`. This harness must not:
-importing `src/` pulls in `config.settings` → the stale `.env` (which points at
-port 6400) → sqlalchemy and psycopg2, none of which are installed in `.venv`.
-Instead put `tests/` on `PYTHONPATH` so `celery -A workers.bench_app` resolves.
+This is not a test. It needs a GPU, a live Redis and minutes of wall time, and
+it asserts nothing — it measures. `pytest` must never collect it, so it sits
+outside `tests/` entirely rather than relying on a missing `test_` prefix.
 
-`run_bench.py` has no `test_` prefix on purpose — it needs a GPU, a live Redis
-and minutes of wall time, so `pytest tests/` must not collect it.
+The package is `celery_worker`, deliberately **not** `workers`: `src/workers` is
+the production Celery package (`workers.detection_tasks`, `workers.embedding_tasks`)
+and two importable `workers.*` packages disambiguated only by `PYTHONPATH`
+ordering is a trap.
+
+It also does **not** do the `sys.path.insert(0, ".../src")` that the real tests
+do. Importing `src/` pulls in `config.settings` → the stale `.env` (which points
+at port 6400) → sqlalchemy and psycopg2, none of which are installed in `.venv`.
+Instead `benchmarks/` goes on `PYTHONPATH` so `celery -A celery_worker.bench_app`
+resolves.
 
 ## Setup
 
@@ -33,8 +40,8 @@ is *not* database-scoped.
 ## Run
 
 ```bash
-PYTHONPATH=tests .venv/bin/python tests/workers/run_bench.py                # all cells
-PYTHONPATH=tests .venv/bin/python tests/workers/run_bench.py --cells 2,4    # a subset
+PYTHONPATH=benchmarks .venv/bin/python benchmarks/celery_worker/run_bench.py                # all cells
+PYTHONPATH=benchmarks .venv/bin/python benchmarks/celery_worker/run_bench.py --cells 2,4    # a subset
 docker rm -f yolobench-redis                                               # teardown
 ```
 

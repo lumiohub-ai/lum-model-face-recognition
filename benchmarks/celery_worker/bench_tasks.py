@@ -12,14 +12,14 @@ import time
 
 from celery.signals import worker_process_init
 
-from workers.bench_app import app
+from celery_worker.bench_app import app
 
 
 @worker_process_init.connect
 def _load_model_in_child(**_kwargs):
     """Fires post-fork in each prefork child. Solo/threads pools do not emit
     this, which is why every task also calls ``ensure_loaded()``."""
-    from workers import model_holder
+    from celery_worker import model_holder
     model_holder.ensure_loaded()
 
 
@@ -39,7 +39,7 @@ def warmup(path, deadline):
     the rest are still cold when the clock starts.
     """
     import cv2
-    from workers import model_holder
+    from celery_worker import model_holder
 
     model_holder.ensure_loaded()
     frame = cv2.imread(path)
@@ -56,7 +56,7 @@ def infer_shm(shm_name, idxs, shape):
     The payload is a name plus a few ints, so the broker carries a handle
     rather than pixels — and there is no JPEG decode in the task at all.
     """
-    from workers import frame_store, model_holder
+    from celery_worker import frame_store, model_holder
 
     model_holder.ensure_loaded()
 
@@ -85,7 +85,7 @@ def infer_shm(shm_name, idxs, shape):
 def infer(paths):
     """Detect on a batch of frames read from local disk."""
     import cv2
-    from workers import model_holder
+    from celery_worker import model_holder
 
     model_holder.ensure_loaded()
 

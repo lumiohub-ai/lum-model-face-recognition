@@ -2,7 +2,7 @@
 
 Traces actual execution: what runs, in what order, under which lock, on
 which thread. Each diagram maps to specific lines in
-[`tests/workers/model_holder.py`](../../../workspace/so.model-face-recognition/tests/workers/model_holder.py).
+[`benchmarks/celery_worker/model_holder.py`](../../../workspace/so.model-face-recognition/benchmarks/celery_worker/model_holder.py).
 
 ## Process state
 
