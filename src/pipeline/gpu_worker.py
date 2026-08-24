@@ -224,8 +224,11 @@ class GPUInferenceWorker:
                 all_detections = self._run_yolo_batch(frames)
 
                 for i, cam_id in enumerate(cam_ids):
-                    # The camera may have been removed while this batch ran.
-                    out_q = self._detection_out_queues.get(cam_id)
+                    # Same mid-flight-removal case as the submit/get paths, so
+                    # use the same helper rather than repeating the reasoning.
+                    out_q = self._queue_for(
+                        self._detection_out_queues, cam_id, "yolo_distribute"
+                    )
                     if out_q is not None:
                         out_q.put(all_detections[i])
 
@@ -264,7 +267,9 @@ class GPUInferenceWorker:
                         cam_results[cam_id][track_id] = face_results[i]
 
                 for cam_id, results in cam_results.items():
-                    out_q = self._embedding_out_queues.get(cam_id)
+                    out_q = self._queue_for(
+                        self._embedding_out_queues, cam_id, "arcface_distribute"
+                    )
                     if out_q is not None:
                         out_q.put(results)
 

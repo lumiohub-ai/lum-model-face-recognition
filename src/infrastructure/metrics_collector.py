@@ -310,7 +310,7 @@ class MetricsCollector:
         """Return a complete metrics snapshot dict.
 
         Args:
-            camera_ids: list of camera indices to include; defaults to all seen.
+            camera_ids: list of DB camera ids to include; defaults to all seen.
 
         Returns a dict with keys: timestamp, cpu_percent, memory, gpu, cameras, inference.
         """
@@ -448,7 +448,7 @@ class MetricsCollector:
         """Check for critical conditions and return a list of alert dicts.
 
         Args:
-            camera_ids:   cameras to check
+            camera_ids: DB camera ids to check
             fps_threshold:    alert if FPS drops below this (0 = camera just started)
             gpu_mem_threshold: alert if GPU VRAM % exceeds this
             ram_threshold:    alert if system RAM % exceeds this
