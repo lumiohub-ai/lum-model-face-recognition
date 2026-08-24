@@ -457,15 +457,16 @@ class SmartOfficeEngine:
         command_id: str,
         frame_index: int = 1,
         undistort: bool = False,
-        camera_matrix: list = None,
-        dist_coeffs: list = None,
+        camera_matrix: Optional[list] = None,
+        dist_coeffs: Optional[list] = None,
         calibration_model: str = 'fisheye',
     ) -> None:
         """Capture a single frame for camera calibration.
 
         Non-blocking — spawns a daemon thread so the main pipeline is never paused.
         Reads the latest frame already buffered by the RTSP background thread (no
-        new RTSP connection), uploads to GCS, then publishes a FrameCaptured event.
+        new RTSP connection), optionally undistorts it, uploads to GCS, then
+        publishes a FrameCaptured event.
         """
         threading.Thread(
             target=self._do_capture_frame,
@@ -480,8 +481,8 @@ class SmartOfficeEngine:
         command_id: str,
         frame_index: int = 1,
         undistort: bool = False,
-        camera_matrix: list = None,
-        dist_coeffs: list = None,
+        camera_matrix: Optional[list] = None,
+        dist_coeffs: Optional[list] = None,
         calibration_model: str = 'fisheye',
     ) -> None:
         """Background: grab latest frame → optionally undistort → upload to GCS → save to DB → publish event."""
@@ -506,19 +507,25 @@ class SmartOfficeEngine:
                 )
                 return
 
-            was_undistorted = False
-            if undistort and camera_matrix and dist_coeffs:
-                try:
-                    from domain.calibration.camera_calibrator import CameraCalibrator
-                    calibrator = CameraCalibrator(fisheye=(calibration_model == 'fisheye'))
-                    frame = calibrator.undistort(frame, camera_matrix, dist_coeffs, calibration_model)
-                    was_undistorted = True
-                except Exception as e:
-                    # Best-effort — fall back to the raw frame rather than
-                    # failing the whole capture over a bad undistort.
-                    logger.exception(f"capture_frame: undistort failed for camera {camera_id}: {e}")
-
             h, w = frame.shape[:2]
+
+            undistorted_applied = False
+            if undistort:
+                if camera_matrix and dist_coeffs:
+                    try:
+                        from domain.calibration.undistort import undistort_image
+                        frame = undistort_image(frame, camera_matrix, dist_coeffs, calibration_model)
+                        undistorted_applied = True
+                    except Exception as e:
+                        logger.warning(
+                            f"capture_frame: undistort requested but failed for camera "
+                            f"{camera_id}, falling back to raw frame: {e}"
+                        )
+                else:
+                    logger.warning(
+                        f"capture_frame: undistort requested for camera {camera_id} but "
+                        f"camera_matrix/dist_coeffs missing; falling back to raw frame"
+                    )
 
             from infrastructure.storage.gcs import ImageFetcher
             image_url = ImageFetcher().upload_image(
@@ -542,9 +549,17 @@ class SmartOfficeEngine:
                 command_id=command_id,
                 camera_id=camera_id,
                 image_url=image_url,
-                metadata={'width': w, 'height': h, 'source': 'OpenCV', 'undistorted': was_undistorted},
+                metadata={
+                    'width': w,
+                    'height': h,
+                    'source': 'OpenCV',
+                    'undistorted': undistorted_applied,
+                    'calibration_model': calibration_model,
+                },
             )
-            logger.info(f"Frame captured: camera={camera_id}, command={command_id}, undistorted={was_undistorted}")
+            logger.info(
+                f"Frame captured: camera={camera_id}, command={command_id}, undistorted={undistorted_applied}"
+            )
 
         except Exception as e:
             logger.exception(f"capture_frame failed for camera {camera_id}: {e}")

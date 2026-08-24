@@ -238,7 +238,9 @@ class MDAManager:
             logger.info(f"CaptureFrame for camera {camera_id}, command {command_id}, frame_index={frame_index}, undistort={undistort}")
             if self.engine:
                 self.engine.capture_frame(
-                    camera_id, command_id, frame_index,
+                    camera_id,
+                    command_id,
+                    frame_index,
                     undistort=undistort,
                     camera_matrix=camera_matrix,
                     dist_coeffs=dist_coeffs,
