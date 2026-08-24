@@ -1,0 +1,81 @@
+name: 2. Build and Publish
+
+# Runs on a SELF-HOSTED runner: the image is ~4 GB (CUDA base), too big for
+# the hosted runners' disk. Building needs no GPU - only disk + the host
+# layer cache.
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["1. Bump Version"]
+    types:
+      - completed
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  IMAGE: humblebeeai/lumiohub-model
+
+jobs:
+  build_publish:
+    name: Build and Publish
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Get latest version
+        run: |
+          # Non-fatal: on a branch dispatch the checkout diverges from main and a
+          # plain pull aborts. Only fast-forward if possible; keep the ref otherwise.
+          git pull --ff-only origin main || echo "Skipping pull (divergent ref / dispatch)"
+          echo "Current version: v$(./scripts/get-version.sh)"
+      - name: Login to docker hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # requirements.txt pulls lum-model-vision from its own private repo over
+      # git+ssh (LSO-32) - the build step needs an SSH agent forwarded into
+      # BuildKit for that pip install to succeed. LUM_VISION_DEPLOY_KEY is a
+      # read-only deploy key on lumiohub-ai/lum-model-vision, not a personal key.
+      - name: Load lum-model-vision deploy key
+        # Pinned to a commit, not the mutable v0.9.0 tag: this job holds both
+        # the deploy key and the Docker Hub push creds, so a moved/compromised
+        # tag here is a real supply-chain foothold.
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.LUM_VISION_DEPLOY_KEY }}
+
+      - name: Get version
+        run: echo "_VERSION=$(./scripts/get-version.sh)" >> ${GITHUB_ENV}
+
+      # Default builder → uses the self-hosted runner's persistent Docker layer
+      # cache, so rebuilds are incremental (no gha cache: a 4 GB image would blow
+      # the 10 GB per-repo Actions cache limit).
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          labels: |
+            org.opencontainers.image.source=https://github.com/lumiohub-ai/lum-model-face-recognition
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env._VERSION }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ env._VERSION }}
+          push: true
+          # Forwards $SSH_AUTH_SOCK (set by the ssh-agent step above) into
+          # BuildKit - matches the Dockerfile's `RUN --mount=type=ssh` and the
+          # local `docker build --ssh default` / `docker compose build` path.
+          ssh: default
+      - name: Trigger release
+        # Skip on manual dispatch so test builds don't cut a release.
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run 3.create-release.yml

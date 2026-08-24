@@ -167,6 +167,7 @@ class SmartOfficeEngine:
                 camera_indices=_cam_indices,
                 port=settings.metrics_port,
             )
+            self._register_pipeline_gauges()
         else:
             self.metrics = None
             self._metrics_store = None
@@ -287,7 +288,9 @@ class SmartOfficeEngine:
         # Start async logger workers
         self.async_logger.start()
 
-        # Start action recognition workers (after the AsyncLogger they upload through)
+        # Start action recognition workers (after the AsyncLogger they upload through).
+        # The late-bound async_logger/metrics wiring dev added here already happens
+        # earlier in __init__, so only the start call belongs at this point.
         self.action_worker.start_workers()
 
         # Start camera worker threads
@@ -765,6 +768,93 @@ class SmartOfficeEngine:
             publisher.publish_homography_failed(command_id, camera_id, str(e))
 
     # ── Metrics reporting ─────────────────────────────────────────────────────
+
+    def _register_pipeline_gauges(self) -> None:
+        """Expose live pipeline sizes to the metrics collector.
+
+        These are the counts that reveal *why* memory moves. Per-track state is
+        bounded (history capped, `remove_track` on disappearance), so total
+        memory scales with how many tracks are alive — without these gauges a
+        growing footprint is indistinguishable from a leak.
+
+        Crops dominate the per-track cost: `max_crops` full-resolution person
+        crops each, so `tracks` multiplied by that is the real memory driver.
+        """
+        engines = self.camera_engines
+        _MISSING = object()  # distinguishes "attribute doesn't exist" from "value is None"
+
+        def _check_attr_chain(label: str, attr: str, sub: str) -> None:
+            """Verify attr/sub actually resolve on a live engine, once at
+            startup. _sum()'s getattr(..., None) fallback means a renamed
+            attribute (this reaches into lum_vision, an external package not
+            visible in this repo) would otherwise report a silent, permanent
+            0 forever - indistinguishable from "genuinely empty" and exactly
+            the false-flat signal that could mislead the next leak
+            investigation this instrumentation exists to catch."""
+            if not engines:
+                return
+            mgr = getattr(engines[0], attr, _MISSING)
+            if mgr is _MISSING:
+                logger.warning(f"[metrics] gauge '{label}': camera engine has no attribute '{attr}' - will always report 0")
+                return
+            if getattr(mgr, sub, _MISSING) is _MISSING:
+                logger.warning(f"[metrics] gauge '{label}': '{attr}' has no attribute '{sub}' - will always report 0")
+
+        def _sum(attr: str, sub: str) -> int:
+            total = 0
+            for e in engines:
+                mgr = getattr(e, attr, None)
+                coll = getattr(mgr, sub, None) if mgr is not None else None
+                if coll is not None:
+                    total += len(coll)
+            return total
+
+        _check_attr_chain("tracks", "track_manager", "track_bbox_history")
+        _check_attr_chain("crops", "track_manager", "track_crop_history")
+        _check_attr_chain("identities", "identity_manager", "locked_identities")
+        _check_attr_chain("states", "state_manager", "person_states")
+
+        self.metrics.register_gauge("tracks", lambda: _sum("track_manager", "track_bbox_history"))
+        self.metrics.register_gauge("crops", lambda: sum(
+            len(frames)
+            for e in engines
+            for frames in getattr(getattr(e, "track_manager", None), "track_crop_history", {}).values()
+        ))
+        self.metrics.register_gauge("identities", lambda: _sum("identity_manager", "locked_identities"))
+        self.metrics.register_gauge("states", lambda: _sum("state_manager", "person_states"))
+
+        gtm = self.models.global_track_manager
+        if gtm is not None:
+            if getattr(gtm, "global_tracks", _MISSING) is _MISSING:
+                logger.warning("[metrics] gauge 'global_tracks': global_track_manager has no attribute 'global_tracks' - will always report 0")
+            self.metrics.register_gauge("global_tracks", lambda: len(gtm.global_tracks))
+
+        # Split cap.read() into its two halves: grab() (read_ms) is time spent
+        # BLOCKED waiting for the next frame off the network/demuxer - a
+        # stalled camera shows up here. retrieve() (decode_ms) is the actual
+        # CPU cost of decoding a frame that already arrived - the dominant CPU
+        # consumer at high camera counts. Conflating them (as one cap.read()
+        # timer previously did) hides which one is actually the problem.
+        streams = self.stream_manager.streams
+
+        def _read_ms(idx: int) -> float:
+            return streams[idx].get_read_avg_ms() if idx < len(streams) else 0.0
+
+        def _decode_ms(idx: int) -> float:
+            return streams[idx].get_decode_avg_ms() if idx < len(streams) else 0.0
+
+        def _stream_state(idx: int):
+            return streams[idx].get_health()["state"] if idx < len(streams) else None
+
+        self.metrics.register_camera_gauge("read_ms", _read_ms)
+        self.metrics.register_camera_gauge("decode_ms", _decode_ms)
+        self.metrics.register_camera_gauge("stream_state", _stream_state)
+        self.metrics.register_gauge("read_ms_avg", lambda: round(
+            sum(s.get_read_avg_ms() for s in streams) / len(streams), 1
+        ) if streams else 0.0)
+        self.metrics.register_gauge("decode_ms_avg", lambda: round(
+            sum(s.get_decode_avg_ms() for s in streams) / len(streams), 1
+        ) if streams else 0.0)
 
     def _report_metrics(self) -> None:
         """Log a metrics summary and publish alerts for critical conditions."""

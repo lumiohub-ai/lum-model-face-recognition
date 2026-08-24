@@ -26,12 +26,6 @@ class CameraWorker:
     uses its own CameraEngine for CPU-only tracking and identity resolution.
     """
 
-    # frame_ms is the gap between consecutive detection-frame starts. A gap
-    # this large means a stream stall/reconnect happened in between, not that
-    # one frame genuinely took 5s — discard it rather than poisoning the
-    # rolling stage-timing window with a single huge outlier.
-    _MAX_SANE_FRAME_GAP_MS: float = 5000.0
-
     def __init__(
         self,
         camera_idx: int,
@@ -82,19 +76,6 @@ class CameraWorker:
         self._fps: float = 0.0
         self._last_frame_time: float = 0.0
 
-        # perf_counter() timestamp of the previous detection frame's *end*
-        # (right before it was recorded), used to compute frame_ms for the
-        # stage-timing breakdown (LSO-66) — see the comment at the recording
-        # site in _process_one_frame() for why "end", not "start".
-        self._last_frame_end: Optional[float] = None
-
-        # Accumulated stream_handler.read() cost since the last recorded
-        # detection frame — includes every skipped frame's own read, since
-        # those happen on this same thread and are real time spent before the
-        # next detection frame can start. Flushed into the "decode" stage and
-        # reset to 0.0 each time a detection frame's stages get recorded.
-        self._decode_ms_accum: float = 0.0
-
         # Metrics collector (optional)
         self._metrics = metrics_collector
 
@@ -139,9 +120,7 @@ class CameraWorker:
     ## This function is the main loop of the CameraWorker thread. It continuously processes frames from the camera stream until the worker is stopped. It calls the _process_one_frame() method to handle each frame, and if any exception occurs during processing, it logs the error and sleeps briefly before continuing.
     def _process_one_frame(self) -> None:
         # ── Step 1: Read frame ────────────────────────────────────────────────
-        _t_read = time.perf_counter()
         ret, frame = self.stream_handler.read()
-        self._decode_ms_accum += (time.perf_counter() - _t_read) * 1000
         if not ret or frame is None:
             time.sleep(0.005)
             return
@@ -167,20 +146,15 @@ class CameraWorker:
             self._metrics.record_frame(self.camera_idx)
 
         # ── Step 4: Submit frame to GPU worker, wait for detections ───────────
-        _t0 = time.perf_counter()
         self.gpu_worker.submit_frame(self.camera_idx, frame, frame_num)
-        detections, detect_timing = self.gpu_worker.get_detections(self.camera_idx)
-        detect_ms = (time.perf_counter() - _t0) * 1000
+        detections = self.gpu_worker.get_detections(self.camera_idx)
 
         # ── Step 5: CPU tracking + person ROI extraction ──────────────────────
         active_tracks, removed_tracks, person_rois = (
             self.camera_engine.update_tracking(detections, frame, frame_num)
         )
-        track_ms = self.camera_engine.stage_timings.get("track", 0.0)
-        reid_ms = self.camera_engine.stage_timings.get("reid", 0.0)
 
         # ── Step 6: Submit face ROIs to GPU worker, wait for embeddings ───────
-        _t0 = time.perf_counter()
         run_recognition = (
             self._detection_frame_num % self.recognition_interval == 0
         )
@@ -194,20 +168,15 @@ class CameraWorker:
             # Always send a submission to keep the GPU worker synchronised
             self.gpu_worker.submit_faces(self.camera_idx, [], [])
 
-        embeddings_map, face_timing = self.gpu_worker.get_embeddings(self.camera_idx)
-        face_ms = (time.perf_counter() - _t0) * 1000
+        embeddings_map = self.gpu_worker.get_embeddings(self.camera_idx)
 
         # ── Step 7: CPU identity resolution ───────────────────────────────────
         events = self.camera_engine.finalize_identities(
             active_tracks, removed_tracks, embeddings_map, frame, frame_num
         )
-        match_ms = self.camera_engine.stage_timings.get("match", 0.0)
-        identity_ms = self.camera_engine.stage_timings.get("identity", 0.0)
 
         # ── Step 7b: Emit real-time floor positions (~5Hz/track) ──────────────
-        _t0 = time.perf_counter()
         self.camera_engine.emit_positions(active_tracks)
-        publish_ms = (time.perf_counter() - _t0) * 1000
 
         # ── Step 8: Non-blocking event logging ────────────────────────────────
         for event in events:
@@ -216,57 +185,6 @@ class CameraWorker:
         # ── Step 9: Annotate + write video (only when save_video=True) ────────
         if self.annotator is not None and self.video_writer is not None:
             self._annotate_and_write(frame, active_tracks, embeddings_map, roi_offsets)
-
-        # ── Step 10: Record per-stage breakdown for the metrics dashboard ─────
-        #
-        # frame_ms is measured HERE, at the end, as the gap since the previous
-        # detection frame *finished* — not at the top as the gap since it
-        # *started*. It must be measured at the same point the stages below
-        # are read out: they're this frame's own detect/track/.../publish
-        # spans, and pairing them against a frame_ms captured at the top would
-        # actually pair them with the *previous* frame's elapsed span instead
-        # (this frame's work happens strictly after that top-of-frame mark).
-        # That mismatch doesn't average out — the max(0, ...) clamp on "other"
-        # below is one-sided, so it silently inflates the pct total instead of
-        # settling back near 100%. Caught via a live run whose shares summed
-        # to ~144%; see LSO-66 plan notes.
-        t_frame_end = time.perf_counter()
-        frame_ms: Optional[float] = None
-        if self._last_frame_end is not None:
-            gap_ms = (t_frame_end - self._last_frame_end) * 1000
-            if gap_ms <= self._MAX_SANE_FRAME_GAP_MS:
-                frame_ms = gap_ms
-        self._last_frame_end = t_frame_end
-
-        # Flush the accumulated read()/decode cost (this frame's own read plus
-        # every skipped frame's read since the last recorded detection frame)
-        # unconditionally, so it can't grow unbounded across a stretch where
-        # metrics are disabled or frame_ms comes back None (e.g. right after
-        # a stream reconnect).
-        decode_ms = self._decode_ms_accum
-        self._decode_ms_accum = 0.0
-
-        if self._metrics is not None and frame_ms is not None:
-            stages = {
-                "decode": decode_ms,
-                "detect": detect_ms,
-                "detect_wait": detect_timing.get("wait_ms", 0.0),
-                "detect_gpu": detect_timing.get("gpu_ms", 0.0),
-                "track": track_ms,
-                "reid": reid_ms,
-                "face": face_ms,
-                "face_wait": face_timing.get("wait_ms", 0.0),
-                "face_gpu": face_timing.get("gpu_ms", 0.0),
-                "match": match_ms,
-                "identity": identity_ms,
-                "publish": publish_ms,
-            }
-            primary_sum = (
-                decode_ms + detect_ms + track_ms + reid_ms + face_ms
-                + match_ms + identity_ms + publish_ms
-            )
-            stages["other"] = max(0.0, frame_ms - primary_sum)
-            self._metrics.record_frame_stages(self.camera_idx, frame_ms, stages)
 
     def _annotate_and_write(
         self,

@@ -8,10 +8,6 @@ Collects:
   - YOLO / ArcFace inference latency (rolling average)
   - Action recognition latency + outcome counts (Ollama VLM)
   - Frame drop counts   (queue-full events)
-  - Per-camera pipeline stage breakdown (decode/detect/track/reid/face/match/identity/publish)
-  - Per-camera background stream decode cost (StreamHandler's own capture thread, which for
-    RTSP/live sources runs unthrottled at the stream's native rate — separate from, and not
-    part of, the detection_interval-gated stage breakdown above)
 
 Designed to be low-overhead: data is only aggregated when snapshot() is called.
 """
@@ -19,10 +15,13 @@ Designed to be low-overhead: data is only aggregated when snapshot() is called.
 import threading
 import time
 from collections import Counter, deque
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 import psutil
 from loguru import logger
+
+# This process — used for our own RSS/threads/fds (see MetricsCollector.process).
+_PROC = psutil.Process()
 
 # ── GPU monitoring via pynvml (nvidia-ml-py) — optional ──────────────────────
 _pynvml = None
@@ -52,9 +51,10 @@ class MetricsCollector:
         # In camera worker — call each processed detection-frame
         metrics.record_frame(camera_idx)
 
-        # In GPU worker — call after each batch inference
-        metrics.record_yolo_ms(elapsed_ms)
-        metrics.record_arcface_ms(elapsed_ms)
+        # In GPU worker — call after each batch inference, with the real
+        # batch size (frame/crop count), not left at the batch_size=1 default
+        metrics.record_yolo_ms(elapsed_ms, batch_size=len(frames))
+        metrics.record_arcface_ms(elapsed_ms, batch_size=len(person_rois))
 
         # On queue-full frame drop
         metrics.record_drop(camera_idx)
@@ -79,27 +79,66 @@ class MetricsCollector:
         # Inference latency buffers (milliseconds)
         self._yolo_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
         self._arcface_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
+        # arcface_ms is the WHOLE _run_arcface_batch call (detect + embed +
+        # Python overhead); these two split it (LSO-117). See
+        # record_arcface_det_ms/record_arcface_embed_ms for why.
+        self._arcface_det_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
+        self._arcface_embed_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
 
         # Action recognition (Ollama VLM): latency plus per-outcome counters
         self._action_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
         self._action_counts: Counter = Counter()
         self._action_queue_depth: int = 0
 
-        # Per-camera pipeline stage breakdown: one whole-frame record per entry,
-        # so every stage's rolling window covers the exact same set of frames
-        # (independent per-stage deques would drift out of alignment whenever a
-        # stage is conditionally skipped, e.g. reid when ReID is disabled).
-        self._frame_stages: Dict[int, deque] = {}
+        # Live gauges: name -> zero-arg callable, polled at snapshot() time.
+        # Lets pipeline components (track managers, stream handlers, GPU worker)
+        # expose current sizes without this module importing them.
+        self._gauges: Dict[str, Callable[[], Any]] = {}
+        # Per-camera gauges: name -> fn(camera_idx) -> value
+        self._camera_gauges: Dict[str, Callable[[int], Any]] = {}
 
-        # Per-camera background stream-read decode cost + timestamps (LSO-66).
-        # Separate from _frame_stages/_frame_ts: StreamHandler's capture
-        # thread for RTSP/live sources runs unthrottled at the stream's own
-        # native rate, independent of detection_interval — a genuinely
-        # different, continuous cost, not one more slice of a detection
-        # frame's blocking span. Mixing it into the stage pct-sum would be
-        # wrong; it's reported alongside the stage breakdown instead.
-        self._stream_decode_ms: Dict[int, deque] = {}
-        self._stream_read_ts: Dict[int, deque] = {}
+    # ── Live gauges ───────────────────────────────────────────────────────────
+
+    def register_gauge(self, name: str, fn: Callable[[], Any]) -> None:
+        """Register a live value polled on every snapshot.
+
+        A failing gauge must never break metrics collection, so poll errors are
+        swallowed and reported as None rather than propagating.
+        """
+        with self._lock:
+            self._gauges[name] = fn
+
+    def register_camera_gauge(self, name: str, fn: Callable[[int], Any]) -> None:
+        """Register a per-camera gauge: fn(camera_idx) -> value.
+
+        Kept separate from register_gauge so per-camera values land inside each
+        camera's block rather than as a flat pile of `decode_ms_0`, `decode_ms_1`…
+        """
+        with self._lock:
+            self._camera_gauges[name] = fn
+
+    def _read_camera_gauge(self, camera_idx: int, name: str) -> Any:
+        with self._lock:
+            fn = self._camera_gauges.get(name)
+        if fn is None:
+            return 0.0 if name.endswith("_ms") else None
+        try:
+            return fn(camera_idx)
+        except Exception as e:
+            logger.debug(f"camera gauge '{name}'[{camera_idx}] read error: {e}")
+            return 0.0 if name.endswith("_ms") else None
+
+    def _read_gauges(self) -> Dict[str, Any]:
+        with self._lock:
+            gauges = dict(self._gauges)
+        out: Dict[str, Any] = {}
+        for name, fn in gauges.items():
+            try:
+                out[name] = fn()
+            except Exception as e:  # a broken gauge must not kill the snapshot
+                logger.debug(f"gauge '{name}' read error: {e}")
+                out[name] = None
+        return out
 
     # ── FPS / frame tracking ──────────────────────────────────────────────────
 
@@ -128,46 +167,6 @@ class MetricsCollector:
                 return 0.0
             return (len(window) - 1) / (window[-1] - window[0])
 
-    # ── Background stream decode (StreamHandler capture thread) ────────────────
-
-    def record_stream_read(self, camera_idx: int, ms: float) -> None:
-        """Record one background capture-thread read/decode duration for this camera.
-
-        Called from StreamHandler.update() — the thread that continuously
-        pulls and decodes frames for RTSP/live sources, independent of
-        whatever rate the pipeline actually consumes them at.
-        """
-        now = time.monotonic()
-        with self._lock:
-            dq = self._stream_decode_ms.get(camera_idx)
-            if dq is None:
-                dq = deque(maxlen=self.LATENCY_BUFFER)
-                self._stream_decode_ms[camera_idx] = dq
-            dq.append(ms)
-
-            ts = self._stream_read_ts.get(camera_idx)
-            if ts is None:
-                ts = deque(maxlen=self.FPS_DEQUE_MAX)
-                self._stream_read_ts[camera_idx] = ts
-            ts.append(now)
-
-    def get_stream_fps(self, camera_idx: int) -> float:
-        """Return the background capture thread's own native read rate.
-
-        Same rolling-window method as get_fps(), but over _stream_read_ts —
-        this is how fast frames actually arrive off the wire, not how fast
-        the (detection_interval-throttled) pipeline consumes them.
-        """
-        with self._lock:
-            ts = self._stream_read_ts.get(camera_idx)
-            if not ts or len(ts) < 2:
-                return 0.0
-            cutoff = time.monotonic() - self.FPS_WINDOW_SEC
-            window = [t for t in ts if t >= cutoff]
-            if len(window) < 2:
-                return 0.0
-            return (len(window) - 1) / (window[-1] - window[0])
-
     def get_drops(self, camera_idx: int) -> int:
         """Return cumulative dropped frame count for this camera."""
         with self._lock:
@@ -175,15 +174,56 @@ class MetricsCollector:
 
     # ── Inference latency ─────────────────────────────────────────────────────
 
-    def record_yolo_ms(self, ms: float) -> None:
-        """Record one YOLO batch inference duration in milliseconds."""
-        with self._lock:
-            self._yolo_ms.append(ms)
+    def record_yolo_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record one YOLO batch inference duration in milliseconds.
 
-    def record_arcface_ms(self, ms: float) -> None:
-        """Record one ArcFace batch inference duration in milliseconds."""
+        batch_size is how many camera frames were in that call (1-7 here,
+        whatever was ready when the loop collected the batch) - without it,
+        the raw ms is a per-call total that swings with batch size and
+        can't be compared to a per-frame number like decode time.
+        """
         with self._lock:
-            self._arcface_ms.append(ms)
+            self._yolo_ms.append((ms, max(1, batch_size)))
+
+    def record_arcface_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record one ArcFace batch inference duration in milliseconds.
+
+        batch_size is how many person crops (across all cameras) were
+        processed sequentially in that call - same per-call-total caveat
+        as record_yolo_ms.
+
+        This is the WHOLE _run_arcface_batch call - detection plus embedding
+        (both per-item, see gpu_worker) plus Python overhead. Kept unchanged
+        in meaning across LSO-117 so history stays comparable: a baseline
+        recorded before that work is still a fair comparison against this
+        field today. Use record_arcface_det_ms / record_arcface_embed_ms
+        below to see which phase a given change actually moved - detection
+        currently dominates, at roughly 85-90% of this total.
+        """
+        with self._lock:
+            self._arcface_ms.append((ms, max(1, batch_size)))
+
+    def record_arcface_det_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record ArcFace face-detection+alignment time (LSO-117).
+
+        Still N separate per-ROI detect_and_align() calls (SCRFD has no batch
+        path - LSO-118), so batch_size here is "how many ROIs were looped
+        over," not a real batch. ms is the summed wall time across that loop
+        for one _run_arcface_batch cycle.
+        """
+        with self._lock:
+            self._arcface_det_ms.append((ms, max(1, batch_size)))
+
+    def record_arcface_embed_ms(self, ms: float, batch_size: int = 1) -> None:
+        """Record ArcFace embedding time (LSO-117).
+
+        N separate embed_batch() calls, each of exactly one crop - a varying
+        batch size makes onnxruntime re-plan and costs ~30x (see the embed
+        loop in gpu_worker). batch_size is "how many faces were embedded this
+        cycle," not a real batch, so ms should scale roughly linearly with it.
+        """
+        with self._lock:
+            self._arcface_embed_ms.append((ms, max(1, batch_size)))
 
     def record_action_inference(
         self, ms: float, status: str, queue_depth: int = 0
@@ -200,25 +240,6 @@ class MetricsCollector:
             self._action_counts[status] += 1
             self._action_queue_depth = queue_depth
 
-    def record_frame_stages(
-        self, camera_idx: int, frame_ms: float, stages: Dict[str, float]
-    ) -> None:
-        """Record one detection-frame's wall-clock breakdown for this camera.
-
-        Args:
-            camera_idx: Camera index.
-            frame_ms: Wall-clock gap since the previous detection frame finished.
-            stages: {stage_name: elapsed_ms}, e.g. {"detect": 31.0, "track": 12.0, ...}.
-                    Every stage should be present (0.0 if it didn't run this frame)
-                    so the rolling window stays aligned across stages.
-        """
-        with self._lock:
-            dq = self._frame_stages.get(camera_idx)
-            if dq is None:
-                dq = deque(maxlen=self.LATENCY_BUFFER)
-                self._frame_stages[camera_idx] = dq
-            dq.append((frame_ms, dict(stages)))
-
     # ── System resource stats (static helpers) ────────────────────────────────
 
     @staticmethod
@@ -228,13 +249,41 @@ class MetricsCollector:
 
     @staticmethod
     def memory() -> Dict:
-        """System RAM stats."""
+        """System RAM stats (whole host, not this process)."""
         m = psutil.virtual_memory()
         return {
             "used_gb": round(m.used / 1e9, 2),
             "total_gb": round(m.total / 1e9, 2),
             "percent": round(m.percent, 1),
         }
+
+    @staticmethod
+    def process() -> Dict:
+        """This process's own footprint.
+
+        `memory()` above is host-wide, so it cannot show whether *we* are the
+        thing growing — which is exactly the question during a leak. rss_gb is
+        the number to watch/alert on; threads and fds catch leaks of those too.
+        """
+        # rss_gb is the field that actually matters here (it's what a leak
+        # investigation watches); num_fds() in particular can fail on
+        # non-Linux/sandboxed environments. Read it separately so a failure
+        # there doesn't take rss_gb down with it.
+        out: Dict[str, Any] = {}
+        try:
+            with _PROC.oneshot():
+                mem = _PROC.memory_info()
+                out["rss_gb"] = round(mem.rss / 1e9, 2)
+                out["vms_gb"] = round(mem.vms / 1e9, 2)
+                out["threads"] = _PROC.num_threads()
+                out["uptime_sec"] = round(time.time() - _PROC.create_time())
+        except Exception as e:
+            logger.debug(f"process metrics read error: {e}")
+        try:
+            out["open_fds"] = _PROC.num_fds()
+        except Exception as e:
+            logger.debug(f"process open_fds read error: {e}")
+        return out
 
     @staticmethod
     def gpu() -> Optional[Dict]:
@@ -255,59 +304,6 @@ class MetricsCollector:
             logger.debug(f"GPU metrics read error: {e}")
             return None
 
-    # ── Per-camera pipeline stage breakdown ───────────────────────────────────
-
-    # Stages that partition a detection frame's wall time; their `ms` values
-    # are expected to sum to ~frame_ms (the remainder lands in "other").
-    _PRIMARY_STAGES: Tuple[str, ...] = (
-        "decode", "detect", "track", "reid", "face", "match", "identity", "publish", "other",
-    )
-    # (primary stage, wait sub-key, gpu sub-key) — auxiliary breakdown of a
-    # primary stage's blocking span into "waiting for the shared GPU worker"
-    # vs "this camera's amortized share of the batch inference itself".
-    _AUX_STAGE_KEYS: Tuple[Tuple[str, str, str], ...] = (
-        ("detect", "detect_wait", "detect_gpu"),
-        ("face", "face_wait", "face_gpu"),
-    )
-
-    @staticmethod
-    def _percentile(values: List[float], pct: float) -> float:
-        if not values:
-            return 0.0
-        ordered = sorted(values)
-        k = max(0, min(len(ordered) - 1, int(round(pct / 100 * (len(ordered) - 1)))))
-        return ordered[k]
-
-    def _stage_snapshot(
-        self, records: List[Tuple[float, Dict[str, float]]]
-    ) -> Tuple[float, Dict[str, Dict]]:
-        """Aggregate a camera's rolling window of per-frame stage records.
-
-        Returns (avg_frame_ms, {stage_name: {ms, pct, p95_ms, ...}}).
-        """
-        if not records:
-            return 0.0, {}
-
-        avg_frame_ms = sum(r[0] for r in records) / len(records)
-
-        stages: Dict[str, Dict] = {}
-        for stage in self._PRIMARY_STAGES:
-            values = [r[1].get(stage, 0.0) for r in records]
-            mean_ms = sum(values) / len(values)
-            stages[stage] = {
-                "ms": round(mean_ms, 1),
-                "pct": round((mean_ms / avg_frame_ms * 100) if avg_frame_ms else 0.0, 1),
-                "p95_ms": round(self._percentile(values, 95), 1),
-            }
-
-        for primary, wait_key, gpu_key in self._AUX_STAGE_KEYS:
-            wait_values = [r[1].get(wait_key, 0.0) for r in records]
-            gpu_values = [r[1].get(gpu_key, 0.0) for r in records]
-            stages[primary]["wait_ms"] = round(sum(wait_values) / len(wait_values), 1)
-            stages[primary]["gpu_ms"] = round(sum(gpu_values) / len(gpu_values), 1)
-
-        return avg_frame_ms, stages
-
     # ── Full snapshot ─────────────────────────────────────────────────────────
 
     def snapshot(self, camera_indices: Optional[List[int]] = None) -> Dict:
@@ -320,54 +316,73 @@ class MetricsCollector:
         """
         indices = camera_indices if camera_indices is not None else list(self._frame_ts.keys())
 
+        def _batch_stats(buf: deque) -> Dict[str, float]:
+            """Per-call average ms/batch-size, plus the honest per-item cost
+            (total ms / total items) - the per-call average alone hides
+            whether a slow reading is "GPU is slow" or "batch was big"."""
+            if not buf:
+                return {"avg_call_ms": 0.0, "avg_batch_size": 0.0, "avg_item_ms": 0.0}
+            total_ms = sum(ms for ms, _ in buf)
+            total_items = sum(n for _, n in buf)
+            return {
+                "avg_call_ms": total_ms / len(buf),
+                "avg_batch_size": total_items / len(buf),
+                "avg_item_ms": (total_ms / total_items) if total_items else 0.0,
+            }
+
         with self._lock:
-            yolo_avg = sum(self._yolo_ms) / len(self._yolo_ms) if self._yolo_ms else 0.0
-            arcface_avg = sum(self._arcface_ms) / len(self._arcface_ms) if self._arcface_ms else 0.0
+            yolo_stats = _batch_stats(self._yolo_ms)
+            arcface_stats = _batch_stats(self._arcface_ms)
+            arcface_det_stats = _batch_stats(self._arcface_det_ms)
+            arcface_embed_stats = _batch_stats(self._arcface_embed_ms)
             action_avg = sum(self._action_ms) / len(self._action_ms) if self._action_ms else 0.0
             action_counts = dict(self._action_counts)
             action_queue_depth = self._action_queue_depth
-            # Copy each camera's deque while holding the lock (cheap: a list()
-            # of tuples), then aggregate outside it — snapshot() is polled by
-            # the dashboard, the store writer and periodic reporting, so the
-            # lock every camera thread hits per-frame shouldn't be held while
-            # summing up to LATENCY_BUFFER records x N cameras.
-            stage_records = {
-                idx: list(self._frame_stages.get(idx, ())) for idx in indices
-            }
-            stream_decode_records = {
-                idx: list(self._stream_decode_ms.get(idx, ())) for idx in indices
-            }
-            # Pooled across all requested cameras — same "global average"
-            # semantics as yolo_avg/arcface_avg above, not a mean-of-means.
-            all_stream_decode = [v for vals in stream_decode_records.values() for v in vals]
-            stream_decode_avg = sum(all_stream_decode) / len(all_stream_decode) if all_stream_decode else 0.0
-
-        cameras = {}
-        for idx in indices:
-            frame_ms, stages = self._stage_snapshot(stage_records.get(idx, []))
-            decode_vals = stream_decode_records.get(idx, [])
-            cameras[str(idx)] = {
-                "fps": round(self.get_fps(idx), 2),
-                "frame_drops": self.get_drops(idx),
-                "frame_ms": round(frame_ms, 1),
-                "stages": stages,
-                "stream": {
-                    "native_fps": round(self.get_stream_fps(idx), 2),
-                    "decode_ms": round(sum(decode_vals) / len(decode_vals), 2) if decode_vals else 0.0,
-                    "decode_p95_ms": round(self._percentile(decode_vals, 95), 2),
-                },
-            }
 
         return {
             "timestamp": time.time(),
             "cpu_percent": self.cpu_percent(),
             "memory": self.memory(),
+            "process": self.process(),
+            "pipeline": self._read_gauges(),
             "gpu": self.gpu(),
-            "cameras": cameras,
+            "cameras": {
+                str(idx): {
+                    "fps": round(self.get_fps(idx), 2),
+                    "frame_drops": self.get_drops(idx),
+                    # read_ms = blocked waiting for the next frame (network/
+                    # demux stall). decode_ms = actual CPU cost of decoding a
+                    # frame that already arrived - the dominant CPU consumer
+                    # at high camera counts. Keep these separate: a high
+                    # read_ms means the CAMERA is slow, a high decode_ms means
+                    # WE are slow.
+                    "read_ms": round(self._read_camera_gauge(idx, "read_ms"), 1),
+                    "decode_ms": round(self._read_camera_gauge(idx, "decode_ms"), 1),
+                    "stream_state": self._read_camera_gauge(idx, "stream_state"),
+                }
+                for idx in indices
+            },
             "inference": {
-                "yolo_avg_ms": round(yolo_avg, 1),
-                "arcface_avg_ms": round(arcface_avg, 1),
-                "stream_decode_avg_ms": round(stream_decode_avg, 1),
+                # Kept for existing consumers (metrics_server dashboard,
+                # metrics_store) - per-call total, swings with batch size.
+                "yolo_avg_ms": round(yolo_stats["avg_call_ms"], 1),
+                "arcface_avg_ms": round(arcface_stats["avg_call_ms"], 1),
+                # Normalized per-item cost - the actually comparable number.
+                "yolo_avg_batch_size": round(yolo_stats["avg_batch_size"], 1),
+                "yolo_ms_per_frame": round(yolo_stats["avg_item_ms"], 1),
+                "arcface_avg_batch_size": round(arcface_stats["avg_batch_size"], 1),
+                "arcface_ms_per_face": round(arcface_stats["avg_item_ms"], 1),
+                # LSO-117 split of the arcface_* fields above: detection is
+                # still per-ROI/unbatched (LSO-118), embedding is batched.
+                # An offline benchmark (lum-model-vision#16) found detection
+                # at ~93% of total ArcFace time at N=362 - these two fields
+                # are what would confirm or update that under real load.
+                "arcface_det_avg_ms": round(arcface_det_stats["avg_call_ms"], 1),
+                "arcface_det_avg_rois": round(arcface_det_stats["avg_batch_size"], 1),
+                "arcface_det_ms_per_roi": round(arcface_det_stats["avg_item_ms"], 1),
+                "arcface_embed_avg_ms": round(arcface_embed_stats["avg_call_ms"], 1),
+                "arcface_embed_avg_batch_size": round(arcface_embed_stats["avg_batch_size"], 1),
+                "arcface_embed_ms_per_face": round(arcface_embed_stats["avg_item_ms"], 1),
             },
             "action": {
                 "avg_ms": round(action_avg, 1),
@@ -389,15 +404,38 @@ class MetricsCollector:
         )
         fps_parts = [
             f"cam{idx}={snap['cameras'][str(idx)]['fps']:.1f}fps"
-            f"(drops={snap['cameras'][str(idx)]['frame_drops']})"
+            f"(drops={snap['cameras'][str(idx)]['frame_drops']},"
+            f"read={snap['cameras'][str(idx)]['read_ms']:.0f}ms,"
+            f"dec={snap['cameras'][str(idx)]['decode_ms']:.0f}ms)"
             for idx in (camera_indices or [])
         ]
+        proc = snap.get("process") or {}
+        proc_str = (
+            f"RSS={proc['rss_gb']:.2f}GB thr={proc['threads']} fds={proc['open_fds']} "
+            if proc else ""
+        )
+        pipe = snap.get("pipeline") or {}
+        # Only render gauges that reported a value, so a broken one is visibly
+        # absent rather than silently logged as 0.
+        pipe_str = (
+            "| " + " ".join(f"{k}={v}" for k, v in sorted(pipe.items()) if v is not None) + " "
+            if pipe else ""
+        )
         logger.info(
             f"[Metrics] CPU={snap['cpu_percent']:.0f}% "
             f"RAM={snap['memory']['used_gb']:.1f}/{snap['memory']['total_gb']:.1f}GB({snap['memory']['percent']:.0f}%) "
-            f"{gpu_str} | "
+            f"{proc_str}{gpu_str} {pipe_str}| "
             + (", ".join(fps_parts) if fps_parts else "no cameras yet")
-            + f" | YOLO={snap['inference']['yolo_avg_ms']:.0f}ms ArcFace={snap['inference']['arcface_avg_ms']:.0f}ms"
+            + f" | YOLO={snap['inference']['yolo_avg_ms']:.0f}ms/batch"
+            f"(avg {snap['inference']['yolo_avg_batch_size']:.1f} frames,"
+            f" {snap['inference']['yolo_ms_per_frame']:.0f}ms/frame)"
+            f" ArcFace={snap['inference']['arcface_avg_ms']:.0f}ms/batch"
+            f"(avg {snap['inference']['arcface_avg_batch_size']:.1f} faces,"
+            f" {snap['inference']['arcface_ms_per_face']:.0f}ms/face)"
+            f" [det={snap['inference']['arcface_det_avg_ms']:.0f}ms"
+            f"/{snap['inference']['arcface_det_avg_rois']:.1f}rois"
+            f" embed={snap['inference']['arcface_embed_avg_ms']:.0f}ms"
+            f"/{snap['inference']['arcface_embed_avg_batch_size']:.1f}faces]"
         )
 
     def check_alerts(
