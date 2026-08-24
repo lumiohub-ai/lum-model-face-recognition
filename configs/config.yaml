@@ -26,49 +26,14 @@ action_recognition:
   check_interval_seconds: 60  # Check each person every N seconds
   max_queue_size: 50  # Maximum queued inference requests
   async_workers: 1  # Number of background worker threads for inference
-  # Ollama unloads an idle model after ~5min; reloading gemma3:4b costs ~28s on
-  # its own, so 30s left no margin for the actual vision request. A cancelled
-  # load also leaves the model unloaded, so a short timeout compounds into
-  # repeated cold starts.
+
   inference_timeout: 60  # Timeout for Ollama API calls in seconds
-  # Skip crops too small to read. A distant figure carries no readable posture,
-  # so the VLM answers from the background instead — a wrong activity that still
-  # costs a full inference and a proof upload. Thresholds sit just under the
-  # smallest crop a human could confidently label in notebooks/eval/action
-  # (207px tall); the crops left "unsure" there were a median 262px vs 475px for
-  # the labelable ones. Set any to 0 to disable that check.
+
   min_crop_height: 200
   min_crop_width: 80
   min_crop_area: 30000
-  # Supported actions with backend mapping and descriptions for VLM prompt.
-  #
-  # `not_focusing` is merged into `idle` (LSO-68, round 1). Measured over 31
-  # labelled crops, the original 6-class set scored 29.0% accuracy:
-  # `not_focusing` drew 15 of 31 predictions despite never being the right
-  # answer, because "distracted, wandering attention" describes a state over
-  # time a single still frame cannot show, so it became the model's catch-all
-  # for uncertainty.
-  #
-  # `sleeping` was merged in round 1 too, then un-merged in round 2 once real
-  # sleeping crops existed to test against (round 1's 31 crops had zero). Over
-  # 12 real sleeping crops, offering it as its own class scores 100% recall -
-  # it turns out to be reliably recognizable, unlike not_focusing. Keeping it
-  # merged was collateral from fixing not_focusing, not something the data
-  # supported on its own. This trades -4.1pp raw accuracy on the full 72-crop
-  # eval set (72.2% -> 68.1%) for +3.9pp balanced accuracy (56.8% -> 60.7%)
-  # and real sleeping detection - see notebooks/eval/action/summary.json.
-  #
-  # Consequence: `activity_type` will never again be 'not_focusing'. It
-  # remains legal in the so.stack DB CHECK constraint, so nothing breaks, but
-  # its frontend filter button will return no new rows.
-  #
-  # Known limitation, not fixable by prompt wording: `talking with someone`
-  # scores 0% recall regardless of prompt variant, because the tight
-  # single-person crop this recognizer receives (camera_engine.py's
-  # proof_image) excludes the other person in the conversation by
-  # construction. Confirmed by re-testing with both people still in frame -
-  # recall stayed near 0% there too unless descriptions were stripped
-  # entirely, so this needs a crop-geometry change, not a prompt change.
+ # The model is a 4B parameter LLM, so it is not cheap to run
+
   actions:
     sleeping:
       backend_type: sleeping
