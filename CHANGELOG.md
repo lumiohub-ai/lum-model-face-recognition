@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.0 (2026-08-24)
+
+## What's Changed
+* Docs/lumiohub docs submodule bump by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/71
+* Key cameras by DB id instead of list position (LSO-130 phase 1) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/83
+* Scope AI camera loading to one branch (LSO-133) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/84
+* Promote dev → main: LSO-130 phase 1 + LSO-133 branch scoping by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/85
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.3.1...v0.4.0
+
 ## v0.3.1 (2026-08-22)
 
 ## What's Changed
