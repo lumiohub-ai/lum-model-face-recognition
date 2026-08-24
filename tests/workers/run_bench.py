@@ -389,17 +389,26 @@ def main():
         print(f"shared block {SHM_NAME}: {shm_shape}, "
               f"{shm.size / 2 ** 20:.0f} MiB (decoded once, reused by every task)")
 
-    for c in cells:
-        r = run_cell(c["cell"], c["pool"], c["conc"], c["share"], c["batch"], frames,
-                     c.get("frames", args.frames), c.get("prefetch", DEFAULT_PREFETCH),
-                     mode=c.get("mode", "path"), shm_shape=shm_shape)
-        by_cell[r["cell"]] = r
-        with open(path, "w") as f:
-            json.dump({"meta": meta, "results": [by_cell[k] for k in sorted(by_cell)]},
-                      f, indent=2)
-        print("   ", json.dumps({k: r[k] for k in
-                                 ("tasks_per_s", "frames_per_s", "lat_ms_p50",
-                                  "vram_mib_total", "n_gpu_pids")}))
+    # try/finally, not a trailing close(): run_cell's own finally raises
+    # SystemExit when VRAM doesn't return to baseline — exactly the failure this
+    # harness exists to catch — which would otherwise skip the unlink below and
+    # leak a ~500 MiB block until someone cleans it up by hand.
+    try:
+        for c in cells:
+            r = run_cell(c["cell"], c["pool"], c["conc"], c["share"], c["batch"], frames,
+                         c.get("frames", args.frames), c.get("prefetch", DEFAULT_PREFETCH),
+                         mode=c.get("mode", "path"), shm_shape=shm_shape)
+            by_cell[r["cell"]] = r
+            with open(path, "w") as f:
+                json.dump({"meta": meta, "results": [by_cell[k] for k in sorted(by_cell)]},
+                          f, indent=2)
+            print("   ", json.dumps({k: r[k] for k in
+                                     ("tasks_per_s", "frames_per_s", "lat_ms_p50",
+                                      "vram_mib_total", "n_gpu_pids")}))
+    finally:
+        if shm is not None:
+            shm.close()
+            shm.unlink()
 
     results = [by_cell[k] for k in sorted(by_cell)]
 

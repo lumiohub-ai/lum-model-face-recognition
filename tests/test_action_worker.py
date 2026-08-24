@@ -394,5 +394,75 @@ class StatsTests(unittest.TestCase):
         self.assertEqual(stats["pending_callbacks"], 0)
 
 
+# Values shipped in configs/config.yaml. Pinned here so a config edit that
+# forgets these tests shows up as a failure rather than silently changing
+# which crops reach the VLM.
+SHIPPED_GATE = dict(min_crop_height=200, min_crop_width=80, min_crop_area=30000)
+
+
+def crop(h, w):
+    return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+class CropSizeGateTests(unittest.TestCase):
+    """The size gate in front of action recognition.
+
+    A crop too small to read posture makes the VLM answer from the background —
+    a wrong activity that still costs a full 4B-parameter inference and a GCS
+    proof upload. Thresholds came from a labelling study, so they are easy to
+    get subtly wrong on a future edit.
+    """
+
+    def test_disabled_by_default(self):
+        worker = build()
+        self.assertFalse(worker.should_skip_small(crop(1, 1)))
+        self.assertEqual(worker.total_too_small, 0)
+
+    def test_none_image_is_always_skipped(self):
+        # Guards the enabled and disabled cases: there is nothing to infer from.
+        self.assertTrue(build().should_skip_small(None))
+        self.assertTrue(build(**SHIPPED_GATE).should_skip_small(None))
+
+    def test_each_dimension_gates_independently(self):
+        worker = build(min_crop_height=200, min_crop_width=80, min_crop_area=0)
+        self.assertTrue(worker.should_skip_small(crop(199, 100)))   # height short
+        self.assertTrue(worker.should_skip_small(crop(300, 79)))    # width short
+        self.assertFalse(worker.should_skip_small(crop(200, 80)))   # both exactly at
+
+    def test_thresholds_are_inclusive_at_the_boundary(self):
+        worker = build(min_crop_height=200, min_crop_width=80, min_crop_area=16000)
+        self.assertFalse(worker.should_skip_small(crop(200, 80)))   # 200*80 == 16000
+        self.assertTrue(worker.should_skip_small(crop(199, 80)))
+
+    def test_area_gate_rejects_a_crop_that_passes_both_dimensions(self):
+        # The real edge case in the shipped defaults: 200x80 clears
+        # min_crop_height and min_crop_width, but 16000 < min_crop_area 30000.
+        worker = build(**SHIPPED_GATE)
+        self.assertTrue(worker.should_skip_small(crop(200, 80)))
+        self.assertFalse(worker.should_skip_small(crop(300, 100)))  # 30000 area
+
+    def test_counter_increments_once_per_skipped_crop(self):
+        worker = build(**SHIPPED_GATE)
+        for _ in range(3):
+            worker.should_skip_small(crop(10, 10))
+        worker.should_skip_small(crop(400, 200))  # passes, must not count
+        self.assertEqual(worker.total_too_small, 3)
+        self.assertEqual(worker.get_stats()["total_too_small"], 3)
+
+    def test_recognize_async_rejects_a_small_crop_without_queueing(self):
+        # camera_engine gates earlier, so on the normal path this safety net
+        # never fires — a direct caller must still not reach the queue.
+        worker = build(**SHIPPED_GATE)
+        self.assertFalse(worker.recognize_async(crop(10, 10), request_id="r1"))
+        self.assertEqual(worker.inference_queue.qsize(), 0)
+        self.assertEqual(worker.total_too_small, 1)
+
+    def test_recognize_async_accepts_a_large_enough_crop(self):
+        worker = build(**SHIPPED_GATE)
+        self.assertTrue(worker.recognize_async(crop(400, 200), request_id="r1"))
+        self.assertEqual(worker.inference_queue.qsize(), 1)
+        self.assertEqual(worker.total_too_small, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
