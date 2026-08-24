@@ -95,12 +95,12 @@ class MetricsStore:
         metrics,
         db_path: str = "metrics.db",
         interval_sec: float = 30.0,
-        camera_indices: Optional[List[int]] = None,
+        camera_ids: Optional[List[int]] = None,
     ):
         self._metrics = metrics
         self._db_path = db_path
         self._interval = interval_sec
-        self._camera_indices = camera_indices or []
+        self._camera_ids = camera_ids or []
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -122,8 +122,8 @@ class MetricsStore:
         self._running = False
         logger.info("MetricsStore stopped")
 
-    def update_camera_indices(self, indices: List[int]) -> None:
-        self._camera_indices = indices
+    def update_camera_ids(self, camera_ids: List[int]) -> None:
+        self._camera_ids = camera_ids
 
     # ── Writer loop ───────────────────────────────────────────────────────────
 
@@ -136,7 +136,7 @@ class MetricsStore:
             time.sleep(self._interval)
 
     def _write_snapshot(self) -> None:
-        snap = self._metrics.snapshot(self._camera_indices)
+        snap = self._metrics.snapshot(self._camera_ids)
         gpu = snap.get("gpu") or {}
         inf = snap.get("inference") or {}
         mem = snap.get("memory") or {}

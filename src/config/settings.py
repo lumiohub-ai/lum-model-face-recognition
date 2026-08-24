@@ -60,6 +60,14 @@ class Settings:
     # rtsp://host.docker.internal:8554; cross-host use the edge's Tailnet IP.
     edge_rtsp_base = os.getenv("SO_EDGE_RTSP_BASE", "").strip().rstrip("/")
 
+    # Branch scoping (LSO-133): restrict this AI to one branch's cameras.
+    # The AI resolves EVERY camera against its LOCAL edge (see edge_rtsp_base),
+    # so an unscoped AI in a multi-site org loads other branches' cameras and
+    # then tries to read them from an edge that has never heard of them.
+    # Mirrors the edge sidecar's EDGE_BRANCH_CODE. Empty = every camera, which
+    # is correct only for a single-site org.
+    edge_branch_code = os.getenv("SO_EDGE_BRANCH_CODE", "").strip().lower()
+
     # Ollama (action recognition)
     ollama_api_url = os.getenv("SO_OLLAMA_API_URL", "http://localhost:11434")
     ollama_model = os.getenv("SO_OLLAMA_MODEL", "gemma3:4b")

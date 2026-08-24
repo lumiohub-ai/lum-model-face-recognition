@@ -460,7 +460,7 @@ async function loadHistory() {
 class _Handler(BaseHTTPRequestHandler):
     _metrics = None
     _store = None
-    _camera_indices: List[int] = []
+    _camera_ids: List[int] = []
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -471,7 +471,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         elif path == "/api/metrics":
             try:
-                snap = self.__class__._metrics.snapshot(self.__class__._camera_indices)
+                snap = self.__class__._metrics.snapshot(self.__class__._camera_ids)
                 self._ok("application/json", json.dumps(snap, default=float).encode())
             except Exception as e:
                 self._err(500, str(e))
@@ -526,7 +526,7 @@ class MetricsDashboardServer:
 
     Usage::
 
-        server = MetricsDashboardServer(metrics, store, camera_indices=[0,1], port=8765)
+        server = MetricsDashboardServer(metrics, store, camera_ids=[0,1], port=8765)
         server.start()
         ...
         server.stop()
@@ -536,25 +536,25 @@ class MetricsDashboardServer:
         self,
         metrics,
         store=None,
-        camera_indices: Optional[List[int]] = None,
+        camera_ids: Optional[List[int]] = None,
         port: int = 8765,
     ):
         self._metrics = metrics
         self._store = store
-        self._camera_indices = camera_indices or []
+        self._camera_ids = camera_ids or []
         self._port = port
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
-    def update_camera_indices(self, indices: List[int]) -> None:
-        _Handler._camera_indices = indices
+    def update_camera_ids(self, camera_ids: List[int]) -> None:
+        _Handler._camera_ids = camera_ids
         if self._store:
-            self._store.update_camera_indices(indices)
+            self._store.update_camera_ids(camera_ids)
 
     def start(self) -> None:
         _Handler._metrics = self._metrics
         _Handler._store = self._store
-        _Handler._camera_indices = self._camera_indices
+        _Handler._camera_ids = self._camera_ids
 
         if self._store:
             self._store.start()

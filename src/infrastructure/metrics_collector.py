@@ -49,7 +49,7 @@ class MetricsCollector:
         metrics = MetricsCollector()
 
         # In camera worker — call each processed detection-frame
-        metrics.record_frame(camera_idx)
+        metrics.record_frame(camera_id)
 
         # In GPU worker — call after each batch inference, with the real
         # batch size (frame/crop count), not left at the batch_size=1 default
@@ -57,10 +57,10 @@ class MetricsCollector:
         metrics.record_arcface_ms(elapsed_ms, batch_size=len(person_rois))
 
         # On queue-full frame drop
-        metrics.record_drop(camera_idx)
+        metrics.record_drop(camera_id)
 
         # To get a full snapshot (for logging / Redis publishing)
-        snap = metrics.snapshot(camera_indices=[0, 1, 2])
+        snap = metrics.snapshot(camera_ids=[0, 1, 2])
     """
 
     FPS_WINDOW_SEC: float = 10.0   # rolling window for FPS calculation
@@ -94,7 +94,7 @@ class MetricsCollector:
         # Lets pipeline components (track managers, stream handlers, GPU worker)
         # expose current sizes without this module importing them.
         self._gauges: Dict[str, Callable[[], Any]] = {}
-        # Per-camera gauges: name -> fn(camera_idx) -> value
+        # Per-camera gauges: name -> fn(camera_id) -> value
         self._camera_gauges: Dict[str, Callable[[int], Any]] = {}
 
     # ── Live gauges ───────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ class MetricsCollector:
             self._gauges[name] = fn
 
     def register_camera_gauge(self, name: str, fn: Callable[[int], Any]) -> None:
-        """Register a per-camera gauge: fn(camera_idx) -> value.
+        """Register a per-camera gauge: fn(camera_id) -> value.
 
         Kept separate from register_gauge so per-camera values land inside each
         camera's block rather than as a flat pile of `decode_ms_0`, `decode_ms_1`…
@@ -117,15 +117,15 @@ class MetricsCollector:
         with self._lock:
             self._camera_gauges[name] = fn
 
-    def _read_camera_gauge(self, camera_idx: int, name: str) -> Any:
+    def _read_camera_gauge(self, camera_id: int, name: str) -> Any:
         with self._lock:
             fn = self._camera_gauges.get(name)
         if fn is None:
             return 0.0 if name.endswith("_ms") else None
         try:
-            return fn(camera_idx)
+            return fn(camera_id)
         except Exception as e:
-            logger.debug(f"camera gauge '{name}'[{camera_idx}] read error: {e}")
+            logger.debug(f"camera gauge '{name}'[{camera_id}] read error: {e}")
             return 0.0 if name.endswith("_ms") else None
 
     def _read_gauges(self) -> Dict[str, Any]:
@@ -142,23 +142,23 @@ class MetricsCollector:
 
     # ── FPS / frame tracking ──────────────────────────────────────────────────
 
-    def record_frame(self, camera_idx: int) -> None:
+    def record_frame(self, camera_id: int) -> None:
         """Record a processed detection-frame timestamp for this camera."""
         now = time.monotonic()
         with self._lock:
-            if camera_idx not in self._frame_ts:
-                self._frame_ts[camera_idx] = deque(maxlen=self.FPS_DEQUE_MAX)
-            self._frame_ts[camera_idx].append(now)
+            if camera_id not in self._frame_ts:
+                self._frame_ts[camera_id] = deque(maxlen=self.FPS_DEQUE_MAX)
+            self._frame_ts[camera_id].append(now)
 
-    def record_drop(self, camera_idx: int) -> None:
+    def record_drop(self, camera_id: int) -> None:
         """Record a dropped frame (GPU queue was full)."""
         with self._lock:
-            self._frame_drops[camera_idx] = self._frame_drops.get(camera_idx, 0) + 1
+            self._frame_drops[camera_id] = self._frame_drops.get(camera_id, 0) + 1
 
-    def get_fps(self, camera_idx: int) -> float:
+    def get_fps(self, camera_id: int) -> float:
         """Return per-camera FPS over the rolling FPS_WINDOW_SEC window."""
         with self._lock:
-            ts = self._frame_ts.get(camera_idx)
+            ts = self._frame_ts.get(camera_id)
             if not ts or len(ts) < 2:
                 return 0.0
             cutoff = time.monotonic() - self.FPS_WINDOW_SEC
@@ -167,10 +167,10 @@ class MetricsCollector:
                 return 0.0
             return (len(window) - 1) / (window[-1] - window[0])
 
-    def get_drops(self, camera_idx: int) -> int:
+    def get_drops(self, camera_id: int) -> int:
         """Return cumulative dropped frame count for this camera."""
         with self._lock:
-            return self._frame_drops.get(camera_idx, 0)
+            return self._frame_drops.get(camera_id, 0)
 
     # ── Inference latency ─────────────────────────────────────────────────────
 
@@ -306,15 +306,15 @@ class MetricsCollector:
 
     # ── Full snapshot ─────────────────────────────────────────────────────────
 
-    def snapshot(self, camera_indices: Optional[List[int]] = None) -> Dict:
+    def snapshot(self, camera_ids: Optional[List[int]] = None) -> Dict:
         """Return a complete metrics snapshot dict.
 
         Args:
-            camera_indices: list of camera indices to include; defaults to all seen.
+            camera_ids: list of DB camera ids to include; defaults to all seen.
 
         Returns a dict with keys: timestamp, cpu_percent, memory, gpu, cameras, inference.
         """
-        indices = camera_indices if camera_indices is not None else list(self._frame_ts.keys())
+        indices = camera_ids if camera_ids is not None else list(self._frame_ts.keys())
 
         def _batch_stats(buf: deque) -> Dict[str, float]:
             """Per-call average ms/batch-size, plus the honest per-item cost
@@ -394,9 +394,9 @@ class MetricsCollector:
             },
         }
 
-    def log_summary(self, camera_indices: Optional[List[int]] = None) -> None:
+    def log_summary(self, camera_ids: Optional[List[int]] = None) -> None:
         """Log a compact metrics summary line to loguru (INFO level)."""
-        snap = self.snapshot(camera_indices)
+        snap = self.snapshot(camera_ids)
         gpu = snap["gpu"]
         gpu_str = (
             f"GPU={gpu['util_percent']}% VRAM={gpu['mem_used_mb']:.0f}/{gpu['mem_total_mb']:.0f}MB({gpu['mem_percent']:.0f}%)"
@@ -407,7 +407,7 @@ class MetricsCollector:
             f"(drops={snap['cameras'][str(idx)]['frame_drops']},"
             f"read={snap['cameras'][str(idx)]['read_ms']:.0f}ms,"
             f"dec={snap['cameras'][str(idx)]['decode_ms']:.0f}ms)"
-            for idx in (camera_indices or [])
+            for idx in (camera_ids or [])
         ]
         proc = snap.get("process") or {}
         proc_str = (
@@ -440,7 +440,7 @@ class MetricsCollector:
 
     def check_alerts(
         self,
-        camera_indices: Optional[List[int]] = None,
+        camera_ids: Optional[List[int]] = None,
         fps_threshold: float = 1.0,
         gpu_mem_threshold: float = 90.0,
         ram_threshold: float = 90.0,
@@ -448,21 +448,21 @@ class MetricsCollector:
         """Check for critical conditions and return a list of alert dicts.
 
         Args:
-            camera_indices:   cameras to check
+            camera_ids: DB camera ids to check
             fps_threshold:    alert if FPS drops below this (0 = camera just started)
             gpu_mem_threshold: alert if GPU VRAM % exceeds this
             ram_threshold:    alert if system RAM % exceeds this
         """
         alerts = []
-        snap = self.snapshot(camera_indices)
+        snap = self.snapshot(camera_ids)
 
-        for idx in (camera_indices or []):
+        for idx in (camera_ids or []):
             fps = snap["cameras"].get(str(idx), {}).get("fps", 0.0)
             # Only alert once we've seen some frames (fps > 0 means active)
             if 0 < fps < fps_threshold:
                 alerts.append({
                     "type": "LOW_FPS",
-                    "camera_idx": idx,
+                    "camera_id": idx,
                     "fps": fps,
                     "threshold": fps_threshold,
                     "message": f"Camera {idx} FPS={fps:.2f} is below threshold ({fps_threshold})",
