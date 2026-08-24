@@ -28,7 +28,7 @@ class CameraWorker:
 
     def __init__(
         self,
-        camera_idx: int,
+        camera_id: int,
         camera_config: Dict[str, Any],
         camera_engine,
         gpu_worker,
@@ -42,7 +42,10 @@ class CameraWorker:
     ):
         """
         Args:
-            camera_idx:           0-based index matching the GPU worker queue slot
+            camera_id:            DB camera id — the key for this camera's GPU
+                                  queues and metrics series. Deliberately NOT a
+                                  list position (LSO-130): positions shift when
+                                  a camera leaves the set mid-run.
             camera_config:        Camera config dict (roi, cam_type, etc.)
             camera_engine:        CameraEngine instance for this camera (CPU-only calls)
             gpu_worker:           Shared GPUInferenceWorker instance
@@ -53,7 +56,7 @@ class CameraWorker:
             annotator:            Optional FrameAnnotator for save_video
             video_writer:         Optional cv2.VideoWriter for save_video
         """
-        self.camera_idx = camera_idx
+        self.camera_id = camera_id
         self.camera_config = camera_config
         self.camera_engine = camera_engine
         self.gpu_worker = gpu_worker
@@ -83,7 +86,7 @@ class CameraWorker:
         self._face_cache: Dict[int, Dict] = {}  # track_id -> {face_bbox, face_det_score}
 
         logger.debug(
-            f"CameraWorker[{camera_idx}] created: "
+            f"CameraWorker[cam={camera_id}] created: "
             f"camera_id={camera_config.get('camera_id')}, "
             f"detect_every={detection_interval}, "
             f"recog_every={recognition_interval}"
@@ -94,28 +97,28 @@ class CameraWorker:
     def start(self) -> None:
         """Start the camera worker thread."""
         self._running = True
-        name = f"cam-worker-{self.camera_idx}"
+        name = f"cam-worker-{self.camera_id}"
         self._thread = threading.Thread(target=self.run, daemon=True, name=name)
         self._thread.start()
-        logger.debug(f"CameraWorker[{self.camera_idx}] thread started")
+        logger.debug(f"CameraWorker[cam={self.camera_id}] thread started")
 
     def stop(self, timeout: float = 5.0) -> None:
         """Signal the worker to stop and wait for it."""
         self._running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
-        logger.info(f"CameraWorker[{self.camera_idx}] stopped")
+        logger.info(f"CameraWorker[cam={self.camera_id}] stopped")
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def run(self) -> None:
         """Main processing loop for this camera."""
-        logger.debug(f"CameraWorker[{self.camera_idx}] loop started")
+        logger.debug(f"CameraWorker[cam={self.camera_id}] loop started")
         while self._running:
             try:
                 self._process_one_frame()
             except Exception as e:
-                logger.exception(f"CameraWorker[{self.camera_idx}] error: {e}")
+                logger.exception(f"CameraWorker[cam={self.camera_id}] error: {e}")
                 time.sleep(0.01)
     ## This function is the main loop of the CameraWorker thread. It continuously processes frames from the camera stream until the worker is stopped. It calls the _process_one_frame() method to handle each frame, and if any exception occurs during processing, it logs the error and sleeps briefly before continuing.
     def _process_one_frame(self) -> None:
@@ -143,11 +146,11 @@ class CameraWorker:
 
         # Record this processed detection-frame for FPS monitoring
         if self._metrics is not None:
-            self._metrics.record_frame(self.camera_idx)
+            self._metrics.record_frame(self.camera_id)
 
         # ── Step 4: Submit frame to GPU worker, wait for detections ───────────
-        self.gpu_worker.submit_frame(self.camera_idx, frame, frame_num)
-        detections = self.gpu_worker.get_detections(self.camera_idx)
+        self.gpu_worker.submit_frame(self.camera_id, frame, frame_num)
+        detections = self.gpu_worker.get_detections(self.camera_id)
 
         # ── Step 5: CPU tracking + person ROI extraction ──────────────────────
         active_tracks, removed_tracks, person_rois = (
@@ -162,13 +165,13 @@ class CameraWorker:
             track_ids = [tid for tid, _, _o in person_rois]
             rois = [roi for _, roi, _o in person_rois]
             roi_offsets = {tid: off for tid, _, off in person_rois}
-            self.gpu_worker.submit_faces(self.camera_idx, rois, track_ids)
+            self.gpu_worker.submit_faces(self.camera_id, rois, track_ids)
         else:
             roi_offsets = {}
             # Always send a submission to keep the GPU worker synchronised
-            self.gpu_worker.submit_faces(self.camera_idx, [], [])
+            self.gpu_worker.submit_faces(self.camera_id, [], [])
 
-        embeddings_map = self.gpu_worker.get_embeddings(self.camera_idx)
+        embeddings_map = self.gpu_worker.get_embeddings(self.camera_id)
 
         # ── Step 7: CPU identity resolution ───────────────────────────────────
         events = self.camera_engine.finalize_identities(

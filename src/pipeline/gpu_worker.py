@@ -10,7 +10,7 @@ Camera threads are fully independent — a slow camera never blocks a fast one.
 import queue
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from loguru import logger
@@ -29,32 +29,78 @@ class GPUInferenceWorker:
         self,
         detector,
         face_detector,
-        num_cameras: int,
+        camera_ids: Sequence[int],
         metrics_collector=None,
     ):
         self._detector = detector
         self._face_detector = face_detector
-        self._num_cameras = num_cameras
         self._running = False
         self._yolo_thread: Optional[threading.Thread] = None
         self._arcface_thread: Optional[threading.Thread] = None
         self._metrics = metrics_collector  # Optional[MetricsCollector]
 
-        # Per-camera queues indexed by camera_idx (0-based)
-        self._frame_in_queues: Dict[int, queue.Queue] = {
-            i: queue.Queue(maxsize=2) for i in range(num_cameras)
-        }
-        self._detection_out_queues: Dict[int, queue.Queue] = {
-            i: queue.Queue(maxsize=2) for i in range(num_cameras)
-        }
-        self._face_in_queues: Dict[int, queue.Queue] = {
-            i: queue.Queue(maxsize=4) for i in range(num_cameras)
-        }
-        self._embedding_out_queues: Dict[int, queue.Queue] = {
-            i: queue.Queue(maxsize=4) for i in range(num_cameras)
-        }
+        # Queues are keyed by the DB camera id, NOT by position in the camera
+        # list (LSO-130). A positional key silently re-points every later
+        # camera's queues when one camera is removed from the middle of the
+        # set, which is why the engine used to rebuild everything instead.
+        self._camera_ids: List[int] = list(camera_ids)
 
-        logger.debug(f"GPUInferenceWorker: {num_cameras} camera(s)")
+        # Guards the four dicts below: add_camera/remove_camera mutate them
+        # while the YOLO and ArcFace loops are iterating.
+        self._queues_lock = threading.Lock()
+
+        self._frame_in_queues: Dict[int, queue.Queue] = {}
+        self._detection_out_queues: Dict[int, queue.Queue] = {}
+        self._face_in_queues: Dict[int, queue.Queue] = {}
+        self._embedding_out_queues: Dict[int, queue.Queue] = {}
+        for cam_id in self._camera_ids:
+            self._make_queues(cam_id)
+
+        logger.debug(
+            f"GPUInferenceWorker: {len(self._camera_ids)} camera(s) "
+            f"ids={self._camera_ids}"
+        )
+
+    # ── Camera set management ─────────────────────────────────────────────────
+
+    def _make_queues(self, camera_id: int) -> None:
+        self._frame_in_queues[camera_id] = queue.Queue(maxsize=2)
+        self._detection_out_queues[camera_id] = queue.Queue(maxsize=2)
+        self._face_in_queues[camera_id] = queue.Queue(maxsize=4)
+        self._embedding_out_queues[camera_id] = queue.Queue(maxsize=4)
+
+    @property
+    def camera_ids(self) -> List[int]:
+        with self._queues_lock:
+            return list(self._camera_ids)
+
+    def add_camera(self, camera_id: int) -> None:
+        """Register queues for a camera joining the running set."""
+        with self._queues_lock:
+            if camera_id in self._frame_in_queues:
+                logger.debug(f"GPUInferenceWorker: camera {camera_id} already registered")
+                return
+            self._make_queues(camera_id)
+            self._camera_ids.append(camera_id)
+        logger.info(f"GPUInferenceWorker: camera {camera_id} added")
+
+    def remove_camera(self, camera_id: int) -> None:
+        """Drop a camera's queues. Anything still queued is discarded — the
+        camera's worker is stopping, so nothing would consume it."""
+        with self._queues_lock:
+            if camera_id not in self._frame_in_queues:
+                logger.debug(f"GPUInferenceWorker: camera {camera_id} not registered")
+                return
+            for d in (
+                self._frame_in_queues,
+                self._detection_out_queues,
+                self._face_in_queues,
+                self._embedding_out_queues,
+            ):
+                d.pop(camera_id, None)
+            if camera_id in self._camera_ids:
+                self._camera_ids.remove(camera_id)
+        logger.info(f"GPUInferenceWorker: camera {camera_id} removed")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -79,48 +125,87 @@ class GPUInferenceWorker:
 
     # ── Camera-thread API ─────────────────────────────────────────────────────
 
+    def _queue_for(
+        self, queues: Dict[int, queue.Queue], camera_id: int, op: str
+    ) -> Optional[queue.Queue]:
+        """Look up a camera's queue, tolerating removal mid-flight.
+
+        A camera worker can still be draining its last cycle after
+        `remove_camera` has run, so a missing queue is expected during a
+        set change — not an error worth raising into the worker thread.
+
+        Deliberately does NOT take `_queues_lock`. This runs on every frame
+        for every camera, and a single `dict.get` is atomic under CPython's
+        GIL — it either sees the queue or it doesn't, never a torn state.
+        The lock is only needed where a dict is *iterated* (`_collect_batch`),
+        since iteration is what a concurrent mutation breaks. Revisit if this
+        ever runs free-threaded, or if a compound read is added here.
+        """
+        q = queues.get(camera_id)
+        if q is None:
+            logger.debug(f"{op}: camera {camera_id} is no longer registered")
+        return q
+
     def submit_frame(
-        self, camera_idx: int, frame: np.ndarray, frame_num: int
+        self, camera_id: int, frame: np.ndarray, frame_num: int
     ) -> None:
         """Submit a frame for YOLO detection (non-blocking; drops oldest if full)."""
+        q = self._queue_for(self._frame_in_queues, camera_id, "submit_frame")
+        if q is None:
+            return
         try:
-            self._frame_in_queues[camera_idx].put_nowait((frame, frame_num))
+            q.put_nowait((frame, frame_num))
         except queue.Full:
+            # A frame is being dropped either way — count it before the
+            # replacement attempt, so the counter cannot under-report if
+            # that retry also finds the queue full.
+            if self._metrics is not None:
+                self._metrics.record_drop(camera_id)
             try:
-                self._frame_in_queues[camera_idx].get_nowait()
+                q.get_nowait()
             except queue.Empty:
                 pass
-            self._frame_in_queues[camera_idx].put_nowait((frame, frame_num))
-            if self._metrics is not None:
-                self._metrics.record_drop(camera_idx)
+            try:
+                q.put_nowait((frame, frame_num))
+            except queue.Full:
+                return
 
     def get_detections(
-        self, camera_idx: int, timeout: float = 2.0
+        self, camera_id: int, timeout: float = 2.0
     ) -> List[Dict]:
         """Block until YOLO detections are available for this camera."""
+        q = self._queue_for(self._detection_out_queues, camera_id, "get_detections")
+        if q is None:
+            return []
         try:
-            return self._detection_out_queues[camera_idx].get(timeout=timeout)
+            return q.get(timeout=timeout)
         except queue.Empty:
-            logger.warning(f"get_detections timeout for camera {camera_idx}")
+            logger.warning(f"get_detections timeout for camera {camera_id}")
             return []
 
     def submit_faces(
         self,
-        camera_idx: int,
+        camera_id: int,
         person_rois: List[np.ndarray],
         track_ids: List[int],
     ) -> None:
         """Submit person ROI crops for ArcFace embedding."""
-        self._face_in_queues[camera_idx].put((person_rois, track_ids))
+        q = self._queue_for(self._face_in_queues, camera_id, "submit_faces")
+        if q is None:
+            return
+        q.put((person_rois, track_ids))
 
     def get_embeddings(
-        self, camera_idx: int, timeout: float = 2.0
+        self, camera_id: int, timeout: float = 2.0
     ) -> Dict[int, Dict]:
         """Block until ArcFace results are available for this camera."""
+        q = self._queue_for(self._embedding_out_queues, camera_id, "get_embeddings")
+        if q is None:
+            return {}
         try:
-            return self._embedding_out_queues[camera_idx].get(timeout=timeout)
+            return q.get(timeout=timeout)
         except queue.Empty:
-            logger.warning(f"get_embeddings timeout for camera {camera_idx}")
+            logger.warning(f"get_embeddings timeout for camera {camera_id}")
             return {}
 
     # ── YOLO loop ─────────────────────────────────────────────────────────────
@@ -139,7 +224,13 @@ class GPUInferenceWorker:
                 all_detections = self._run_yolo_batch(frames)
 
                 for i, cam_id in enumerate(cam_ids):
-                    self._detection_out_queues[cam_id].put(all_detections[i])
+                    # Same mid-flight-removal case as the submit/get paths, so
+                    # use the same helper rather than repeating the reasoning.
+                    out_q = self._queue_for(
+                        self._detection_out_queues, cam_id, "yolo_distribute"
+                    )
+                    if out_q is not None:
+                        out_q.put(all_detections[i])
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker YOLO error: {e}")
@@ -176,7 +267,11 @@ class GPUInferenceWorker:
                         cam_results[cam_id][track_id] = face_results[i]
 
                 for cam_id, results in cam_results.items():
-                    self._embedding_out_queues[cam_id].put(results)
+                    out_q = self._queue_for(
+                        self._embedding_out_queues, cam_id, "arcface_distribute"
+                    )
+                    if out_q is not None:
+                        out_q.put(results)
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker ArcFace error: {e}")
@@ -184,11 +279,19 @@ class GPUInferenceWorker:
     # ── Collection helpers ────────────────────────────────────────────────────
 
     def _collect_batch(self, in_queues: Dict[int, queue.Queue]) -> Dict[int, Any]:
-        """Block until at least one queue has an item, then drain any others ready now."""
+        """Block until at least one queue has an item, then drain any others ready now.
+
+        Iterates a snapshot rather than the live dict: `add_camera`/`remove_camera`
+        mutate these dicts from the engine's thread, and mutating a dict while
+        another thread iterates it raises RuntimeError. Taking the snapshot each
+        pass also means a camera added mid-wait is picked up on the next one.
+        """
         batch: Dict[int, Any] = {}
 
         while self._running and not batch:
-            for cam_id, q in in_queues.items():
+            with self._queues_lock:
+                snapshot = list(in_queues.items())
+            for cam_id, q in snapshot:
                 try:
                     batch[cam_id] = q.get_nowait()
                 except queue.Empty:
@@ -196,7 +299,9 @@ class GPUInferenceWorker:
             if not batch:
                 time.sleep(0.001)
 
-        for cam_id, q in in_queues.items():
+        with self._queues_lock:
+            snapshot = list(in_queues.items())
+        for cam_id, q in snapshot:
             if cam_id not in batch:
                 try:
                     batch[cam_id] = q.get_nowait()

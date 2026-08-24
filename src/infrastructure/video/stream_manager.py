@@ -32,24 +32,24 @@ class StreamManager:
                 Each config should have: stream_url, camera_name, cam_type
         """
         self.camera_configs = camera_configs
-        self.streams: List[StreamHandler] = []
-        self.video_writers: List[Optional[cv2.VideoWriter]] = []
+        # Keyed by DB camera id, not list position (LSO-130). Positions shift
+        # when a camera leaves the set, which silently re-points every later
+        # camera's stream handler at the wrong camera.
+        self.streams: Dict[int, StreamHandler] = {}
+        self.video_writers: Dict[int, Optional[cv2.VideoWriter]] = {}
         self._initialized = False
 
-    def init_streams(self) -> List[StreamHandler]:
-        """Initialize stream handlers for all cameras.
-
-        Returns:
-            List of initialized StreamHandler objects
-        """
-        self.streams = []
+    def init_streams(self) -> Dict[int, StreamHandler]:
+        """Initialize stream handlers for all cameras, keyed by camera id."""
+        self.streams = {}
 
         for config in self.camera_configs:
+            camera_id = config.get('camera_id')
             stream = StreamHandler(
                 src=config['stream_url'],
                 logger=logger
             )
-            self.streams.append(stream)
+            self.streams[camera_id] = stream
             if stream.connected:
                 logger.info(
                     f"Stream ready: {config.get('camera_name', 'Unknown')} "
@@ -61,7 +61,7 @@ class StreamManager:
                     f"(camera_id={config.get('camera_id')}) — reconnecting in background"
                 )
 
-        connected = sum(1 for s in self.streams if s.connected)
+        connected = sum(1 for s in self.streams.values() if s.connected)
         logger.info(
             f"Stream init complete: {connected}/{len(self.streams)} connected, "
             f"{len(self.streams) - connected} reconnecting"
@@ -70,7 +70,7 @@ class StreamManager:
         self._initialized = True
         return self.streams
 
-    def init_video_writers(self, output_dir: str) -> List[Optional[cv2.VideoWriter]]:
+    def init_video_writers(self, output_dir: str) -> Dict[int, Optional[cv2.VideoWriter]]:
         """Initialize video writers for saving output.
 
         Args:
@@ -79,7 +79,7 @@ class StreamManager:
         Returns:
             List of VideoWriter objects (or None for failed writers)
         """
-        self.video_writers = []
+        self.video_writers = {}
 
         now = datetime.now()
         date = now.strftime("%Y%m%d")
@@ -97,15 +97,16 @@ class StreamManager:
             logger.exception(f"Output directory not writable: {output_dir} - {e}")
             return self.video_writers
 
-        for i, config in enumerate(self.camera_configs):
+        for config in self.camera_configs:
+            camera_id = config.get('camera_id')
             camera_name = config['camera_name'].replace(' ', '_')
             status = config.get('cam_type', 'IN').upper()
             filename = f"{output_dir}/{status}_{camera_name}_{date}_{time_str}.mp4"
 
             # Get frame dimensions and fps from stream
             w, h, fps = 1920, 1080, 20
-            if i < len(self.streams):
-                stream = self.streams[i]
+            stream = self.streams.get(camera_id)
+            if stream is not None:
                 if stream.cap is not None:
                     cap_w = int(stream.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                     cap_h = int(stream.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -118,7 +119,7 @@ class StreamManager:
                         fps = int(cap_fps)
 
             writer = self._create_video_writer(filename, w, h, fps)
-            self.video_writers.append(writer)
+            self.video_writers[camera_id] = writer
 
         return self.video_writers
 
@@ -155,21 +156,12 @@ class StreamManager:
             logger.exception(f"Exception initializing video writer: {filename} - {e}")
             return None
 
-    def set_metrics(self, metrics_collector) -> None:
-        """Wire the shared MetricsCollector into every stream's background thread.
-
-        Called after MetricsCollector exists (it's built after init_streams()
-        in SmartOfficeEngine's startup sequence) — see StreamHandler.set_metrics().
-        """
-        for idx, stream in enumerate(self.streams):
-            stream.set_metrics(metrics_collector, idx)
-
     def start_streams(self) -> None:
         """Start all non-video file streams (RTSP, webcam)."""
         if not self._initialized:
             self.init_streams()
 
-        for stream in self.streams:
+        for stream in self.streams.values():
             if not stream.is_video:
                 stream.start()
 
@@ -177,16 +169,16 @@ class StreamManager:
 
     def stop_streams(self) -> None:
         """Stop all streams."""
-        for stream in self.streams:
+        for stream in self.streams.values():
             stream.stop()
         logger.info("Stopped all video streams")
 
     def release_writers(self) -> None:
         """Release all video writers."""
-        for writer in self.video_writers:
+        for writer in self.video_writers.values():
             if writer is not None:
                 writer.release()
-        self.video_writers = []
+        self.video_writers = {}
         logger.info("Released all video writers")
 
     def get_frame(self, camera_id: int) -> Optional[np.ndarray]:
@@ -201,29 +193,61 @@ class StreamManager:
         Returns:
             Latest frame as numpy array, or None if camera not found / no frame yet
         """
-        for i, config in enumerate(self.camera_configs):
-            if config.get('camera_id') == camera_id and i < len(self.streams):
-                ret, frame = self.streams[i].read()
-                if not ret or frame is None:
-                    return None
-                return frame
-        return None
+        stream = self.streams.get(camera_id)
+        if stream is None:
+            return None
+        ret, frame = stream.read()
+        if not ret or frame is None:
+            return None
+        return frame
 
     def get_fresh_frame(
         self, camera_id: int, max_age_sec: float = 5.0
     ) -> Optional[np.ndarray]:
         """Return a recent frame only if it was received within max_age_sec."""
-        for i, config in enumerate(self.camera_configs):
-            if config.get('camera_id') == camera_id and i < len(self.streams):
-                stream = self.streams[i]
-                ret, frame = stream.read()
-                if not ret or frame is None:
-                    return None
-                age = stream.frame_age_sec()
-                if age is None or age > max_age_sec:
-                    return None
-                return frame
-        return None
+        stream = self.streams.get(camera_id)
+        if stream is None:
+            return None
+        ret, frame = stream.read()
+        if not ret or frame is None:
+            return None
+        age = stream.frame_age_sec()
+        if age is None or age > max_age_sec:
+            return None
+        return frame
+
+    def add_stream(self, config: Dict[str, Any]) -> Optional[StreamHandler]:
+        """Open a stream for a camera joining the running set (LSO-130)."""
+        camera_id = config.get('camera_id')
+        if camera_id in self.streams:
+            logger.debug(f"Stream for camera_id={camera_id} already open")
+            return self.streams[camera_id]
+        stream = StreamHandler(src=config['stream_url'], logger=logger)
+        self.streams[camera_id] = stream
+        stream.start()
+        logger.info(
+            f"Stream added: {config.get('camera_name', 'Unknown')} "
+            f"(camera_id={camera_id}, connected={stream.connected})"
+        )
+        return stream
+
+    def remove_stream(self, camera_id: int) -> None:
+        """Stop and drop one camera's stream, leaving the others untouched."""
+        stream = self.streams.pop(camera_id, None)
+        if stream is None:
+            logger.debug(f"No stream to remove for camera_id={camera_id}")
+            return
+        try:
+            stream.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping stream camera_id={camera_id}: {e}")
+        writer = self.video_writers.pop(camera_id, None)
+        if writer is not None:
+            try:
+                writer.release()
+            except Exception:
+                pass
+        logger.info(f"Stream removed: camera_id={camera_id}")
 
     def cleanup(self) -> None:
         """Clean up all resources."""
