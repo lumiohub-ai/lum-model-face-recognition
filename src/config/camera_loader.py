@@ -67,8 +67,25 @@ def load_cameras_from_db(
     repository = Repository(client_slug)
     all_configs = []
 
+    branch_code = settings.edge_branch_code
+    if branch_code and not repository.branch_code_exists(branch_code):
+        raise RuntimeError(
+            f"SO_EDGE_BRANCH_CODE={branch_code!r} matches no branch in "
+            f"{client_slug}'s branches table — refusing to start. Loading zero "
+            f"cameras is indistinguishable from every camera being down, so a "
+            f"typo here would fail silently."
+        )
+    if not branch_code:
+        logger.warning(
+            "[camera_loader] SO_EDGE_BRANCH_CODE is unset — this AI will claim "
+            "EVERY camera in the org and resolve each against its LOCAL edge. "
+            "Correct only for a single-site org (LSO-133)."
+        )
+
     for application in applications:
-        cameras = repository.get_cameras(application=application)
+        cameras = repository.get_cameras(
+            application=application, branch_code=branch_code or None
+        )
 
         for cam in cameras:
             stream_url = _resolve_stream_url(cam)

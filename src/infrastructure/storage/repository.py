@@ -115,25 +115,63 @@ class Repository:
             logger.exception(f"Failed to fetch user name mapping: {e}")
             return []
 
-    def get_cameras(self, application: Optional[str] = None) -> List[Dict[str, Any]]:
+    def branch_code_exists(self, branch_code: str) -> bool:
+        """True if `branch_code` names a real branch in this tenant schema.
+
+        Used to fail loudly at startup rather than silently loading zero
+        cameras: a typo'd SO_EDGE_BRANCH_CODE matches nothing, and an AI that
+        starts with no cameras looks identical to one whose cameras are down.
+        """
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    text(
+                        f"SELECT 1 FROM {self.schema}.branches "
+                        f"WHERE code = :code LIMIT 1"
+                    ),
+                    {"code": branch_code},
+                ).fetchone()
+                return row is not None
+        except Exception as e:
+            logger.exception(f"Failed to check branch code {branch_code!r}: {e}")
+            raise
+
+    def get_cameras(
+        self,
+        application: Optional[str] = None,
+        branch_code: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Get camera configurations.
 
         Args:
             application: Filter by application type (e.g., 'attendance')
+            branch_code: Restrict to one branch's cameras (LSO-133). None/empty
+                returns every camera, which is only correct for a single-site
+                org — see `Settings.edge_branch_code`.
 
         Returns:
             List of camera configs
         """
         try:
             with self.db.get_connection() as conn:
-                # Base query
+                # LEFT JOIN, matching the edge sidecar: `cameras.branch_id` is
+                # nullable and nothing backfills it, so an INNER JOIN would drop
+                # every un-branched camera. When `branch_code` is set, cameras
+                # with no branch are excluded on purpose — they belong to no
+                # site, so a site-scoped AI must not claim them.
                 query = f"""
-                    SELECT id, name, stream_url, camera_type, application,
-                           matching_threshold, virtual_line_points, roi_points, status
-                    FROM {self.schema}.cameras
+                    SELECT c.id, c.name, c.stream_url, c.camera_type, c.application,
+                           c.matching_threshold, c.virtual_line_points, c.roi_points,
+                           c.status
+                    FROM {self.schema}.cameras c
+                    LEFT JOIN {self.schema}.branches b ON b.id = c.branch_id
                 """
+                params: Dict[str, Any] = {}
+                if branch_code:
+                    query += " WHERE b.code = :branch_code"
+                    params["branch_code"] = branch_code
 
-                result = conn.execute(text(query))
+                result = conn.execute(text(query), params)
                 cameras = []
 
                 for row in result.fetchall():
@@ -166,7 +204,10 @@ class Repository:
                     else:
                         cameras.append(camera)
 
-                logger.info(f"Fetched {len(cameras)} cameras from database")
+                scope = f"branch={branch_code}" if branch_code else "branch=<all>"
+                logger.info(
+                    f"Fetched {len(cameras)} cameras from database ({scope})"
+                )
                 return cameras
         except Exception as e:
             logger.exception(f"Failed to fetch cameras: {e}")
