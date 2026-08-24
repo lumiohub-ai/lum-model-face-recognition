@@ -145,7 +145,10 @@ class SmartOfficeEngine:
             from infrastructure.metrics_collector import MetricsCollector
             from infrastructure.metrics_server import MetricsDashboardServer
             from infrastructure.metrics_store import MetricsStore
-            _cam_indices = list(range(len(self.camera_configs)))
+            # Metrics series are keyed by DB camera id, not list position
+            # (LSO-130). With positions, removing a camera silently re-points
+            # every later camera's history at a different camera.
+            _cam_indices = self._camera_ids()
             _db_path = os.path.join(
                 kwargs.get("output_dir", "volumes/storage/person-tracking"),
                 "metrics.db",
@@ -155,12 +158,12 @@ class SmartOfficeEngine:
                 self.metrics,
                 db_path=_db_path,
                 interval_sec=30.0,
-                camera_indices=_cam_indices,
+                camera_ids=_cam_indices,
             )
             self._metrics_dashboard = MetricsDashboardServer(
                 self.metrics,
                 store=self._metrics_store,
-                camera_indices=_cam_indices,
+                camera_ids=_cam_indices,
                 port=settings.metrics_port,
             )
             self._register_pipeline_gauges()
@@ -169,12 +172,13 @@ class SmartOfficeEngine:
             self._metrics_store = None
             self._metrics_dashboard = None
 
-        # GPU worker (shared across all cameras)
-        n_cameras = len(self.camera_configs)
+        # GPU worker (shared across all cameras). Keyed by DB camera id so a
+        # camera can leave the set without re-pointing every other camera's
+        # queues (LSO-130).
         self.gpu_worker = GPUInferenceWorker(
             detector=self.models.person_detector,
             face_detector=self.models.face_detector,
-            num_cameras=n_cameras,
+            camera_ids=self._camera_ids(),
             metrics_collector=self.metrics,
         )
 
@@ -188,12 +192,48 @@ class SmartOfficeEngine:
         self.camera_workers = self._init_camera_workers()
 
         logger.debug(
-            f"SmartOfficeEngine initialised: {n_cameras} camera(s), "
+            f"SmartOfficeEngine initialised: {len(self.camera_configs)} camera(s), "
             f"detect_every={self._detection_interval} frames, "
             f"recog_every={self._recognition_interval} detection-frames"
         )
 
     # ── Initialisation helpers ────────────────────────────────────────────────
+
+    def _camera_ids(self) -> List[int]:
+        """DB camera ids for the current config set, in config order.
+
+        This is the identity used for GPU queues, metrics series and worker
+        naming. Config order still matters for anything genuinely ordinal
+        (video writers), but nothing keyed off a camera should use position.
+
+        Validated loudly: with positional keys two cameras could never collide,
+        but dict keys can. A duplicate or missing id would silently overwrite
+        another camera's queues and streams — that camera simply stops getting
+        frames, with no error. A silent misroute is the failure mode this whole
+        change exists to remove, so it must not be reintroduced here.
+        """
+        ids = [c.get("camera_id") for c in self.camera_configs]
+
+        missing = [
+            c.get("camera_name", "<unnamed>")
+            for c, cid in zip(self.camera_configs, ids)
+            if cid is None
+        ]
+        if missing:
+            raise ValueError(
+                f"Camera config(s) without a camera_id: {missing}. "
+                "camera_id keys the GPU queues, streams and metrics."
+            )
+
+        dupes = {cid for cid in ids if ids.count(cid) > 1}
+        if dupes:
+            raise ValueError(
+                f"Duplicate camera_id(s) in camera configs: {sorted(dupes)}. "
+                "Each camera must have a unique id — duplicates silently "
+                "overwrite each other's queues and streams."
+            )
+
+        return ids
 
     def _init_camera_engines(self) -> List[CameraEngine]:
         engines = []
@@ -230,21 +270,20 @@ class SmartOfficeEngine:
 
     def _init_camera_workers(self) -> List[CameraWorker]:
         workers = []
-        for idx, (config, engine) in enumerate(
-            zip(self.camera_configs, self.camera_engines)
-        ):
+        for config, engine in zip(self.camera_configs, self.camera_engines):
+            camera_id = config.get("camera_id")
             video_writer = (
-                self.stream_manager.video_writers[idx]
-                if self.save_video and idx < len(self.stream_manager.video_writers)
+                self.stream_manager.video_writers.get(camera_id)
+                if self.save_video
                 else None
             )
             worker = CameraWorker(
-                camera_idx=idx,
+                camera_id=camera_id,
                 camera_config=config,
                 camera_engine=engine,
                 gpu_worker=self.gpu_worker,
                 async_logger=self.async_logger,
-                stream_handler=self.stream_manager.streams[idx],
+                stream_handler=self.stream_manager.streams.get(camera_id),
                 detection_interval=self._detection_interval,
                 recognition_interval=self._recognition_interval,
                 annotator=self._annotator,
@@ -810,28 +849,33 @@ class SmartOfficeEngine:
         # timer previously did) hides which one is actually the problem.
         streams = self.stream_manager.streams
 
-        def _read_ms(idx: int) -> float:
-            return streams[idx].get_read_avg_ms() if idx < len(streams) else 0.0
+        def _read_ms(camera_id: int) -> float:
+            s = streams.get(camera_id)
+            return s.get_read_avg_ms() if s is not None else 0.0
 
-        def _decode_ms(idx: int) -> float:
-            return streams[idx].get_decode_avg_ms() if idx < len(streams) else 0.0
+        def _decode_ms(camera_id: int) -> float:
+            s = streams.get(camera_id)
+            return s.get_decode_avg_ms() if s is not None else 0.0
 
-        def _stream_state(idx: int):
-            return streams[idx].get_health()["state"] if idx < len(streams) else None
+        def _stream_state(camera_id: int):
+            s = streams.get(camera_id)
+            return s.get_health()["state"] if s is not None else None
 
         self.metrics.register_camera_gauge("read_ms", _read_ms)
         self.metrics.register_camera_gauge("decode_ms", _decode_ms)
         self.metrics.register_camera_gauge("stream_state", _stream_state)
         self.metrics.register_gauge("read_ms_avg", lambda: round(
-            sum(s.get_read_avg_ms() for s in streams) / len(streams), 1
+            sum(s.get_read_avg_ms() for s in streams.values()) / len(streams), 1
         ) if streams else 0.0)
         self.metrics.register_gauge("decode_ms_avg", lambda: round(
-            sum(s.get_decode_avg_ms() for s in streams) / len(streams), 1
+            sum(s.get_decode_avg_ms() for s in streams.values()) / len(streams), 1
         ) if streams else 0.0)
 
     def _report_metrics(self) -> None:
         """Log a metrics summary and publish alerts for critical conditions."""
-        cam_indices = list(range(len(self.camera_workers)))
+        # Must match the keys the recording path uses (camera id, not
+        # position) or every gauge lookup misses (LSO-130).
+        cam_indices = [w.camera_id for w in self.camera_workers]
 
         # Log compact summary line
         self.metrics.log_summary(cam_indices)
@@ -839,7 +883,7 @@ class SmartOfficeEngine:
         # Check for and handle critical alerts
         monitoring_cfg = self.config.get("monitoring", {})
         alerts = self.metrics.check_alerts(
-            camera_indices=cam_indices,
+            camera_ids=cam_indices,
             fps_threshold=float(monitoring_cfg.get("fps_alert_threshold", 1.0)),
             gpu_mem_threshold=float(monitoring_cfg.get("gpu_mem_threshold", 90.0)),
             ram_threshold=float(monitoring_cfg.get("ram_threshold", 90.0)),
