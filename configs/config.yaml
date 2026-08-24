@@ -27,13 +27,24 @@ action_recognition:
   max_queue_size: 50  # Maximum queued inference requests
   async_workers: 1  # Number of background worker threads for inference
 
+  # Ollama unloads an idle model after ~5min; reloading gemma3:4b costs ~28s on
+  # its own, so 30s left no margin for the actual vision request. A cancelled
+  # load also leaves the model unloaded, so a short timeout compounds into
+  # repeated cold starts. Don't lower this without re-measuring the cold start.
   inference_timeout: 60  # Timeout for Ollama API calls in seconds
 
+  # Skip crops too small for the VLM to read. A distant figure a few dozen
+  # pixels tall carries no readable posture, so the model answers from the
+  # background instead — a wrong activity that still costs a full inference of a
+  # 4B-parameter model plus a GCS proof upload. Values come from the eval set in
+  # notebooks/eval/action: confidently-labelable crops were a median 475px tall,
+  # "unsure" ones 262px; these sit just under the smallest still-labelable crop
+  # (207px). 0 disables a given check.
   min_crop_height: 200
   min_crop_width: 80
   min_crop_area: 30000
- # The model is a 4B parameter LLM, so it is not cheap to run
 
+  # Supported actions with backend mapping and descriptions for VLM prompt
   actions:
     sleeping:
       backend_type: sleeping

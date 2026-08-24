@@ -1,9 +1,11 @@
 """Unit tests for the shared P = K undistortion helper.
 
-The property under test is the one the whole calibration-plan design rests
-on: undistort_image and undistort_points must land in the identical
-coordinate space. If they don't, a stored homography silently drifts by tens
-of pixels with no error surfaced anywhere — see docs/calibration-plan.md.
+The property under test: undistort_image and undistort_points must land in the
+identical coordinate space. Nothing in the live pipeline depends on that yet
+(undistort_points has no runtime caller — see the module docstring in
+src/domain/calibration/undistort.py), but the two are the halves of the future
+runtime-projection fix, and a mismatch between them would reintroduce the
+homography drift at the moment it is finally wired up.
 
 Run: PYTHONPATH=src python tests/test_undistort.py
 """
@@ -139,6 +141,32 @@ class ModelAliasTests(unittest.TestCase):
         actual_centroid = np.array([xs.mean(), ys.mean()])
 
         np.testing.assert_allclose(actual_centroid, predicted, atol=3.0)
+
+
+class DistCoeffValidationTests(unittest.TestCase):
+    """The fisheye branch pads/truncates D to 4; the pinhole branch cannot
+    (coefficients are positional), so a wrong length must be rejected with a
+    readable error rather than a bare cv2.error from inside OpenCV."""
+
+    def test_pinhole_rejects_bad_dist_coeff_length(self):
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        for bad in ([0.1, 0.2, 0.3], [0.1] * 6, [0.1] * 7):
+            with self.subTest(n=len(bad)):
+                with self.assertRaises(ValueError) as ctx:
+                    undistort_image(img, K_PINHOLE, bad, "pinhole")
+                self.assertIn(str(len(bad)), str(ctx.exception))
+
+    def test_pinhole_accepts_supported_dist_coeff_lengths(self):
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        for n in (4, 5, 8, 12, 14):
+            with self.subTest(n=n):
+                undistort_image(img, K_PINHOLE, [0.0] * n, "pinhole")
+
+    def test_fisheye_still_coerces_short_and_long_dist_coeffs(self):
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        for n in (2, 4, 5):
+            with self.subTest(n=n):
+                undistort_image(img, K_FISHEYE, [0.0] * n, "fisheye")
 
 
 if __name__ == "__main__":

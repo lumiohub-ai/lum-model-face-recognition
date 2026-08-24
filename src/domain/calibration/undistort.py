@@ -1,18 +1,43 @@
 """Undistortion in the P = K convention.
 
-P = K is the committed convention: undistorted output stays in the original
-camera matrix's scale and origin (as opposed to a re-estimated "new camera
-matrix" like `estimateNewCameraMatrixForUndistortRectify`). The image path
-(undistort_image) and the point path (undistort_points) MUST use the same P
-or the homography — fit in one space, applied in the other — silently drifts
-by tens of pixels. Do not change P; every stored homography is fit in this
-space.
+P = K means undistorted output stays in the original camera matrix's scale and
+origin, rather than a re-estimated "new camera matrix" like
+`estimateNewCameraMatrixForUndistortRectify`. Both callers use it, so the two
+operator-facing previews land in the same space and cannot diverge:
+
+- `CaptureFrame`  -> `engine.py::_do_capture_frame`
+- `TestCalibration` -> `CameraCalibrator.undistort`
+
+WHAT THIS DOES NOT YET COVER — read before trusting a homography:
+
+`undistort_points` has **no runtime caller**. The live pipeline never
+undistorts: `engine.py::_do_compute_homography` fits H from the raw src_pts the
+backend sends, and `camera_engine.py::emit_positions` applies H directly to raw
+bbox coordinates. Runtime projection was deliberately left out when this module
+landed (see commit c4fd426).
+
+So the hazard is real and currently unguarded: if an operator picks src_pts off
+the *undistorted* CaptureFrame preview, H is fit in P = K space and then applied
+to raw distorted coordinates — drifting by tens of pixels. Wiring the runtime
+side (registry-cached intrinsics + a `frame_source` column recording which space
+each H was fit in) is implemented at commit 2993c6b on `bysh-human-tracking` and
+still needs porting here.
+
+Keep undistort_image and undistort_points on the same P: they are the two halves
+of that future fix, and a mismatch between them would reintroduce the drift at
+the point it is finally wired up.
 """
 
 from typing import List, Union
 
 import cv2
 import numpy as np
+
+
+# cv2.undistort/undistortPoints accept only these distortion-vector lengths.
+# Anything else raises a bare cv2.error deep inside OpenCV; we fail earlier with
+# a message that names the actual length.
+_PINHOLE_D_LENGTHS = (4, 5, 8, 12, 14)
 
 
 def _prepare_intrinsics(camera_matrix, dist_coeffs, model: str):
@@ -22,6 +47,15 @@ def _prepare_intrinsics(camera_matrix, dist_coeffs, model: str):
     if is_fisheye:
         D = D[:4].reshape(4, 1) if D.shape[0] >= 4 else np.vstack(
             [D, np.zeros((4 - D.shape[0], 1))]
+        )
+    elif D.shape[0] not in _PINHOLE_D_LENGTHS:
+        # The fisheye branch above pads/truncates to 4; the pinhole path has no
+        # equivalent safe coercion (the coefficients are positional), so reject
+        # rather than guess. Callers fall back to the raw frame.
+        raise ValueError(
+            f"dist_coeffs for model={model!r} must have "
+            f"{' or '.join(map(str, _PINHOLE_D_LENGTHS))} coefficients, "
+            f"got {D.shape[0]}"
         )
     return K, D, is_fisheye
 
