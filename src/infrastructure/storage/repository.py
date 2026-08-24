@@ -121,18 +121,27 @@ class Repository:
         Used to fail loudly at startup rather than silently loading zero
         cameras: a typo'd SO_EDGE_BRANCH_CODE matches nothing, and an AI that
         starts with no cameras looks identical to one whose cameras are down.
+
+        Compared case-insensitively. `^[a-z0-9]+$` on branch codes is enforced
+        by the backend's Pydantic schema only — there is no DB CHECK — and the
+        dev/prod branches were seeded by direct SQL, which bypasses it. A
+        mixed-case row would otherwise make a correct env var refuse to start.
         """
         try:
             with self.db.get_connection() as conn:
                 row = conn.execute(
                     text(
                         f"SELECT 1 FROM {self.schema}.branches "
-                        f"WHERE code = :code LIMIT 1"
+                        f"WHERE LOWER(code) = :code LIMIT 1"
                     ),
-                    {"code": branch_code},
+                    {"code": branch_code.lower()},
                 ).fetchone()
                 return row is not None
         except Exception as e:
+            # Unlike every other method here, this re-raises instead of
+            # returning a safe default. Swallowing it would hand back False,
+            # which the caller reads as "no such branch" and turns into a
+            # refuse-to-start — blaming a typo for what is really a DB outage.
             logger.exception(f"Failed to check branch code {branch_code!r}: {e}")
             raise
 
@@ -144,7 +153,10 @@ class Repository:
         """Get camera configurations.
 
         Args:
-            application: Filter by application type (e.g., 'attendance')
+            application: Filter by application type (e.g., 'attendance').
+                Applied in Python after the fetch, unlike `branch_code` which
+                filters in SQL — the `application` column is JSONB and may
+                arrive as a raw string depending on the driver.
             branch_code: Restrict to one branch's cameras (LSO-133). None/empty
                 returns every camera, which is only correct for a single-site
                 org — see `Settings.edge_branch_code`.
@@ -168,8 +180,10 @@ class Repository:
                 """
                 params: Dict[str, Any] = {}
                 if branch_code:
-                    query += " WHERE b.code = :branch_code"
-                    params["branch_code"] = branch_code
+                    # LOWER() for the same reason as branch_code_exists: the
+                    # lowercase invariant is API-level, not enforced by the DB.
+                    query += " WHERE LOWER(b.code) = :branch_code"
+                    params["branch_code"] = branch_code.lower()
 
                 result = conn.execute(text(query), params)
                 cameras = []

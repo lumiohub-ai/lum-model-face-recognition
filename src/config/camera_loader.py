@@ -69,12 +69,20 @@ def load_cameras_from_db(
 
     branch_code = settings.edge_branch_code
     if branch_code and not repository.branch_code_exists(branch_code):
-        raise RuntimeError(
+        # Logged as well as raised: at boot this RuntimeError does crash the
+        # engine, but `reload_camera_configs` catches Exception broadly and
+        # returns False, so a branch renamed or deleted mid-run would otherwise
+        # be indistinguishable from any other reload failure. The engine keeps
+        # serving its last-known-good camera set — safe, but silent — and this
+        # line is what makes it findable during triage.
+        msg = (
             f"SO_EDGE_BRANCH_CODE={branch_code!r} matches no branch in "
-            f"{client_slug}'s branches table — refusing to start. Loading zero "
-            f"cameras is indistinguishable from every camera being down, so a "
-            f"typo here would fail silently."
+            f"{client_slug}'s branches table. Loading zero cameras is "
+            f"indistinguishable from every camera being down, so this refuses "
+            f"rather than starting empty."
         )
+        logger.error(f"[camera_loader] BRANCH CODE INVALID — {msg}")
+        raise RuntimeError(msg)
     if not branch_code:
         logger.warning(
             "[camera_loader] SO_EDGE_BRANCH_CODE is unset — this AI will claim "
