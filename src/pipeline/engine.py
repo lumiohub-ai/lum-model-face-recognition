@@ -192,7 +192,7 @@ class SmartOfficeEngine:
         self.camera_workers = self._init_camera_workers()
 
         logger.debug(
-            f"SmartOfficeEngine initialised: {n_cameras} camera(s), "
+            f"SmartOfficeEngine initialised: {len(self.camera_configs)} camera(s), "
             f"detect_every={self._detection_interval} frames, "
             f"recog_every={self._recognition_interval} detection-frames"
         )
@@ -205,8 +205,35 @@ class SmartOfficeEngine:
         This is the identity used for GPU queues, metrics series and worker
         naming. Config order still matters for anything genuinely ordinal
         (video writers), but nothing keyed off a camera should use position.
+
+        Validated loudly: with positional keys two cameras could never collide,
+        but dict keys can. A duplicate or missing id would silently overwrite
+        another camera's queues and streams — that camera simply stops getting
+        frames, with no error. A silent misroute is the failure mode this whole
+        change exists to remove, so it must not be reintroduced here.
         """
-        return [c.get("camera_id") for c in self.camera_configs]
+        ids = [c.get("camera_id") for c in self.camera_configs]
+
+        missing = [
+            c.get("camera_name", "<unnamed>")
+            for c, cid in zip(self.camera_configs, ids)
+            if cid is None
+        ]
+        if missing:
+            raise ValueError(
+                f"Camera config(s) without a camera_id: {missing}. "
+                "camera_id keys the GPU queues, streams and metrics."
+            )
+
+        dupes = {cid for cid in ids if ids.count(cid) > 1}
+        if dupes:
+            raise ValueError(
+                f"Duplicate camera_id(s) in camera configs: {sorted(dupes)}. "
+                "Each camera must have a unique id — duplicates silently "
+                "overwrite each other's queues and streams."
+            )
+
+        return ids
 
     def _init_camera_engines(self) -> List[CameraEngine]:
         engines = []

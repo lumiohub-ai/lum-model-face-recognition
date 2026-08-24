@@ -133,6 +133,13 @@ class GPUInferenceWorker:
         A camera worker can still be draining its last cycle after
         `remove_camera` has run, so a missing queue is expected during a
         set change — not an error worth raising into the worker thread.
+
+        Deliberately does NOT take `_queues_lock`. This runs on every frame
+        for every camera, and a single `dict.get` is atomic under CPython's
+        GIL — it either sees the queue or it doesn't, never a torn state.
+        The lock is only needed where a dict is *iterated* (`_collect_batch`),
+        since iteration is what a concurrent mutation breaks. Revisit if this
+        ever runs free-threaded, or if a compound read is added here.
         """
         q = queues.get(camera_id)
         if q is None:
@@ -149,6 +156,11 @@ class GPUInferenceWorker:
         try:
             q.put_nowait((frame, frame_num))
         except queue.Full:
+            # A frame is being dropped either way — count it before the
+            # replacement attempt, so the counter cannot under-report if
+            # that retry also finds the queue full.
+            if self._metrics is not None:
+                self._metrics.record_drop(camera_id)
             try:
                 q.get_nowait()
             except queue.Empty:
@@ -157,8 +169,6 @@ class GPUInferenceWorker:
                 q.put_nowait((frame, frame_num))
             except queue.Full:
                 return
-            if self._metrics is not None:
-                self._metrics.record_drop(camera_id)
 
     def get_detections(
         self, camera_id: int, timeout: float = 2.0
