@@ -1,6 +1,6 @@
 {
   "meta": {
-    "repo_rev": "30e6b8730b2c67530c7fc1a4900b47a159b7cb7e",
+    "repo_rev": "6ba81f64e8e2494f8676c7f26064cb05920b8afd",
     "lum_vision_rev": "675fea7311c7b3123c4e1b6d98758ea473bc33c4",
     "gpu": "NVIDIA GeForce RTX 3080 Ti",
     "frames_per_cell": 1200
@@ -65,6 +65,35 @@
       },
       "n_gpu_pids": 4,
       "gpu_util_mean": 60.4
+    },
+    {
+      "cell": "11-solo-b6-shm",
+      "pool": "solo",
+      "concurrency": 1,
+      "share": "per_thread",
+      "batch": 6,
+      "prefetch": 16,
+      "mode": "shm",
+      "tasks": 200,
+      "frames": 1200,
+      "wall_s": 3.19,
+      "tasks_per_s": 62.8,
+      "frames_per_s": 376.7,
+      "lat_ms_p50": 60.8,
+      "lat_ms_p95": 66.5,
+      "read_ms_mean": 0.01,
+      "inf_ms_mean": 1.37,
+      "pre_ms_mean": 0.84,
+      "post_ms_mean": 0.15,
+      "ndet_total": 26508,
+      "worker_pids": 1,
+      "worker_threads": 1,
+      "vram_mib_total": 628.0,
+      "vram_mib_per_pid": {
+        "3378960": 628.0
+      },
+      "n_gpu_pids": 1,
+      "gpu_util_mean": 39.1
     },
     {
       "cell": "2-threads4-b1",

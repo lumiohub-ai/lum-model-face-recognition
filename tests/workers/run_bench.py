@@ -55,6 +55,9 @@ CELLS = [
     dict(cell="8-solo-b1-shm",     pool="solo",    conc=1, share="per_thread", batch=1, mode="shm"),
     dict(cell="9-threads4-b6-shm", pool="threads", conc=4, share="per_thread", batch=6, mode="shm"),
     dict(cell="10-prefork4-b6-shm", pool="prefork", conc=4, share="per_thread", batch=6, mode="shm"),
+    # solo + batch=6: isolates what batching alone is worth with zero concurrency,
+    # so B=1->B=6 gains in cells 4/5/9/10 can be separated from concurrency gains.
+    dict(cell="11-solo-b6-shm",    pool="solo",    conc=1, share="per_thread", batch=6, mode="shm"),
 ]
 SHM_NAME = "yolobench_frames"
 DEFAULT_PREFETCH = 16
