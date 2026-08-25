@@ -144,9 +144,11 @@ class ModelAliasTests(unittest.TestCase):
 
 
 class DistCoeffValidationTests(unittest.TestCase):
-    """The fisheye branch pads/truncates D to 4; the pinhole branch cannot
-    (coefficients are positional), so a wrong length must be rejected with a
-    readable error rather than a bare cv2.error from inside OpenCV."""
+    """Both models validate D and neither coerces it."""
+
+    # A standard calibration that reaches the fisheye branch via main.py's
+    # 'fisheye' default — the case that used to be sliced to k1..k4 and warped.
+    STANDARD_5 = [-0.2, 0.05, 0.0, 0.0, 0.01]
 
     def test_pinhole_rejects_bad_dist_coeff_length(self):
         img = np.zeros((80, 120, 3), dtype=np.uint8)
@@ -162,11 +164,45 @@ class DistCoeffValidationTests(unittest.TestCase):
             with self.subTest(n=n):
                 undistort_image(img, K_PINHOLE, [0.0] * n, "pinhole")
 
-    def test_fisheye_still_coerces_short_and_long_dist_coeffs(self):
+    def test_fisheye_requires_exactly_four_dist_coeffs(self):
+        # cv2.fisheye asserts on every other length (fisheye.cpp:518).
         img = np.zeros((80, 120, 3), dtype=np.uint8)
-        for n in (2, 4, 5):
+        for n in (2, 3, 5, 8):
             with self.subTest(n=n):
-                undistort_image(img, K_FISHEYE, [0.0] * n, "fisheye")
+                with self.assertRaises(ValueError) as ctx:
+                    undistort_image(img, K_FISHEYE, [0.0] * n, "fisheye")
+                self.assertIn(str(n), str(ctx.exception))
+
+    def test_fisheye_accepts_exactly_four(self):
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        undistort_image(img, K_FISHEYE, [0.0] * 4, "fisheye")
+
+    def test_standard_calibration_is_not_reinterpreted_as_fisheye(self):
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        with self.assertRaises(ValueError):
+            undistort_image(img, K_FISHEYE, self.STANDARD_5, "fisheye")
+        undistort_image(img, K_PINHOLE, self.STANDARD_5, "pinhole")
+
+    def test_missing_dist_coeffs_is_rejected(self):
+        # np.array(None) is [nan]: an all-zero remap, i.e. a black frame.
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        for model, K in (("fisheye", K_FISHEYE), ("pinhole", K_PINHOLE)):
+            with self.subTest(model=model):
+                with self.assertRaises(ValueError):
+                    undistort_image(img, K, None, model)
+
+    def test_non_finite_values_are_rejected(self):
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        for bad in ([float("nan"), 0.0, 0.0, 0.0], [float("inf"), 0.0, 0.0, 0.0]):
+            with self.subTest(v=bad[0]):
+                with self.assertRaises(ValueError):
+                    undistort_image(img, K_FISHEYE, bad, "fisheye")
+
+    def test_non_finite_camera_matrix_is_rejected(self):
+        img = np.zeros((80, 120, 3), dtype=np.uint8)
+        bad_K = [[float("nan"), 0.0, 60.0], [0.0, 100.0, 40.0], [0.0, 0.0, 1.0]]
+        with self.assertRaises(ValueError):
+            undistort_image(img, bad_K, [0.0] * 4, "fisheye")
 
 
 if __name__ == "__main__":

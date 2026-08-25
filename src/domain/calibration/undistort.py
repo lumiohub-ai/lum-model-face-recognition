@@ -1,31 +1,11 @@
-"""Undistortion in the P = K convention.
+"""Undistortion in the P = K convention, shared by CaptureFrame and
+TestCalibration so the two operator-facing previews cannot diverge.
 
-P = K means undistorted output stays in the original camera matrix's scale and
-origin, rather than a re-estimated "new camera matrix" like
-`estimateNewCameraMatrixForUndistortRectify`. Both callers use it, so the two
-operator-facing previews land in the same space and cannot diverge:
-
-- `CaptureFrame`  -> `engine.py::_do_capture_frame`
-- `TestCalibration` -> `CameraCalibrator.undistort`
-
-WHAT THIS DOES NOT YET COVER — read before trusting a homography:
-
-`undistort_points` has **no runtime caller**. The live pipeline never
-undistorts: `engine.py::_do_compute_homography` fits H from the raw src_pts the
-backend sends, and `camera_engine.py::emit_positions` applies H directly to raw
-bbox coordinates. Runtime projection was deliberately left out when this module
-landed (see commit c4fd426).
-
-So the hazard is real and currently unguarded: if an operator picks src_pts off
-the *undistorted* CaptureFrame preview, H is fit in P = K space and then applied
-to raw distorted coordinates — drifting by tens of pixels. Wiring the runtime
-side (registry-cached intrinsics + a `frame_source` column recording which space
-each H was fit in) is implemented at commit 2993c6b on `bysh-human-tracking` and
-still needs porting here.
-
-Keep undistort_image and undistort_points on the same P: they are the two halves
-of that future fix, and a mismatch between them would reintroduce the drift at
-the point it is finally wired up.
+`undistort_points` has no runtime caller yet: the pipeline fits and applies
+homographies in raw pixel space. Picking src_pts off an undistorted preview
+therefore drifts by tens of pixels. The runtime side is implemented at 2993c6b
+on `bysh-human-tracking` and still needs porting; keep both functions on the
+same P so it lands cleanly.
 """
 
 from typing import List, Union
@@ -34,29 +14,41 @@ import cv2
 import numpy as np
 
 
-# cv2.undistort/undistortPoints accept only these distortion-vector lengths.
-# Anything else raises a bare cv2.error deep inside OpenCV; we fail earlier with
-# a message that names the actual length.
 _PINHOLE_D_LENGTHS = (4, 5, 8, 12, 14)
+_FISHEYE_D_LENGTHS = (4,)
 
 
 def _prepare_intrinsics(camera_matrix, dist_coeffs, model: str):
+    """Validate and shape intrinsics. Never coerces: distortion coefficients are
+    positional, so fitting one model's vector to another's length silently
+    reinterprets its values. main.py defaults the model to 'fisheye', which puts
+    a standard 5-coefficient calibration one step from being read as k1..k4.
+    Callers fall back to the raw frame on error, which is the safe outcome."""
     K = np.array(camera_matrix, dtype=np.float64).reshape(3, 3)
     is_fisheye = model == "fisheye"
+
+    if dist_coeffs is None:
+        # np.array(None) is [nan], which survives to an all-zero remap: a black
+        # frame published as a successful undistort.
+        raise ValueError(f"dist_coeffs is required for model={model!r}, got None")
+
     D = np.array(dist_coeffs, dtype=np.float64).reshape(-1, 1)
-    if is_fisheye:
-        D = D[:4].reshape(4, 1) if D.shape[0] >= 4 else np.vstack(
-            [D, np.zeros((4 - D.shape[0], 1))]
-        )
-    elif D.shape[0] not in _PINHOLE_D_LENGTHS:
-        # The fisheye branch above pads/truncates to 4; the pinhole path has no
-        # equivalent safe coercion (the coefficients are positional), so reject
-        # rather than guess. Callers fall back to the raw frame.
+
+    allowed = _FISHEYE_D_LENGTHS if is_fisheye else _PINHOLE_D_LENGTHS
+    if D.shape[0] not in allowed:
         raise ValueError(
             f"dist_coeffs for model={model!r} must have "
-            f"{' or '.join(map(str, _PINHOLE_D_LENGTHS))} coefficients, "
+            f"{' or '.join(map(str, allowed))} coefficients, "
             f"got {D.shape[0]}"
         )
+    if not np.all(np.isfinite(D)):
+        raise ValueError(
+            f"dist_coeffs for model={model!r} contains non-finite values: "
+            f"{D.ravel().tolist()}"
+        )
+    if not np.all(np.isfinite(K)):
+        raise ValueError(f"camera_matrix contains non-finite values: {K.tolist()}")
+
     return K, D, is_fisheye
 
 
