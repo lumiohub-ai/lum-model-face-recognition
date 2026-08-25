@@ -319,6 +319,20 @@ pip install -e ../lum-model-vision
 Ship a change by tagging a new version in that repo, then bumping the pin in
 [`requirements.txt`](requirements.txt).
 
+**Working with notebooks (`notebooks/`):** cell outputs (images, logs) must
+never land in git — they bloat the repo fast. This is enforced via
+[`nbstripout`](https://github.com/kynan/nbstripout) as a git clean filter, so
+outputs are stripped from what git sees while your local `.ipynb` keeps them
+for viewing. One-time setup per clone:
+
+```bash
+pip install nbstripout
+nbstripout --install --attributes .gitattributes
+```
+
+`.gitattributes` (tracked) declares the filter; the command above wires it
+into your local git config, which isn't itself versioned.
+
 ---
 
 ## Troubleshooting
@@ -337,12 +351,12 @@ Ship a change by tagging a new version in that repo, then bumping the pin in
 
 ## Architecture
 
-A high-level summary lives below. The full internal architecture — components, deployment topology, data flows, and database schema with diagrams — is in **[`docs/SERVICE_ARCHITECTURE.md`](docs/SERVICE_ARCHITECTURE.md)**. For the cross-repo (Backend / Frontend / AI) view, see **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
+A high-level summary lives below. The full internal architecture — components, deployment topology, data flows, and database schema with diagrams — is in **[`docs/SERVICE_ARCHITECTURE.md`](docs/SERVICE_ARCHITECTURE.md)**. For the cross-repo (Backend / Frontend / AI) view, see **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**. For what each model takes in and returns, see **[`docs/MODELS.md`](docs/MODELS.md)**.
 
 ### Components (one-liner each)
 
 - **Pipeline** — `SmartOfficeEngine` orchestrates per-camera workers and a shared GPU inference worker.
-- **Models** ([`lum-model-vision`](https://github.com/lumiohub-ai/lum-model-vision), external) — YOLO (person detection), InsightFace (face detection + ArcFace embeddings), BoT-SORT (tracking), OSNet (cross-camera ReID), Ollama (activity recognition).
+- **Models** ([`lum-model-vision`](https://github.com/lumiohub-ai/lum-model-vision), external) — YOLO (person detection), InsightFace (face detection + ArcFace embeddings), BoT-SORT (tracking), OSNet (cross-camera ReID), Ollama (activity recognition). Input/output contract for each is in [`docs/MODELS.md`](docs/MODELS.md).
 - **Domain** — camera calibration (`CameraCalibrator`, `HomographyRegistry`); DB-backed, so it stays application-specific rather than moving with the models above.
 - **Messaging** — Redis Streams for commands (Backend → AI), Pub/Sub for events (AI → Backend).
 - **Workers** — Celery tasks for embedding ingestion and detection persistence.
