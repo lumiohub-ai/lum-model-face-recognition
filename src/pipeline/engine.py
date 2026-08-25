@@ -96,15 +96,19 @@ class SmartOfficeEngine:
             self._owns_models = True
 
         # Action recognition: the model is synchronous, so the queue and worker
-        # threads that drive it are owned here.
+        # threads that drive it are owned here. Constructed now because the
+        # camera engines need the reference; started in run(), once the
+        # AsyncLogger it uploads through exists.
         action_cfg = kwargs.get("action_recognition", {}) or {}
         self.action_worker = ActionRecognitionWorker(
             recognizer=self.models.action_recognizer,
             client_slug=client_slug,
             max_queue_size=action_cfg.get("max_queue_size", 50),
             num_workers=action_cfg.get("async_workers", 1),
+            min_crop_height=action_cfg.get("min_crop_height", 0),
+            min_crop_width=action_cfg.get("min_crop_width", 0),
+            min_crop_area=action_cfg.get("min_crop_area", 0),
         )
-        self.action_worker.start_workers()
 
         # Sync missing embeddings on startup
         self._sync_embeddings_on_startup()
@@ -187,6 +191,13 @@ class SmartOfficeEngine:
             entry_logger=self.entry_logger,
             async_queue_size=self._async_queue_size,
         )
+        # The action worker is constructed early (before models/metrics/logger
+        # exist) so it can start its threads as soon as models are ready. Wire
+        # its late-bound dependencies now that both exist — without this,
+        # action-recognition metrics stay permanently zero (LSO-66) and
+        # activity proof images are silently dropped rather than uploaded.
+        self.action_worker.set_metrics_collector(self.metrics)
+        self.action_worker.set_async_logger(self.async_logger)
 
         # One CameraWorker per camera
         self.camera_workers = self._init_camera_workers()
@@ -313,12 +324,10 @@ class SmartOfficeEngine:
         # Start async logger workers
         self.async_logger.start()
 
-        # ActionRecognitionWorker is constructed before async_logger exists
-        # (it needs the recognizer up front, this doesn't need to run until
-        # streams start) - wire it in now via the late-binding setter, or
-        # every activity proof image silently gets dropped (action_worker.py
-        # treats a None async_logger the same as a full GCS queue).
-        self.action_worker.set_async_logger(self.async_logger)
+        # Start action recognition workers (after the AsyncLogger they upload through).
+        # The late-bound async_logger/metrics wiring dev added here already happens
+        # earlier in __init__, so only the start call belongs at this point.
+        self.action_worker.start_workers()
 
         # Start camera worker threads
         for worker in self.camera_workers:
