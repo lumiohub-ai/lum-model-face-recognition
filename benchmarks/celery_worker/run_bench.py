@@ -163,6 +163,16 @@ def _lum_vision_rev() -> str:
         if not pkg_file:
             return ""
         pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(pkg_file)))
+        # A non-editable install lives under REPO/.venv, whose enclosing git
+        # worktree is THIS repo — rev-parse would happily report our own HEAD as
+        # the lum_vision revision. Ask for the worktree root and keep the answer
+        # only if it is somewhere else.
+        root = subprocess.run(["git", "-C", pkg_dir, "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+        if root.returncode != 0:
+            return ""
+        if os.path.realpath(root.stdout.strip()) == os.path.realpath(REPO):
+            return ""
         out = subprocess.run(["git", "-C", pkg_dir, "rev-parse", "HEAD"],
                              capture_output=True, text=True)
         return out.stdout.strip()
@@ -347,7 +357,9 @@ def run_cell(cell, pool, conc, share, batch, frames, total_frames, prefetch,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cells", default="", help="comma-separated cell name prefixes")
+    ap.add_argument("--cells", default="",
+                    help="comma-separated selectors: an exact cell number (1, 11) "
+                         "or a substring of the name (solo, shm)")
     ap.add_argument("--frames", type=int, default=1200, help="frames processed per cell")
     ap.add_argument("--corpus", type=int, default=200)
     ap.add_argument("--video", default=os.path.join(REPO, "cam1.mp4"))
@@ -359,7 +371,16 @@ def main():
     frames = build_corpus(args.corpus, args.video)
 
     wanted = [c.strip() for c in args.cells.split(",") if c.strip()]
-    cells = [c for c in CELLS if not wanted or any(c["cell"].startswith(w) for w in wanted)]
+
+    def selected(name: str) -> bool:
+        # Cell names are "<number>-<rest>". A bare number matches that leading
+        # segment exactly — plain startswith makes "--cells 1" also run 10 and
+        # 11. Anything else matches as a substring, since no cell name *starts*
+        # with a word ("--cells solo" would otherwise select nothing).
+        head = name.split("-", 1)[0]
+        return any(w == head if w.isdigit() else w in name for w in wanted)
+
+    cells = [c for c in CELLS if not wanted or selected(c["cell"])]
 
     meta = {
         "repo_rev": subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO,
@@ -421,9 +442,6 @@ def main():
               f"{r.get('mode','path'):<5} {r['tasks_per_s']:>8} {r['frames_per_s']:>9} "
               f"{r['lat_ms_p50']:>7} {r['read_ms_mean']:>6} {r['vram_mib_total']:>9} "
               f"{r['n_gpu_pids']:>5} {str(r['gpu_util_mean']):>6}")
-    if shm is not None:
-        shm.close()
-        shm.unlink()
 
     print(f"\nwrote {path}")
 

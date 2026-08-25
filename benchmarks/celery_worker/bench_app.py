@@ -25,7 +25,7 @@ app = Celery(
     "yolobench",
     broker=BROKER,
     backend=BACKEND,
-    include=["workers.bench_tasks"],
+    include=["celery_worker.bench_tasks"],
 )
 
 app.conf.update(
