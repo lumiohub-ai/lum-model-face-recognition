@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.0 (2026-08-25)
+
+## What's Changed
+* LSO-100: Celery worker-per-model benchmark harness by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/87
+* feat(action-recognition): skip crops too small for the VLM to read (LSO-68) by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/89
+* fix(calibration): honor the undistort flag in CaptureFrame by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/88
+* fix(detection): derive branch_id on every DetectionRepository write by @azamjon-xusanov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/91
+* Promote dev → main: Celery benchmark (LSO-100), undistort fixes (LSO-26), action crop gating (LSO-68), branch_id on detection writes (LSO-145) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/92
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.4.0...v0.5.0
+
 ## v0.4.0 (2026-08-24)
 
 ## What's Changed
