@@ -29,6 +29,30 @@ class DetectionRepository:
         self.schema = schema_name_for(client_slug)
         self._db = DatabaseConfig.get_instance()
 
+    def _derive_branch_id(self, conn, camera_id: Optional[int], user_id: Optional[int] = None) -> Optional[int]:
+        """Resolve the branch a detection happened at, from the camera it
+        was seen on or (failing that) the user it was attributed to — same
+        precedence as FastAPI's `attendance/service.py::async_create`. This
+        repository's direct-SQL writes bypass that service entirely, so
+        they never got that logic; every write path here needs its own
+        call to this.
+        """
+        if camera_id is not None:
+            row = conn.execute(
+                text(f"SELECT branch_id FROM {self.schema}.cameras WHERE id = :camera_id"),  # nosec B608
+                {'camera_id': camera_id},
+            ).fetchone()
+            if row and row[0] is not None:
+                return row[0]
+        if user_id is not None:
+            row = conn.execute(
+                text(f"SELECT branch_id FROM {self.schema}.users WHERE id = :user_id"),  # nosec B608
+                {'user_id': user_id},
+            ).fetchone()
+            if row and row[0] is not None:
+                return row[0]
+        return None
+
     def record_attendance(
         self,
         user_id: int,
@@ -44,15 +68,17 @@ class DetectionRepository:
         """
         external_id = str(uuid.uuid4())
         with self._db.get_connection() as conn:
+            branch_id = self._derive_branch_id(conn, camera_id, user_id)
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.attendance_records
-                (external_id, user_id, camera_id, timestamp, status, proof_image_url, source)
-                VALUES (:external_id, :user_id, :camera_id, :timestamp, :status, :proof_image_url, :source)
+                (external_id, user_id, camera_id, branch_id, timestamp, status, proof_image_url, source)
+                VALUES (:external_id, :user_id, :camera_id, :branch_id, :timestamp, :status, :proof_image_url, :source)
                 RETURNING id
             """), {
                 'external_id': external_id,
                 'user_id': user_id,
                 'camera_id': camera_id,
+                'branch_id': branch_id,
                 'timestamp': timestamp,
                 'status': status.lower(),
                 'proof_image_url': proof_image_url,
@@ -81,12 +107,14 @@ class DetectionRepository:
             full_notes = f"Camera: {camera_name}" + (f"\n{notes}" if notes else '')
 
         with self._db.get_connection() as conn:
+            branch_id = self._derive_branch_id(conn, camera_id)
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.unrecognized_faces
-                (detection_time, status, user_status, image_url, notes, created_at, updated_at)
-                VALUES (:detection_time, :status, :user_status, :image_url, :notes, :created_at, :updated_at)
+                (branch_id, detection_time, status, user_status, image_url, notes, created_at, updated_at)
+                VALUES (:branch_id, :detection_time, :status, :user_status, :image_url, :notes, :created_at, :updated_at)
                 RETURNING id
             """), {
+                'branch_id': branch_id,
                 'detection_time': timestamp,
                 'status': 'pending',
                 'user_status': status.lower() if status else None,
@@ -117,15 +145,17 @@ class DetectionRepository:
         """
         external_id = str(uuid.uuid4())
         with self._db.get_connection() as conn:
+            branch_id = self._derive_branch_id(conn, camera_id, user_id)
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.activity_records
-                (external_id, user_id, camera_id, activity_type, timestamp, proof_image_url, confidence_score, created_at)
-                VALUES (:external_id, :user_id, :camera_id, :activity_type, :timestamp, :proof_image_url, :confidence_score, :created_at)
+                (external_id, user_id, camera_id, branch_id, activity_type, timestamp, proof_image_url, confidence_score, created_at)
+                VALUES (:external_id, :user_id, :camera_id, :branch_id, :activity_type, :timestamp, :proof_image_url, :confidence_score, :created_at)
                 RETURNING id
             """), {
                 'external_id': external_id,
                 'user_id': user_id,
                 'camera_id': camera_id,
+                'branch_id': branch_id,
                 'activity_type': activity_type,
                 'timestamp': timestamp,
                 'proof_image_url': proof_image_url,
@@ -137,10 +167,11 @@ class DetectionRepository:
 
             conn.execute(text(f"""
                 INSERT INTO {self.schema}.user_current_activities
-                (user_id, camera_id, activity_type, detected_at, confidence_score, updated_at)
-                VALUES (:user_id, :camera_id, :activity_type, :detected_at, :confidence_score, :updated_at)
+                (user_id, camera_id, branch_id, activity_type, detected_at, confidence_score, updated_at)
+                VALUES (:user_id, :camera_id, :branch_id, :activity_type, :detected_at, :confidence_score, :updated_at)
                 ON CONFLICT (user_id) DO UPDATE SET
                     camera_id = EXCLUDED.camera_id,
+                    branch_id = EXCLUDED.branch_id,
                     activity_type = EXCLUDED.activity_type,
                     detected_at = EXCLUDED.detected_at,
                     confidence_score = EXCLUDED.confidence_score,
@@ -148,6 +179,7 @@ class DetectionRepository:
             """), {
                 'user_id': user_id,
                 'camera_id': camera_id,
+                'branch_id': branch_id,
                 'activity_type': activity_type,
                 'detected_at': timestamp,
                 'confidence_score': confidence,
@@ -245,12 +277,14 @@ class DetectionRepository:
             Record ID
         """
         with self._db.get_connection() as conn:
+            branch_id = self._derive_branch_id(conn, camera_id, user_id)
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.user_locations
-                (user_id, camera_id, detected_at, status, updated_at)
-                VALUES (:user_id, :camera_id, :detected_at, :status, :updated_at)
+                (user_id, camera_id, branch_id, detected_at, status, updated_at)
+                VALUES (:user_id, :camera_id, :branch_id, :detected_at, :status, :updated_at)
                 ON CONFLICT (user_id) DO UPDATE SET
                     camera_id = EXCLUDED.camera_id,
+                    branch_id = EXCLUDED.branch_id,
                     detected_at = EXCLUDED.detected_at,
                     status = EXCLUDED.status,
                     updated_at = EXCLUDED.updated_at
@@ -258,6 +292,7 @@ class DetectionRepository:
             """), {
                 'user_id': user_id,
                 'camera_id': camera_id,
+                'branch_id': branch_id,
                 'detected_at': timestamp,
                 'status': status.lower(),
                 'updated_at': timestamp,

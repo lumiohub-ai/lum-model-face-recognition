@@ -26,11 +26,28 @@ action_recognition:
   check_interval_seconds: 60  # Check each person every N seconds
   max_queue_size: 50  # Maximum queued inference requests
   async_workers: 1  # Number of background worker threads for inference
+
   # Ollama unloads an idle model after ~5min; reloading gemma3:4b costs ~28s on
   # its own, so 30s left no margin for the actual vision request. A cancelled
   # load also leaves the model unloaded, so a short timeout compounds into
-  # repeated cold starts.
+  # repeated cold starts. Don't lower this without re-measuring the cold start.
   inference_timeout: 60  # Timeout for Ollama API calls in seconds
+
+  # Skip crops too small for the VLM to read. A distant figure a few dozen
+  # pixels tall carries no readable posture, so the model answers from the
+  # background instead — a wrong activity that still costs a full inference of a
+  # 4B-parameter model plus a GCS proof upload. Values come from the eval set in
+  # notebooks/eval/action: the smallest crop a human could still label was 207px
+  # tall, so these sit just under it. 0 disables a given check.
+  #
+  # min_crop_area stays 0: the crops are upper-body, median aspect h/w 1.19, so
+  # any area threshold tight enough to matter is already implied by the height
+  # gate. A non-zero value only rejects narrow crops, which is min_crop_width's
+  # job — 30000 would have skipped a 336x133 crop the eval set labels readable.
+  min_crop_height: 200
+  min_crop_width: 80
+  min_crop_area: 0
+
   # Supported actions with backend mapping and descriptions for VLM prompt
   actions:
     sleeping:
@@ -45,9 +62,6 @@ action_recognition:
     talking with someone:
       backend_type: talking
       description: "facing another person, gesturing, or in conversation"
-    not_focusing:
-      backend_type: not_focusing
-      description: "distracted, looking away from work, wandering attention"
     idle:
       backend_type: unknown
       description: "standing still, sitting without doing anything specific, looking around"

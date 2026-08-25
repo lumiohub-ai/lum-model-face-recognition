@@ -238,19 +238,11 @@ class CameraCalibrator:
         dist_coeffs,
         model: str = "fisheye",
     ) -> np.ndarray:
-        """Undistort *image* using the provided calibration parameters."""
-        K = np.array(camera_matrix, dtype=np.float64)
-        D = np.array(dist_coeffs, dtype=np.float64)
-        h, w = image.shape[:2]
+        """Undistort *image* using the provided calibration parameters.
 
-        if model == "fisheye":
-            new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
-                K, D, (w, h), np.eye(3), balance=0.0
-            )
-            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
-                K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2
-            )
-            return cv2.remap(image, map1, map2, interpolation=cv2.INTER_LINEAR)
-        else:
-            new_K, _ = cv2.getOptimalNewCameraMatrix(K, D, (w, h), 1, (w, h))
-            return cv2.undistort(image, K, D, None, new_K)
+        Delegates to the shared P = K helper so this always matches the
+        runtime point-undistortion path — see domain.calibration.undistort.
+        """
+        from .undistort import undistort_image
+
+        return undistort_image(image, camera_matrix, dist_coeffs, model)

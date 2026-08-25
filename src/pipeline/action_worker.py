@@ -40,6 +40,9 @@ class ActionRecognitionWorker:
         num_workers: int = 1,
         async_logger=None,
         metrics_collector=None,
+        min_crop_height: int = 0,
+        min_crop_width: int = 0,
+        min_crop_area: int = 0,
     ):
         """Initialize the worker pool.
 
@@ -51,6 +54,9 @@ class ActionRecognitionWorker:
             async_logger: Optional AsyncLogger for off-thread GCS proof upload.
                           May also be supplied later via set_async_logger().
             metrics_collector: Optional MetricsCollector for inference stats
+            min_crop_height: Skip crops shorter than this, in pixels (0 disables)
+            min_crop_width: Skip crops narrower than this, in pixels (0 disables)
+            min_crop_area: Skip crops smaller than this, in pixels² (0 disables)
         """
         self.recognizer = recognizer
         self.client_slug = client_slug
@@ -58,6 +64,9 @@ class ActionRecognitionWorker:
         self.num_workers = num_workers
         self._async_logger = async_logger
         self._metrics = metrics_collector
+        self.min_crop_height = min_crop_height
+        self.min_crop_width = min_crop_width
+        self.min_crop_area = min_crop_area
 
         self.inference_queue: queue.Queue = queue.Queue(maxsize=max_queue_size)
         self.result_callbacks: Dict[str, Callable] = {}
@@ -72,6 +81,7 @@ class ActionRecognitionWorker:
         self.total_queued = 0
         self.total_dropped = 0
         self.total_posted = 0
+        self.total_too_small = 0
 
     @property
     def enabled(self) -> bool:
@@ -334,6 +344,39 @@ class ActionRecognitionWorker:
                 logger.warning("GCS queue full — recording activity without proof image")
             fire(None)
 
+    def _crop_too_small(self, image: Optional[np.ndarray]) -> bool:
+        """Whether a crop is too small to be worth an inference.
+
+        A distant figure a few dozen pixels tall carries no readable posture,
+        so the VLM answers from the background instead — a wrong activity that
+        still costs a full inference and a GCS proof upload. The defaults in
+        config.yaml sit just under the smallest crop the eval set in
+        notebooks/eval/action could still label (207px tall).
+        """
+        if image is None:
+            return True
+        if not (self.min_crop_height or self.min_crop_width or self.min_crop_area):
+            return False
+
+        height, width = image.shape[:2]
+        return (
+            height < self.min_crop_height
+            or width < self.min_crop_width
+            or height * width < self.min_crop_area
+        )
+
+    def should_skip_small(self, image: Optional[np.ndarray]) -> bool:
+        """``_crop_too_small``, counting the skip. Callers gate on this.
+
+        Deliberately side-effecting: callers check the size *before* reserving
+        the per-identity throttle slot, so this is the only place that sees
+        every skipped crop and can keep the counter honest.
+        """
+        if self._crop_too_small(image):
+            self.total_too_small += 1
+            return True
+        return False
+
     def recognize_async(
         self,
         image: np.ndarray,
@@ -353,6 +396,11 @@ class ActionRecognitionWorker:
             True if queued successfully, False if queue is full
         """
         if not self.enabled:
+            return False
+
+        # Safety net for direct callers; camera_engine gates earlier, before it
+        # reserves the throttle slot, so in the normal path this never fires.
+        if self.should_skip_small(image):
             return False
 
         try:
@@ -387,6 +435,7 @@ class ActionRecognitionWorker:
             total_queued=self.total_queued,
             total_dropped=self.total_dropped,
             total_posted=self.total_posted,
+            total_too_small=self.total_too_small,
             pending_callbacks=len(self.result_callbacks),
             tracked_identities=len(self._last_check),
         )
