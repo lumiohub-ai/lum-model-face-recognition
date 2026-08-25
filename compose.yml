@@ -67,7 +67,10 @@ services:
     networks:
       - person-tracking-network
     ports:
-      - "${SO_METRICS_PORT:-8765}:8765"
+      # container-side must track SO_METRICS_PORT too: the app itself binds
+      # to that port internally (src/config/settings.py), not a fixed 8765 —
+      # a hardcoded container-side port here silently maps to nothing.
+      - "${SO_METRICS_PORT:-8765}:${SO_METRICS_PORT:-8765}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
