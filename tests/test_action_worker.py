@@ -397,7 +397,7 @@ class StatsTests(unittest.TestCase):
 # Values shipped in configs/config.yaml. Pinned here so a config edit that
 # forgets these tests shows up as a failure rather than silently changing
 # which crops reach the VLM.
-SHIPPED_GATE = dict(min_crop_height=200, min_crop_width=80, min_crop_area=30000)
+SHIPPED_GATE = dict(min_crop_height=200, min_crop_width=80, min_crop_area=0)
 
 
 def crop(h, w):
@@ -434,12 +434,19 @@ class CropSizeGateTests(unittest.TestCase):
         self.assertFalse(worker.should_skip_small(crop(200, 80)))   # 200*80 == 16000
         self.assertTrue(worker.should_skip_small(crop(199, 80)))
 
-    def test_area_gate_rejects_a_crop_that_passes_both_dimensions(self):
-        # The real edge case in the shipped defaults: 200x80 clears
-        # min_crop_height and min_crop_width, but 16000 < min_crop_area 30000.
+    def test_area_gate_is_off_by_default(self):
+        # The eval crops are upper-body (median aspect h/w 1.19), so any area
+        # threshold tight enough to bite is already implied by min_crop_height.
+        # A non-zero value only rejects narrow crops -- min_crop_width's job --
+        # and 30000 would have skipped this 336x133 crop the eval set labels
+        # readable.
         worker = build(**SHIPPED_GATE)
-        self.assertTrue(worker.should_skip_small(crop(200, 80)))
-        self.assertFalse(worker.should_skip_small(crop(300, 100)))  # 30000 area
+        self.assertFalse(worker.should_skip_small(crop(336, 133)))
+
+    def test_area_gate_still_works_when_configured(self):
+        worker = build(min_crop_height=0, min_crop_width=0, min_crop_area=30000)
+        self.assertTrue(worker.should_skip_small(crop(200, 80)))     # 16000
+        self.assertFalse(worker.should_skip_small(crop(300, 100)))   # 30000
 
     def test_counter_increments_once_per_skipped_crop(self):
         worker = build(**SHIPPED_GATE)

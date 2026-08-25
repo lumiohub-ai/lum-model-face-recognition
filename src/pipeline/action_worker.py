@@ -349,11 +349,9 @@ class ActionRecognitionWorker:
 
         A distant figure a few dozen pixels tall carries no readable posture,
         so the VLM answers from the background instead — a wrong activity that
-        still costs a full inference and a GCS proof upload. The eval set in
-        notebooks/eval/action bears this out: the crops a human could confidently
-        label were a median 475px tall, while the ones left as "unsure" were
-        262px and had lower detection confidence. The defaults in config.yaml sit
-        just under the smallest crop that was still labelable (207px).
+        still costs a full inference and a GCS proof upload. The defaults in
+        config.yaml sit just under the smallest crop the eval set in
+        notebooks/eval/action could still label (207px tall).
         """
         if image is None:
             return True
