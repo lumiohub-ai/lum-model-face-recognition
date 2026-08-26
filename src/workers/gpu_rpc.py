@@ -47,20 +47,30 @@ future caller to read a field from what is, by the time it arrives, already a
 stale snapshot. The server-side handler projects the object down to that one
 field before it ever reaches the wire.
 
-The other four are called today with their return value ignored — camera_
-engine.py never branches on them — so they are one-way (fire-and-forget):
-sending never blocks a camera frame, and a dropped one-way call degrades
-silently to "this camera's view of identity state is very slightly behind,"
-which is what already happens today whenever the periodic validator or
-another camera's thread wins a race on the same unlocked dict (that races
-LSO-137 has now closed in-process, but a lost one-way RPC message reopens the
-same class of staleness across the process boundary — acceptable for Stage 1,
-called out here so it isn't mistaken for solved).
+The rest are called today with their return value ignored — neither
+camera_engine.py nor PersonTracker branches on them — so they are one-way
+(fire-and-forget): sending never blocks a camera frame, and a dropped one-way
+call degrades silently to "this camera's view of identity state is very
+slightly behind," which is what already happens today whenever the periodic
+validator or another camera's thread wins a race on the same unlocked dict
+(that race LSO-137 has now closed in-process, but a lost one-way RPC message
+reopens the same class of staleness across the process boundary — acceptable
+for Stage 1, called out here so it isn't mistaken for solved).
 
   - on_face_detected(camera_id, local_track_id, quality=0.0, recognized=False, identity=None) -> None
   - on_face_not_visible(camera_id, local_track_id)                                             -> None
   - update_global_track_identity(global_id, identity, locked=True)                              -> bool (ignored)
   - reassign_local_track(camera_id, local_track_id, new_global_id)                              -> bool (ignored)
+  - on_track_created(camera_id, local_track_id, bbox=None, frame_num=0)                         -> None
+  - on_track_update(camera_id, local_track_id)                                                  -> None
+  - on_track_removed(camera_id, local_track_id, track_history=None, total_frames=0)             -> int | None (ignored)
+
+The last four are called from `PersonTracker`, not `CameraEngine` — found by
+tracing PersonTracker's own `global_track_manager` constructor argument, a
+second direct holder of the reference besides CameraEngine's. `PersonTracker`
+also calls `global_id_generator.get_next_id()` directly; that is a *different*
+object (`GlobalTrackIDGenerator`, an in-process `threading.Lock` counter) and
+a different fix — Redis `INCR`, not this RPC — tracked separately, not here.
 """
 
 from __future__ import annotations
@@ -100,6 +110,9 @@ _ONE_WAY_METHODS = frozenset(
         "on_face_not_visible",
         "update_global_track_identity",
         "reassign_local_track",
+        "on_track_created",
+        "on_track_update",
+        "on_track_removed",
     }
 )
 
