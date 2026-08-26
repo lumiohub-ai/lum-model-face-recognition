@@ -88,6 +88,8 @@ def send_to_dlq(task_name: str, task_id: str, args: tuple, kwargs: dict,
         # Determine DLQ based on task queue
         if 'embedding' in task_name.lower():
             dlq_key = 'dlq:embeddings'
+        elif 'camera' in task_name.lower():
+            dlq_key = 'dlq:camera_frames'
         elif 'detection' in task_name.lower():
             dlq_key = 'dlq:detections'
         else:

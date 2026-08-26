@@ -35,6 +35,19 @@ _SLOT_NAME_PREFIX = "camframe"
 _ATTACHED: Dict[str, shared_memory.SharedMemory] = {}
 _ATTACHED_LOCK = threading.Lock()
 
+# Producer-side registry: block name -> the live slot object that owns it,
+# for readers running IN THE PRODUCER'S OWN PROCESS. This is not a
+# hypothetical: the GpuWorkerRpcServer (gpu_worker_rpc.py) runs in the main
+# process — the same process whose CameraWorker threads own the frame slots —
+# so its reads would otherwise go through _attach_fresh, whose
+# resource_tracker.unregister would delete the PRODUCER'S OWN tracker entry
+# for the block (the tracker keys by name, one entry per process): a spurious
+# KeyError at clean shutdown, and worse, no /dev/shm cleanup if this process
+# crashes — the exact leak the tracker exists to prevent. A same-process read
+# instead goes straight to the owning slot's existing mapping: no second
+# attach, no unregister, and faster.
+_LOCAL_SLOTS: Dict[str, object] = {}
+
 
 def _slot_name(camera_id: int) -> str:
     return f"{_SLOT_NAME_PREFIX}_{camera_id}"
@@ -66,6 +79,8 @@ class CameraFrameSlot:
         self._shm: Optional[shared_memory.SharedMemory] = None
         self._shape: Optional[Tuple[int, int, int]] = None
         self._seq = 0
+        with _ATTACHED_LOCK:
+            _LOCAL_SLOTS[self._name] = self
 
     def _ensure_capacity(self, shape: Tuple[int, int, int]) -> None:
         if self._shm is not None and self._shape == shape:
@@ -121,17 +136,28 @@ class CameraFrameSlot:
         )
 
     def _release(self) -> None:
-        if self._shm is not None:
-            self._shm.close()
-            try:
-                self._shm.unlink()
-            except FileNotFoundError:
-                pass
-            self._shm = None
-            self._shape = None
+        # Serialised against same-process readers (the _LOCAL_SLOTS fast
+        # path in attach_and_read) via _ATTACHED_LOCK: releasing this
+        # mapping while such a reader's temporary view is still copying
+        # from it raises BufferError in THIS thread (a memoryview with live
+        # exports refuses to release) — turning a benign read race into a
+        # producer-side crash on reshape/close. Cross-process readers are
+        # unaffected either way; they hold their own mapping.
+        with _ATTACHED_LOCK:
+            if self._shm is not None:
+                self._shm.close()
+                try:
+                    self._shm.unlink()
+                except FileNotFoundError:
+                    pass
+                self._shm = None
+                self._shape = None
 
     def close(self) -> None:
         """Release the slot. Call when the camera is removed."""
+        with _ATTACHED_LOCK:
+            if _LOCAL_SLOTS.get(self._name) is self:
+                del _LOCAL_SLOTS[self._name]
         self._release()
 
 
@@ -195,6 +221,17 @@ def attach_and_read(handle: FrameHandle) -> Optional[np.ndarray]:
     nbytes = int(np.prod(shape))
 
     with _ATTACHED_LOCK:
+        local_slot = _LOCAL_SLOTS.get(name)
+        if local_slot is not None:
+            # Same-process fast path — see _LOCAL_SLOTS. The copy is a
+            # single expression so its temporary view releases its buffer
+            # export before this lock does; _release() takes the same lock,
+            # which is what makes a concurrent reshape/close safe here.
+            local_shm = getattr(local_slot, "_shm", None)
+            if local_shm is None or local_shm.size < nbytes:
+                return None
+            return np.ndarray(shape, dtype=np.uint8, buffer=local_shm.buf).copy()
+
         shm = _ATTACHED.get(name)
 
         if shm is not None and shm.size < nbytes:
@@ -298,6 +335,8 @@ class RoiBatchSlot:
         self._shm: Optional[shared_memory.SharedMemory] = None
         self._capacity: int = 0
         self._seq = 0
+        with _ATTACHED_LOCK:
+            _LOCAL_SLOTS[self._name] = self
 
     def _ensure_capacity(self, nbytes: int) -> None:
         if self._shm is not None and self._capacity >= nbytes:
@@ -369,17 +408,23 @@ class RoiBatchSlot:
         )
 
     def _release(self) -> None:
-        if self._shm is not None:
-            self._shm.close()
-            try:
-                self._shm.unlink()
-            except FileNotFoundError:
-                pass
-            self._shm = None
-            self._capacity = 0
+        # Same _ATTACHED_LOCK serialisation as CameraFrameSlot._release,
+        # for the same BufferError-on-reshape/close reason.
+        with _ATTACHED_LOCK:
+            if self._shm is not None:
+                self._shm.close()
+                try:
+                    self._shm.unlink()
+                except FileNotFoundError:
+                    pass
+                self._shm = None
+                self._capacity = 0
 
     def close(self) -> None:
         """Release the slot. Call when the camera is removed."""
+        with _ATTACHED_LOCK:
+            if _LOCAL_SLOTS.get(self._name) is self:
+                del _LOCAL_SLOTS[self._name]
         self._release()
 
 
@@ -402,6 +447,28 @@ def attach_and_read_roi_batch(
     needed = max(r.offset + int(np.prod((r.height, r.width, r.channels))) for r in handle.rois)
 
     with _ATTACHED_LOCK:
+        local_slot = _LOCAL_SLOTS.get(name)
+        if local_slot is not None:
+            # Same-process fast path — see _LOCAL_SLOTS and the matching
+            # block in attach_and_read. Each copy is a single expression so
+            # no view outlives its statement; _release() takes this same
+            # lock, making a concurrent reallocation/close safe.
+            local_shm = getattr(local_slot, "_shm", None)
+            if local_shm is None or local_shm.size < needed:
+                return None
+            return [
+                (
+                    r.track_id,
+                    np.ndarray(
+                        (r.height, r.width, r.channels),
+                        dtype=np.uint8,
+                        buffer=local_shm.buf,
+                        offset=r.offset,
+                    ).copy(),
+                )
+                for r in handle.rois
+            ]
+
         shm = _ATTACHED.get(name)
 
         if shm is not None and shm.size < needed:

@@ -206,6 +206,75 @@ class RoiBatchSlotTests(unittest.TestCase):
         self.assertEqual(len(closed_checks), 1)
 
 
+class SameProcessReadTests(unittest.TestCase):
+    """Reads in the PRODUCER'S OWN process - not a degenerate test setup but
+    the real deployment path: GpuWorkerRpcServer runs in the main process,
+    the same process whose CameraWorker threads own the slots. These reads
+    must take the _LOCAL_SLOTS fast path (straight from the owning slot's
+    mapping) rather than _attach_fresh, whose resource_tracker.unregister
+    would delete the producer's own tracker entry - a KeyError at clean
+    shutdown and a /dev/shm leak if the process crashes."""
+
+    def test_frame_read_in_producer_process_matches(self):
+        from workers import frame_store
+
+        slot = frame_store.CameraFrameSlot(camera_id=301)
+        try:
+            frame = _random_frame(64, 48)
+            handle = slot.write(frame)
+            got = frame_store.attach_and_read(handle)
+            self.assertIsNotNone(got)
+            self.assertTrue(np.array_equal(frame, got))
+        finally:
+            slot.close()
+
+    def test_frame_read_after_local_close_returns_none(self):
+        from workers import frame_store
+
+        slot = frame_store.CameraFrameSlot(camera_id=302)
+        frame = _random_frame(32, 32)
+        handle = slot.write(frame)
+        slot.close()
+        self.assertIsNone(frame_store.attach_and_read(handle))
+
+    def test_frame_read_with_stale_oversized_handle_returns_none(self):
+        """A handle describing more bytes than the local slot currently
+        holds (produced before a shrink, read after) must be refused, not
+        read out of bounds."""
+        from workers import frame_store
+
+        slot = frame_store.CameraFrameSlot(camera_id=303)
+        try:
+            big_handle = slot.write(_random_frame(100, 100))
+            slot.write(_random_frame(10, 10))  # reallocates smaller
+            self.assertIsNone(frame_store.attach_and_read(big_handle))
+        finally:
+            slot.close()
+
+    def test_roi_batch_read_in_producer_process_matches(self):
+        from workers import frame_store
+
+        slot = frame_store.RoiBatchSlot(camera_id=304)
+        try:
+            crops = [_random_frame(20, 10), _random_frame(30, 15)]
+            handle = slot.write(crops, [7, 8])
+            got = frame_store.attach_and_read_roi_batch(handle)
+            self.assertIsNotNone(got)
+            self.assertEqual([tid for tid, _ in got], [7, 8])
+            for (tid, crop), expected in zip(got, crops):
+                self.assertTrue(np.array_equal(crop, expected))
+        finally:
+            slot.close()
+
+    def test_roi_batch_read_after_local_close_returns_none(self):
+        from workers import frame_store
+
+        slot = frame_store.RoiBatchSlot(camera_id=305)
+        handle = slot.write([_random_frame(20, 10)], [7])
+        slot.close()
+        self.assertIsNone(frame_store.attach_and_read_roi_batch(handle))
+
+
 class RoiBatchSlotValidationTests(unittest.TestCase):
     """Same-process is fine here - these exercise argument validation, not
     the cross-process shared-memory path."""

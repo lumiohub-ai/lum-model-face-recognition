@@ -9,7 +9,7 @@ Architecture (parallel multi-camera):
 
 import threading
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
 
@@ -31,7 +31,7 @@ from config import load_cameras_from_db, build_vision_config
 from pipeline.camera_engine import CameraEngine
 
 from pipeline.gpu_worker import GPUInferenceWorker
-from pipeline.camera_worker import CameraWorker
+from pipeline.camera_worker import CameraWorker, CeleryCameraProducer
 from pipeline.action_worker import ActionRecognitionWorker
 from infrastructure.async_logger import AsyncLogger
 from infrastructure.video.annotator import FrameAnnotator
@@ -202,6 +202,21 @@ class SmartOfficeEngine:
         # One CameraWorker per camera
         self.camera_workers = self._init_camera_workers()
 
+        # LSO-67 Stage 1: RPC servers so camera_frames Celery tasks can
+        # reach this process's GPUInferenceWorker and GlobalTrackManager.
+        # Constructed only when at least one camera is actually flagged
+        # (self.camera_workers contains a CeleryCameraProducer) — no socket,
+        # no listener thread, no overhead when every camera is still on the
+        # thread path, which is every deployment except this Stage 1 test.
+        self._gpu_rpc_server = None
+        self._gpu_worker_rpc_server = None
+        if any(isinstance(w, CeleryCameraProducer) for w in self.camera_workers):
+            from workers.gpu_rpc import GpuRpcServer
+            from workers.gpu_worker_rpc import GpuWorkerRpcServer
+
+            self._gpu_rpc_server = GpuRpcServer(self.models.global_track_manager)
+            self._gpu_worker_rpc_server = GpuWorkerRpcServer(self.gpu_worker)
+
         logger.debug(
             f"SmartOfficeEngine initialised: {len(self.camera_configs)} camera(s), "
             f"detect_every={self._detection_interval} frames, "
@@ -279,10 +294,37 @@ class SmartOfficeEngine:
         args.unrecognized_pitch_min = self.config.get("unrecognized_pitch_min", 0.4)
         return EntryLogger(args=args)
 
-    def _init_camera_workers(self) -> List[CameraWorker]:
-        workers = []
+    def _init_camera_workers(self) -> List[Any]:
+        # LSO-67 Stage 1: cameras listed in pipeline.celery_camera_ids get a
+        # CeleryCameraProducer (frame read + ROI + frame-skip only, then
+        # hands off via Celery) instead of a full CameraWorker. The
+        # CameraEngine built for that camera_id in _init_camera_engines is
+        # simply unused in that case — cheap to construct and skip rather
+        # than complicating that method's 1:1 zip with camera_configs for a
+        # Stage 1 flag that Stage 2 will replace with a real routing
+        # mechanism anyway.
+        celery_camera_ids = set(
+            self.config.get("pipeline", {}).get("celery_camera_ids", []) or []
+        )
+        workers: List[Any] = []
         for config, engine in zip(self.camera_configs, self.camera_engines):
             camera_id = config.get("camera_id")
+
+            if camera_id in celery_camera_ids:
+                producer = CeleryCameraProducer(
+                    camera_id=camera_id,
+                    camera_config=config,
+                    stream_handler=self.stream_manager.streams.get(camera_id),
+                    detection_interval=self._detection_interval,
+                    metrics_collector=self.metrics,
+                )
+                workers.append(producer)
+                logger.info(
+                    f"Camera {camera_id} routed to Celery (LSO-67 Stage 1) — "
+                    f"see workers.camera_tasks for its per-frame processing"
+                )
+                continue
+
             video_writer = (
                 self.stream_manager.video_writers.get(camera_id)
                 if self.save_video
@@ -320,6 +362,12 @@ class SmartOfficeEngine:
 
         # Start GPU worker thread
         self.gpu_worker.start()
+
+        # LSO-67 Stage 1: RPC servers for any camera_frames Celery tasks
+        if self._gpu_rpc_server is not None:
+            self._gpu_rpc_server.start()
+        if self._gpu_worker_rpc_server is not None:
+            self._gpu_worker_rpc_server.start()
 
         # Start async logger workers
         self.async_logger.start()
@@ -947,6 +995,12 @@ class SmartOfficeEngine:
 
         # Stop GPU worker
         self.gpu_worker.stop(timeout=5.0)
+
+        # LSO-67 Stage 1: RPC servers, if this run had any camera on Celery
+        if self._gpu_rpc_server is not None:
+            self._gpu_rpc_server.stop()
+        if self._gpu_worker_rpc_server is not None:
+            self._gpu_worker_rpc_server.stop()
 
         # Stop async logger (let queued events drain briefly)
         self.async_logger.stop(timeout=5.0)

@@ -28,6 +28,7 @@ celery = Celery(
     include=[
         'workers.embedding_tasks',
         'workers.detection_tasks',
+        'workers.camera_tasks',
     ]
 )
 
@@ -48,16 +49,20 @@ celery.conf.update(
     task_routes={
         'workers.embedding_tasks.*': {'queue': 'embeddings'},
         'workers.detection_tasks.*': {'queue': 'detections'},
+        'workers.camera_tasks.*': {'queue': 'camera_frames'},
         'detection.*': {'queue': 'detections'},
         'embedding.*': {'queue': 'embeddings'},
+        'camera.*': {'queue': 'camera_frames'},
     },
 
     # Queue definitions with DLQ support
     task_queues=(
         Queue('embeddings', exchange=default_exchange, routing_key='embeddings'),
         Queue('detections', exchange=default_exchange, routing_key='detections'),
+        Queue('camera_frames', exchange=default_exchange, routing_key='camera_frames'),
         Queue('dlq.embeddings', exchange=dlq_exchange, routing_key='dlq.embeddings'),
         Queue('dlq.detections', exchange=dlq_exchange, routing_key='dlq.detections'),
+        Queue('dlq.camera_frames', exchange=dlq_exchange, routing_key='dlq.camera_frames'),
     ),
 
     # Task execution settings

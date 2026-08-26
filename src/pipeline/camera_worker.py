@@ -11,6 +11,7 @@ Each camera gets one CameraWorker that:
 This allows N camera threads to share the GPU in one batched worker.
 """
 
+import dataclasses
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -268,3 +269,139 @@ class CameraWorker:
             frame, person_states, fps=self._fps, roi_active=bool(self.roi)
         )
         self.video_writer.write(annotated)
+
+
+class CeleryCameraProducer:
+    """LSO-67 Stage 1: the producer half of the Celery path for one flagged
+    camera (configs/config.yaml's pipeline.celery_camera_ids).
+
+    Runs CameraWorker's Steps 1-3 exactly (read frame, apply ROI, frame-skip
+    by detection_interval) — everything a Celery task cannot do itself,
+    because a task instance is stateless per call and cannot hold the
+    StreamHandler's persistent RTSP connection open the way this thread
+    does. What CameraWorker's Step 4 onward did in-process — submit to GPU,
+    track, finalize identity, log — happens in workers.camera_tasks instead,
+    in a separate OS process, which is the entire point of this migration.
+
+    Deliberately NOT a CameraWorker subclass: sharing a base class across
+    "does everything in-thread" and "reads a frame and hands off a handle"
+    would blur exactly the boundary Stage 1 exists to draw. The duplicated
+    read/ROI/frame-skip logic is 15 lines: the small, explicit copy is worth
+    more than an abstraction that would need to grow parameters to express
+    "except stop here" on one path.
+    """
+
+    def __init__(
+        self,
+        camera_id: int,
+        camera_config: Dict[str, Any],
+        stream_handler,
+        detection_interval: int = 2,
+        metrics_collector=None,
+    ):
+        self.camera_id = camera_id
+        self.camera_config = camera_config
+        self.stream_handler = stream_handler
+        self.detection_interval = max(1, detection_interval)
+        self._metrics = metrics_collector
+
+        self.roi: Optional[List[int]] = camera_config.get("roi")
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._frame_num: int = 0
+
+        self._frame_slot = None  # constructed in start(), not __init__ —
+        # see start()'s comment on why shared-memory allocation waits until
+        # the producer thread is actually about to run.
+
+        logger.debug(
+            f"CeleryCameraProducer[cam={camera_id}] created: "
+            f"detect_every={detection_interval}"
+        )
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        # Constructed here, not __init__: __init__ can run in the engine's
+        # construction thread well before this camera's thread starts (or a
+        # reinit tears down and rebuilds several CeleryCameraProducers in a
+        # row) — allocating the shared-memory slot exactly when the thread
+        # that owns its writes starts keeps the slot's lifetime tied to the
+        # thread's, matching CameraFrameSlot's single-writer assumption.
+        from workers.frame_store import CameraFrameSlot
+
+        self._frame_slot = CameraFrameSlot(self.camera_id)
+        self._running = True
+        name = f"cam-producer-{self.camera_id}"
+        self._thread = threading.Thread(target=self.run, daemon=True, name=name)
+        self._thread.start()
+        logger.info(
+            f"CeleryCameraProducer[cam={self.camera_id}] started "
+            f"(routing frames to Celery — LSO-67 Stage 1)"
+        )
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+        if self._frame_slot is not None:
+            self._frame_slot.close()
+        logger.info(f"CeleryCameraProducer[cam={self.camera_id}] stopped")
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
+
+    def run(self) -> None:
+        logger.debug(f"CeleryCameraProducer[cam={self.camera_id}] loop started")
+        while self._running:
+            try:
+                self._produce_one_frame()
+            except Exception as e:
+                logger.exception(f"CeleryCameraProducer[cam={self.camera_id}] error: {e}")
+                time.sleep(0.01)
+
+    def _produce_one_frame(self) -> None:
+        from workers.camera_tasks import process_frame_task
+
+        # ── Step 1: Read frame — identical to CameraWorker ─────────────────
+        ret, frame = self.stream_handler.read()
+        if not ret or frame is None:
+            time.sleep(0.005)
+            return
+
+        self._frame_num += 1
+
+        # ── Step 2: Apply ROI — identical to CameraWorker ──────────────────
+        if self.roi:
+            x1, y1, x2, y2 = self.roi
+            frame = frame[y1:y2, x1:x2]
+            if frame.size == 0:
+                return
+
+        # ── Step 3: Frame-skip — identical to CameraWorker ─────────────────
+        if self._frame_num % self.detection_interval != 0:
+            return
+
+        frame_num = self._frame_num
+        if self._metrics is not None:
+            self._metrics.record_frame(self.camera_id)
+
+        # ── Step 4 (new): hand off via shared memory + Celery ──────────────
+        frame_slot = self._frame_slot
+        assert frame_slot is not None  # start() always sets this before this loop runs
+        handle = frame_slot.write(frame)
+        # dataclasses.asdict, not the handle itself: celery_app.py's
+        # task_serializer='json' can't encode a FrameHandle instance —
+        # see process_frame_task's docstring for why the fix lives at this
+        # boundary rather than in the global Celery config.
+        process_frame_task.delay(
+            camera_id=self.camera_id,
+            frame_handle=dataclasses.asdict(handle),
+            frame_num=frame_num,
+        )
+        # Deliberately fire-and-forget: this producer does not wait for the
+        # task's result. Waiting here would recreate the exact synchronous
+        # blocking (camera_worker.py's Step 4 wait on get_detections) that
+        # this migration exists to remove — a slow or backlogged worker
+        # would stall frame reading for this camera, when the entire point
+        # of moving the CPU work off-thread is to let it run independently.
+

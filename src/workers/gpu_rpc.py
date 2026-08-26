@@ -78,12 +78,13 @@ from __future__ import annotations
 import os
 import pickle
 import socket
-import struct
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
+
+from workers.rpc_framing import recv_framed, send_framed
 
 DEFAULT_SOCKET_PATH = os.environ.get(
     "SO_GPU_RPC_SOCKET", "/tmp/lumiohub-gpu-rpc.sock"
@@ -116,8 +117,6 @@ _ONE_WAY_METHODS = frozenset(
     }
 )
 
-_HEADER = struct.Struct("!I")  # 4-byte big-endian length prefix
-
 
 def _format_call(method: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> str:
     """Render a call for a log line — includes kwargs, not just positional
@@ -127,27 +126,6 @@ def _format_call(method: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> 
     """
     parts = [repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()]
     return f"{method}({', '.join(parts)})"
-
-
-def _send_framed(sock: socket.socket, payload: bytes) -> None:
-    sock.sendall(_HEADER.pack(len(payload)) + payload)
-
-
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    chunks = []
-    remaining = n
-    while remaining > 0:
-        chunk = sock.recv(remaining)
-        if not chunk:
-            raise ConnectionError("socket closed before expected bytes arrived")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-
-def _recv_framed(sock: socket.socket) -> bytes:
-    (length,) = _HEADER.unpack(_recv_exact(sock, _HEADER.size))
-    return _recv_exact(sock, length)
 
 
 @dataclass(frozen=True)
@@ -229,10 +207,10 @@ class GpuRpcClient:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(self._timeout_s)
             sock.connect(self._socket_path)
-            _send_framed(sock, payload)
+            send_framed(sock, payload)
             if request.one_way:
                 return None
-            response = pickle.loads(_recv_framed(sock))
+            response = pickle.loads(recv_framed(sock))
         if isinstance(response, Exception):
             raise response
         return MethodCallResult(value=response, ok=True)
@@ -357,7 +335,7 @@ class GpuRpcServer:
     def _handle_connection(self, conn: socket.socket) -> None:
         with conn:
             try:
-                payload = _recv_framed(conn)
+                payload = recv_framed(conn)
                 request: MethodCallRequest = pickle.loads(payload)
                 response: Any = self._dispatch(request)
             except Exception as e:
@@ -368,6 +346,6 @@ class GpuRpcServer:
             if request is not None and request.one_way:
                 return  # caller isn't reading a reply — see docstring
             try:
-                _send_framed(conn, pickle.dumps(response, protocol=pickle.HIGHEST_PROTOCOL))
+                send_framed(conn, pickle.dumps(response, protocol=pickle.HIGHEST_PROTOCOL))
             except OSError:
                 pass  # client already gave up (its own timeout fired first)

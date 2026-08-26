@@ -35,8 +35,18 @@ from workers.gpu_rpc import (  # noqa: E402
 def _free_socket_path(tag: str) -> str:
     """A distinct, tag-suffixed path per test - tests run against real Unix
     sockets, and reusing one path across tests racing in the same process
-    would let one test's leftover socket answer another's client."""
-    return f"/tmp/test_gpu_rpc_{tag}_{os.getpid()}.sock"
+    would let one test's leftover socket answer another's client.
+
+    Hashes `tag` rather than embedding it verbatim: AF_UNIX's sun_path is
+    capped at ~108 bytes on Linux, and a descriptive unittest method name
+    combined with a stable prefix and a PID suffix can silently exceed
+    that — observed directly as `OSError: AF_UNIX path too long` in
+    tests/test_gpu_worker_rpc.py's identical helper, not a hypothetical.
+    """
+    import hashlib
+
+    digest = hashlib.sha1(tag.encode()).hexdigest()[:10]
+    return f"/tmp/gpurpc_{digest}_{os.getpid()}.sock"
 
 
 class FakeGlobalTrack:
