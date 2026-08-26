@@ -53,6 +53,7 @@ class GPUInferenceWorker:
         self._detection_out_queues: Dict[int, queue.Queue] = {}
         self._face_in_queues: Dict[int, queue.Queue] = {}
         self._embedding_out_queues: Dict[int, queue.Queue] = {}
+        self._face_seq: Dict[int, int] = {}
         for cam_id in self._camera_ids:
             self._make_queues(cam_id)
 
@@ -68,6 +69,7 @@ class GPUInferenceWorker:
         self._detection_out_queues[camera_id] = queue.Queue(maxsize=2)
         self._face_in_queues[camera_id] = queue.Queue(maxsize=4)
         self._embedding_out_queues[camera_id] = queue.Queue(maxsize=4)
+        self._face_seq[camera_id] = 0
 
     @property
     def camera_ids(self) -> List[int]:
@@ -96,6 +98,7 @@ class GPUInferenceWorker:
                 self._detection_out_queues,
                 self._face_in_queues,
                 self._embedding_out_queues,
+                self._face_seq,
             ):
                 d.pop(camera_id, None)
             if camera_id in self._camera_ids:
@@ -146,15 +149,58 @@ class GPUInferenceWorker:
             logger.debug(f"{op}: camera {camera_id} is no longer registered")
         return q
 
+    def _await_response(self, q: queue.Queue, seq: int, timeout: float, op: str,
+                        camera_id: int, default):
+        """Return the payload tagged *seq*, discarding anything older.
+
+        Responses are matched, not counted (LSO-138). A reply the caller gave up
+        on stays in the queue and would otherwise be served to the next request
+        forever, one frame behind — the desync is permanent because exactly one
+        response is produced and one consumed per cycle from then on.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(f"{op} timeout for camera {camera_id} seq={seq}")
+                return default
+            try:
+                got_seq, payload = q.get(timeout=remaining)
+            except queue.Empty:
+                logger.warning(f"{op} timeout for camera {camera_id} seq={seq}")
+                return default
+            if got_seq == seq:
+                return payload
+            # An earlier request's reply, orphaned by a timeout or a dropped
+            # frame. Drop it and keep waiting: that is what drains the backlog
+            # instead of carrying it forward.
+            logger.warning(
+                f"{op}: discarding stale response for camera {camera_id} "
+                f"(got seq={got_seq}, want seq={seq})"
+            )
+            if self._metrics is not None:
+                self._metrics.record_stale_response(camera_id)
+            if got_seq > seq:
+                # Newer than what we asked for: our request was evicted from the
+                # in-queue by submit_frame's drop-oldest, so no reply for it will
+                # ever come. Give up now instead of burning the whole timeout.
+                return default
+
     def submit_frame(
         self, camera_id: int, frame: np.ndarray, frame_num: int
-    ) -> None:
-        """Submit a frame for YOLO detection (non-blocking; drops oldest if full)."""
+    ) -> bool:
+        """Submit a frame for YOLO detection (non-blocking; drops oldest if full).
+
+        Returns False when the frame was dropped and no response will ever be
+        produced for it, so the caller must skip its ``get_detections`` rather
+        than consume some other frame's result.
+        """
         q = self._queue_for(self._frame_in_queues, camera_id, "submit_frame")
         if q is None:
-            return
+            return False
         try:
             q.put_nowait((frame, frame_num))
+            return True
         except queue.Full:
             # A frame is being dropped either way — count it before the
             # replacement attempt, so the counter cannot under-report if
@@ -167,46 +213,52 @@ class GPUInferenceWorker:
                 pass
             try:
                 q.put_nowait((frame, frame_num))
+                return True
             except queue.Full:
-                return
+                return False
 
     def get_detections(
-        self, camera_id: int, timeout: float = 2.0
+        self, camera_id: int, frame_num: int, timeout: float = 2.0
     ) -> List[Dict]:
-        """Block until YOLO detections are available for this camera."""
+        """Block until this camera's detections for *frame_num* are available."""
         q = self._queue_for(self._detection_out_queues, camera_id, "get_detections")
         if q is None:
             return []
-        try:
-            return q.get(timeout=timeout)
-        except queue.Empty:
-            logger.warning(f"get_detections timeout for camera {camera_id}")
-            return []
+        return self._await_response(
+            q, frame_num, timeout, "get_detections", camera_id, []
+        )
 
     def submit_faces(
         self,
         camera_id: int,
         person_rois: List[np.ndarray],
         track_ids: List[int],
-    ) -> None:
-        """Submit person ROI crops for ArcFace embedding."""
-        q = self._queue_for(self._face_in_queues, camera_id, "submit_faces")
-        if q is None:
-            return
-        q.put((person_rois, track_ids))
+    ) -> Optional[int]:
+        """Submit person ROI crops for ArcFace embedding.
+
+        Returns the sequence number to pass to ``get_embeddings``, or None if the
+        camera is no longer registered. Unlike the detection path there is no
+        caller-side id to reuse, so the worker issues one.
+        """
+        with self._queues_lock:
+            q = self._face_in_queues.get(camera_id)
+            if q is None:
+                logger.debug(f"submit_faces: camera {camera_id} is no longer registered")
+                return None
+            seq = self._face_seq[camera_id] = self._face_seq.get(camera_id, 0) + 1
+        q.put((person_rois, track_ids, seq))
+        return seq
 
     def get_embeddings(
-        self, camera_id: int, timeout: float = 2.0
+        self, camera_id: int, seq: int, timeout: float = 2.0
     ) -> Dict[int, Dict]:
-        """Block until ArcFace results are available for this camera."""
+        """Block until this camera's ArcFace results for *seq* are available."""
         q = self._queue_for(self._embedding_out_queues, camera_id, "get_embeddings")
         if q is None:
             return {}
-        try:
-            return q.get(timeout=timeout)
-        except queue.Empty:
-            logger.warning(f"get_embeddings timeout for camera {camera_id}")
-            return {}
+        return self._await_response(
+            q, seq, timeout, "get_embeddings", camera_id, {}
+        )
 
     # ── YOLO loop ─────────────────────────────────────────────────────────────
 
@@ -230,7 +282,9 @@ class GPUInferenceWorker:
                         self._detection_out_queues, cam_id, "yolo_distribute"
                     )
                     if out_q is not None:
-                        out_q.put(all_detections[i])
+                        # Echo the submitted frame_num so the waiting camera can
+                        # tell this reply from an orphaned earlier one.
+                        out_q.put((batch[cam_id][1], all_detections[i]))
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker YOLO error: {e}")
@@ -250,7 +304,7 @@ class GPUInferenceWorker:
                 crop_cam_ids: List[int] = []
                 crop_track_ids: List[int] = []
 
-                for cam_id, (rois, track_ids) in face_batch.items():
+                for cam_id, (rois, track_ids, _seq) in face_batch.items():
                     for roi, tid in zip(rois, track_ids):
                         all_crops.append(roi)
                         crop_cam_ids.append(cam_id)
@@ -271,7 +325,7 @@ class GPUInferenceWorker:
                         self._embedding_out_queues, cam_id, "arcface_distribute"
                     )
                     if out_q is not None:
-                        out_q.put(results)
+                        out_q.put((face_batch[cam_id][2], results))
 
             except Exception as e:
                 logger.exception(f"GPUInferenceWorker ArcFace error: {e}")
@@ -313,7 +367,7 @@ class GPUInferenceWorker:
     def _collect_frames(self) -> Dict[int, Tuple[np.ndarray, int]]:
         return self._collect_batch(self._frame_in_queues)
 
-    def _collect_faces(self) -> Dict[int, Tuple[List, List]]:
+    def _collect_faces(self) -> Dict[int, Tuple[List, List, int]]:
         return self._collect_batch(self._face_in_queues)
 
     # ── Inference helpers ─────────────────────────────────────────────────────

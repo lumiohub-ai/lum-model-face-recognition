@@ -149,8 +149,9 @@ class CameraWorker:
             self._metrics.record_frame(self.camera_id)
 
         # ── Step 4: Submit frame to GPU worker, wait for detections ───────────
-        self.gpu_worker.submit_frame(self.camera_id, frame, frame_num)
-        detections = self.gpu_worker.get_detections(self.camera_id)
+        if not self.gpu_worker.submit_frame(self.camera_id, frame, frame_num):
+            return
+        detections = self.gpu_worker.get_detections(self.camera_id, frame_num)
 
         # ── Step 5: CPU tracking + person ROI extraction ──────────────────────
         active_tracks, removed_tracks, person_rois = (
@@ -165,13 +166,15 @@ class CameraWorker:
             track_ids = [tid for tid, _, _o in person_rois]
             rois = [roi for _, roi, _o in person_rois]
             roi_offsets = {tid: off for tid, _, off in person_rois}
-            self.gpu_worker.submit_faces(self.camera_id, rois, track_ids)
+            face_seq = self.gpu_worker.submit_faces(self.camera_id, rois, track_ids)
+            embeddings_map = (
+                self.gpu_worker.get_embeddings(self.camera_id, face_seq)
+                if face_seq is not None
+                else {}
+            )
         else:
             roi_offsets = {}
-            # Always send a submission to keep the GPU worker synchronised
-            self.gpu_worker.submit_faces(self.camera_id, [], [])
-
-        embeddings_map = self.gpu_worker.get_embeddings(self.camera_id)
+            embeddings_map = {}
 
         # ── Step 7: CPU identity resolution ───────────────────────────────────
         events = self.camera_engine.finalize_identities(
