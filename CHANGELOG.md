@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.1 (2026-08-26)
+
+## What's Changed
+* chore(deps): bump lum-model-vision to v0.3.0 (LSO-137 locking fix) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/96
+* chore(deps): bump lum-model-vision to v0.3.0 (LSO-137 GlobalTrackMana… by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/97
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.6.0...v0.6.1
+
 ## v0.6.0 (2026-08-26)
 
 ## What's Changed
