@@ -22,7 +22,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from multiprocessing import shared_memory
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -240,3 +240,194 @@ def shared_memory_exists(name: str) -> bool:
     import os
 
     return os.path.exists(f"/dev/shm/{name}")
+
+
+_ROI_SLOT_NAME_PREFIX = "camroi"
+
+
+def _roi_slot_name(camera_id: int) -> str:
+    return f"{_ROI_SLOT_NAME_PREFIX}_{camera_id}"
+
+
+@dataclass(frozen=True)
+class RoiHandle:
+    """One crop's location within a RoiBatchHandle's packed block."""
+
+    track_id: int
+    offset: int  # byte offset into the block
+    height: int
+    width: int
+    channels: int
+
+
+@dataclass(frozen=True)
+class RoiBatchHandle:
+    """What actually travels through the Celery broker for submit_faces — no
+    pixels, same principle as FrameHandle. `rois` carries each crop's shape
+    and packed offset since, unlike frames, crops in one batch are not all
+    the same size — there is no single (height, width, channels) to put on
+    the handle itself.
+    """
+
+    camera_id: int
+    seq: int
+    rois: Tuple[RoiHandle, ...]
+
+
+class RoiBatchSlot:
+    """Producer-side owner of one camera's shared-memory ROI-batch slot.
+
+    One instance per camera, mirroring CameraFrameSlot but for `submit_faces`:
+    a single-writer, single-batch-in-flight-per-camera block, matching
+    GPUInferenceWorker.submit_faces' own one-batch-in-flight-per-camera
+    semantics (each call replaces whatever the previous seq's batch was).
+
+    All crops in one call are packed into a single contiguous block —
+    variable-size, so packed by running byte offset rather than a fixed
+    per-slot stride like CameraFrameSlot's single shape. An empty batch
+    (`write([], [])`, submit_faces' "keep synchronised" call when recognition
+    is skipped this cycle — see camera_worker.py) allocates a zero-size
+    block; the handle's empty `rois` tuple is what the reader actually
+    branches on, matching `_run_arcface_batch([])` returning `[]` for an
+    empty list without needing to inspect the block at all.
+    """
+
+    def __init__(self, camera_id: int):
+        self.camera_id = camera_id
+        self._name = _roi_slot_name(camera_id)
+        self._shm: Optional[shared_memory.SharedMemory] = None
+        self._capacity: int = 0
+        self._seq = 0
+
+    def _ensure_capacity(self, nbytes: int) -> None:
+        if self._shm is not None and self._capacity >= nbytes:
+            return
+        self._release()
+        alloc = max(nbytes, 1)  # SharedMemory requires size > 0 even for an empty batch
+        try:
+            # See CameraFrameSlot._ensure_capacity — same crashed-prior-run
+            # cleanup, same close()-before-unlink() requirement.
+            stale = shared_memory.SharedMemory(name=self._name)
+            stale.close()
+            stale.unlink()
+        except FileNotFoundError:
+            pass
+        self._shm = shared_memory.SharedMemory(
+            name=self._name, create=True, size=alloc
+        )
+        self._capacity = alloc
+        logger.debug(
+            f"RoiBatchSlot[cam={self.camera_id}]: allocated {alloc} bytes "
+            f"as '{self._name}'"
+        )
+
+    def write(
+        self, person_rois: List[np.ndarray], track_ids: List[int]
+    ) -> RoiBatchHandle:
+        """Pack `person_rois` into the slot and return a handle for the task
+        payload. Mirrors GPUInferenceWorker.submit_faces' contract: an empty
+        list is a legitimate call (keeps the sequence counter — and, over
+        RPC, the round-trip — synchronised even when this cycle skips
+        recognition), not an error.
+        """
+        if len(person_rois) != len(track_ids):
+            raise ValueError(
+                f"person_rois ({len(person_rois)}) and track_ids "
+                f"({len(track_ids)}) must be the same length"
+            )
+
+        total_bytes = sum(int(np.prod(r.shape)) for r in person_rois)
+        self._ensure_capacity(total_bytes)
+        shm = self._shm
+        assert shm is not None  # _ensure_capacity always allocates or reuses
+
+        rois: List[RoiHandle] = []
+        offset = 0
+        for roi, track_id in zip(person_rois, track_ids):
+            shape = roi.shape
+            if len(shape) != 3:
+                raise ValueError(f"expected an HxWxC crop, got shape {shape}")
+            nbytes = int(np.prod(shape))
+            view = np.ndarray(
+                shape, dtype=np.uint8, buffer=shm.buf, offset=offset
+            )
+            view[:] = roi
+            rois.append(
+                RoiHandle(
+                    track_id=track_id,
+                    offset=offset,
+                    height=shape[0],
+                    width=shape[1],
+                    channels=shape[2],
+                )
+            )
+            offset += nbytes
+
+        self._seq += 1
+        return RoiBatchHandle(
+            camera_id=self.camera_id, seq=self._seq, rois=tuple(rois)
+        )
+
+    def _release(self) -> None:
+        if self._shm is not None:
+            self._shm.close()
+            try:
+                self._shm.unlink()
+            except FileNotFoundError:
+                pass
+            self._shm = None
+            self._capacity = 0
+
+    def close(self) -> None:
+        """Release the slot. Call when the camera is removed."""
+        self._release()
+
+
+def attach_and_read_roi_batch(
+    handle: RoiBatchHandle,
+) -> Optional[List[Tuple[int, np.ndarray]]]:
+    """Worker side: map the camera's ROI-batch slot and copy out every crop
+    it names, as `(track_id, crop)` pairs in the same order `handle.rois`
+    lists them.
+
+    Returns `[]` for a legitimately empty batch (see RoiBatchSlot.write),
+    and `None` if the slot doesn't exist at all — same None-means-gone
+    convention as `attach_and_read`, so a caller can treat a missing ROI
+    slot exactly like a missing frame slot.
+    """
+    if not handle.rois:
+        return []
+
+    name = _roi_slot_name(handle.camera_id)
+    needed = max(r.offset + int(np.prod((r.height, r.width, r.channels))) for r in handle.rois)
+
+    with _ATTACHED_LOCK:
+        shm = _ATTACHED.get(name)
+
+        if shm is not None and shm.size < needed:
+            del _ATTACHED[name]
+            shm = None
+
+        if shm is None:
+            shm = _attach_fresh(name)
+            if shm is None:
+                return None
+            _ATTACHED[name] = shm
+
+        crops: List[Tuple[int, np.ndarray]] = []
+        for r in handle.rois:
+            shape = (r.height, r.width, r.channels)
+            view = np.ndarray(
+                shape, dtype=np.uint8, buffer=shm.buf, offset=r.offset
+            )
+            crops.append((r.track_id, view.copy()))
+
+    if not shared_memory_exists(name):
+        # Same post-copy re-validation as attach_and_read, and for the same
+        # reason: a producer that reallocated or closed the slot mid-read
+        # leaves the copies above reading garbage or a torn batch.
+        with _ATTACHED_LOCK:
+            _ATTACHED.pop(name, None)
+        return None
+
+    return crops

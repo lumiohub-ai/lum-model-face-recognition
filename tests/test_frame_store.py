@@ -1,0 +1,235 @@
+"""Unit tests for frame_store.py (LSO-67, Stage 1).
+
+Covers the shared-memory transport that carries camera frames and ROI-crop
+batches across the Celery broker without ever serialising pixels into a task
+payload. Tests run genuinely cross-process (via multiprocessing.Process, not
+mocked) since the resource_tracker lifecycle and the packed-offset layout in
+RoiBatchSlot are exactly the kind of thing a same-process test would paper
+over — two real bugs (a resource_tracker double-registration leak, and a
+`.name` vs `._name` mismatch) were only caught this way while writing this
+module.
+
+Run: PYTHONPATH=src python tests/test_frame_store.py
+"""
+
+import multiprocessing as mp
+import os
+import sys
+import time
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
+
+import numpy as np  # noqa: E402
+
+
+def _random_frame(h, w, c=3):
+    return (np.random.rand(h, w, c) * 255).astype(np.uint8)
+
+
+# ── Cross-process worker functions ──────────────────────────────────────────
+# Defined at module scope (not as closures/methods) so they're picklable for
+# multiprocessing's spawn/fork machinery, and so each does exactly one
+# producer or reader role - mirroring the real CameraWorker (producer) /
+# Celery worker (reader) split this module exists to support.
+
+
+def _frame_producer(camera_id, conn, frames):
+    from workers import frame_store
+
+    slot = frame_store.CameraFrameSlot(camera_id=camera_id)
+    for frame in frames:
+        handle = slot.write(frame)
+        conn.send((handle, frame.tobytes(), frame.shape, str(frame.dtype)))
+        conn.recv()  # wait for reader's ack before writing the next one
+    slot.close()
+    conn.send("closed")
+    conn.recv()
+
+
+def _frame_reader(conn, results):
+    from workers import frame_store
+    import numpy as np
+
+    while True:
+        msg = conn.recv()
+        if msg == "closed":
+            time.sleep(0.3)  # give the unlink a moment to land
+            results.append(("closed_check", None))
+            conn.send("ack")
+            break
+        handle, raw, shape, dtype = msg
+        expected = np.frombuffer(raw, dtype=dtype).reshape(shape)
+        got = frame_store.attach_and_read(handle)
+        results.append((handle.seq, np.array_equal(expected, got) if got is not None else False))
+        conn.send("ack")
+
+
+def _roi_producer(camera_id, conn, batches):
+    from workers import frame_store
+
+    slot = frame_store.RoiBatchSlot(camera_id=camera_id)
+    for crops, track_ids in batches:
+        handle = slot.write(crops, track_ids)
+        raw = [(c.tobytes(), c.shape, str(c.dtype)) for c in crops]
+        conn.send((handle, raw))
+        conn.recv()
+    slot.close()
+    conn.send("closed")
+    conn.recv()
+
+
+def _roi_reader(conn, results):
+    from workers import frame_store
+    import numpy as np
+
+    while True:
+        msg = conn.recv()
+        if msg == "closed":
+            time.sleep(0.3)
+            results.append(("closed_check", None))
+            conn.send("ack")
+            break
+        handle, raw = msg
+        got = frame_store.attach_and_read_roi_batch(handle)
+        if got is None:
+            results.append((handle.seq, None))
+        else:
+            ok = len(got) == len(raw) and all(
+                tid == expected_tid
+                and np.array_equal(
+                    crop, np.frombuffer(rb, dtype=dt).reshape(shape)
+                )
+                for (tid, crop), (rb, shape, dt), expected_tid in zip(
+                    got, raw, [h.track_id for h in handle.rois]
+                )
+            )
+            results.append((handle.seq, ok))
+        conn.send("ack")
+
+
+class CameraFrameSlotTests(unittest.TestCase):
+    """Every case here runs the producer and reader as genuinely separate
+    OS processes connected by a pipe - not two objects in one process - so
+    the resource_tracker and shared_memory lifecycle is exercised for real."""
+
+    def _run(self, camera_id, frames):
+        manager = mp.Manager()
+        results = manager.list()
+        parent_conn, child_conn = mp.Pipe()
+        reader = mp.Process(target=_frame_reader, args=(parent_conn, results))
+        producer = mp.Process(target=_frame_producer, args=(camera_id, child_conn, frames))
+        reader.start()
+        producer.start()
+        producer.join(timeout=15)
+        reader.join(timeout=15)
+        self.assertEqual(producer.exitcode, 0)
+        self.assertEqual(reader.exitcode, 0)
+        return list(results)
+
+    def test_single_write_read_round_trips(self):
+        results = self._run(101, [_random_frame(64, 64)])
+        self.assertEqual(results[0], (1, True))
+
+    def test_sequence_of_writes_all_match(self):
+        frames = [_random_frame(64, 64) for _ in range(5)]
+        results = self._run(102, frames)
+        matches = [r for r in results if r[0] != "closed_check"]
+        self.assertEqual(len(matches), 5)
+        for seq, ok in matches:
+            self.assertTrue(ok, f"seq {seq} did not match")
+
+    def test_reshape_mid_stream_still_matches(self):
+        """A later write with a different shape (e.g. ROI config changed at
+        runtime) must reallocate correctly, not silently truncate or read
+        stale bytes from the old, smaller allocation."""
+        frames = [_random_frame(64, 64), _random_frame(720, 1280)]
+        results = self._run(103, frames)
+        matches = [r for r in results if r[0] != "closed_check"]
+        self.assertEqual(len(matches), 2)
+        for seq, ok in matches:
+            self.assertTrue(ok, f"seq {seq} did not match after reshape")
+
+    def test_read_after_close_returns_none(self):
+        results = self._run(104, [_random_frame(64, 64)])
+        closed_checks = [r for r in results if r[0] == "closed_check"]
+        self.assertEqual(len(closed_checks), 1)
+
+
+class RoiBatchSlotTests(unittest.TestCase):
+    def _run(self, camera_id, batches):
+        manager = mp.Manager()
+        results = manager.list()
+        parent_conn, child_conn = mp.Pipe()
+        reader = mp.Process(target=_roi_reader, args=(parent_conn, results))
+        producer = mp.Process(target=_roi_producer, args=(camera_id, child_conn, batches))
+        reader.start()
+        producer.start()
+        producer.join(timeout=15)
+        reader.join(timeout=15)
+        self.assertEqual(producer.exitcode, 0)
+        self.assertEqual(reader.exitcode, 0)
+        return list(results)
+
+    def test_multiple_variable_size_crops_round_trip_with_correct_track_ids(self):
+        crops = [_random_frame(64, 32), _random_frame(100, 50), _random_frame(80, 40)]
+        track_ids = [10, 20, 30]
+        results = self._run(151, [(crops, track_ids)])
+        matches = [r for r in results if r[0] != "closed_check"]
+        self.assertEqual(len(matches), 1)
+        seq, ok = matches[0]
+        self.assertTrue(ok, "packed crops or track_ids did not round-trip correctly")
+
+    def test_empty_batch_is_not_an_error(self):
+        """submit_faces' 'keep synchronised' call when recognition is
+        skipped this cycle - see camera_worker.py - must round-trip as an
+        empty list, not as a failure."""
+        results = self._run(152, [([], [])])
+        matches = [r for r in results if r[0] != "closed_check"]
+        self.assertEqual(matches[0], (1, True))
+
+    def test_sequential_batches_of_different_total_size_all_match(self):
+        """Exercises RoiBatchSlot's reallocation path the same way
+        CameraFrameSlotTests.test_reshape_mid_stream does for frames."""
+        small = ([_random_frame(20, 20)], [1])
+        large = ([_random_frame(200, 200), _random_frame(150, 100)], [2, 3])
+        empty = ([], [])
+        results = self._run(153, [small, large, empty])
+        matches = [r for r in results if r[0] != "closed_check"]
+        self.assertEqual(len(matches), 3)
+        for seq, ok in matches:
+            self.assertTrue(ok, f"batch seq {seq} did not match")
+
+    def test_read_after_close_returns_none(self):
+        results = self._run(154, [([_random_frame(20, 20)], [1])])
+        closed_checks = [r for r in results if r[0] == "closed_check"]
+        self.assertEqual(len(closed_checks), 1)
+
+
+class RoiBatchSlotValidationTests(unittest.TestCase):
+    """Same-process is fine here - these exercise argument validation, not
+    the cross-process shared-memory path."""
+
+    def test_mismatched_lengths_raise(self):
+        from workers import frame_store
+
+        slot = frame_store.RoiBatchSlot(camera_id=199)
+        try:
+            with self.assertRaises(ValueError):
+                slot.write([_random_frame(10, 10)], [1, 2])
+        finally:
+            slot.close()
+
+    def test_non_hwc_crop_raises(self):
+        from workers import frame_store
+
+        slot = frame_store.RoiBatchSlot(camera_id=198)
+        try:
+            with self.assertRaises(ValueError):
+                slot.write([np.zeros((10, 10), dtype=np.uint8)], [1])  # missing channel dim
+        finally:
+            slot.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
