@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.0 (2026-08-26)
+
+## What's Changed
+* Bench/celery face detection throughput by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/94
+* fix(gpu): correlate GPU requests with their responses (LSO-138) by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/93
+* Promote dev → main: GPU request/response correlation (LSO-138) + Celery face-detection benchmark by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/95
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.5.0...v0.6.0
+
 ## v0.5.0 (2026-08-25)
 
 ## What's Changed
