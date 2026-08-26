@@ -65,7 +65,7 @@ for Stage 1, called out here so it isn't mistaken for solved).
   - on_track_update(camera_id, local_track_id)                                                  -> None
   - on_track_removed(camera_id, local_track_id, track_history=None, total_frames=0)             -> int | None (ignored)
 
-The last four are called from `PersonTracker`, not `CameraEngine` — found by
+The last three are called from `PersonTracker`, not `CameraEngine` — found by
 tracing PersonTracker's own `global_track_manager` constructor argument, a
 second direct holder of the reference besides CameraEngine's. `PersonTracker`
 also calls `global_id_generator.get_next_id()` directly; that is a *different*

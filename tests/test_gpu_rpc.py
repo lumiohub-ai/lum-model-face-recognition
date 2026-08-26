@@ -21,7 +21,10 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
 
-from workers.global_track_adapter import RemoteGlobalTrackManager  # noqa: E402
+from workers.global_track_adapter import (  # noqa: E402
+    GlobalTrackRef,
+    RemoteGlobalTrackManager,
+)
 from workers.gpu_rpc import (  # noqa: E402
     GpuRpcClient,
     GpuRpcServer,
@@ -300,6 +303,71 @@ class GpuRpcConcurrencyTests(unittest.TestCase):
                 self.assertEqual(r.value, 1000 + cam_id * 100 + 1)
         finally:
             server.stop()
+
+
+class AdapterBehaviorTests(unittest.TestCase):
+    """RemoteGlobalTrackManager exercised the way CameraEngine actually uses
+    it - added after a review caught three bugs the client/server tests
+    could not see, because they asserted on the wire format (a bare int)
+    rather than on the adapter's drop-in contract (what the call sites do
+    with the result)."""
+
+    def setUp(self):
+        self.socket_path = _free_socket_path(self._testMethodName)
+        self.manager = FakeGlobalTrackManager()
+        self.server = GpuRpcServer(self.manager, socket_path=self.socket_path)
+        self.server.start()
+        self.adapter = RemoteGlobalTrackManager(
+            GpuRpcClient(socket_path=self.socket_path, timeout_s=1.0), enabled=True
+        )
+
+    def tearDown(self):
+        self.server.stop()
+        if os.path.exists(self.socket_path):
+            os.unlink(self.socket_path)
+
+    def _down_adapter(self, tag):
+        """An adapter whose socket points at nothing - the degraded path."""
+        return RemoteGlobalTrackManager(
+            GpuRpcClient(socket_path=_free_socket_path(tag), timeout_s=0.2),
+            enabled=True,
+        )
+
+    def test_find_result_supports_the_attribute_access_camera_engine_does(self):
+        """CameraEngine reads `existing_global.global_id` off the result
+        (camera_engine.py's Global ID reassignment block) - a bare int here
+        crashes that call site with AttributeError. This is the drop-in
+        contract, asserted the way the caller exercises it."""
+        existing_global = self.adapter.find_global_track_by_identity("alice")
+        self.assertIsNotNone(existing_global)
+        self.assertEqual(existing_global.global_id, 777)
+        self.assertIsInstance(existing_global, GlobalTrackRef)
+
+    def test_find_unknown_identity_returns_none(self):
+        self.assertIsNone(self.adapter.find_global_track_by_identity("nobody"))
+
+    def test_find_on_rpc_failure_returns_none_not_a_fabricated_track(self):
+        """A negative fallback ID presented as a *found track* would make
+        CameraEngine reassign the person to it via reassign_local_track -
+        silent identity corruption. The only safe degraded answer for a
+        lookup is 'not found'."""
+        self.assertIsNone(
+            self._down_adapter("find_down").find_global_track_by_identity("alice")
+        )
+
+    def test_get_global_id_on_rpc_failure_returns_none_not_a_fabricated_id(self):
+        """The result flows into the recognized_persons payload toward the
+        backend; None ('unknown') is what the caller already handles, a
+        fabricated negative ID is not."""
+        self.assertIsNone(self._down_adapter("get_down").get_global_id(1, 1))
+
+    def test_assign_on_rpc_failure_still_returns_a_negative_local_id(self):
+        """assign_global_id is the one method where the negative fallback IS
+        the contract - the camera needs *an* ID to keep tracking with."""
+        gid = self._down_adapter("assign_down").assign_global_id(
+            camera_id=1, local_track_id=1, person_crop=None
+        )
+        self.assertLess(gid, 0)
 
 
 @unittest.skipUnless(

@@ -17,11 +17,27 @@ would conflate two unrelated fixes under one adapter.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
 
 from workers.gpu_rpc import GpuRpcClient
+
+
+@dataclass(frozen=True)
+class GlobalTrackRef:
+    """The one field CameraEngine reads off find_global_track_by_identity's
+    result (`existing_global.global_id`, camera_engine.py's "Global ID
+    reassignment" block). The real method returns a full GlobalTrack; the
+    server projects it to this int on the wire (see gpu_rpc.py), and the
+    adapter re-wraps it here so the call site's attribute access works
+    unchanged — returning the bare int instead would crash CameraEngine with
+    AttributeError on `.global_id`, breaking the drop-in contract this whole
+    module exists to keep.
+    """
+
+    global_id: int
 
 
 class RemoteGlobalTrackManager:
@@ -68,27 +84,35 @@ class RemoteGlobalTrackManager:
         return result.value
 
     def get_global_id(self, camera_id: int, local_track_id: int) -> Optional[int]:
-        # result.value is the right thing to return either way: on success
-        # it's the real global ID (or None, if this local track has none
-        # yet — a legitimate result, not a failure); on RPC failure it's the
-        # local-ID fallback's negative int. Both are valid "some ID or None"
-        # answers from this method's caller's point of view.
+        """On RPC failure this returns None ("unknown"), NOT the client's
+        negative-ID fallback. The negative fallback is only meaningful for
+        assign_global_id, whose contract is "give me an ID to use"; this
+        method's contract is "tell me what exists," and its caller
+        (camera_engine.py, building the recognized_persons payload) already
+        treats None as a legitimate answer — a fabricated negative ID would
+        instead flow to the backend as if it were a real assignment.
+        """
         result = self._client.call(
             "get_global_id", camera_id=camera_id, local_track_id=local_track_id
         )
-        return result.value
+        return result.value if result.ok else None
 
-    def find_global_track_by_identity(self, identity: str) -> Optional[int]:
-        """Returns the global_id directly, NOT a GlobalTrack object — see
-        gpu_rpc.py's module docstring for why the server already projects
-        this down before it crosses the wire. CameraEngine's only call site
-        (camera_engine.py, the "Global ID reassignment" block) reads exactly
-        `.global_id` off the real method's return value, so callers of this
-        adapter must be written the same way today's CameraEngine is: treat
-        the return value as the global ID itself, not an object to unwrap.
+    def find_global_track_by_identity(self, identity: str) -> Optional[GlobalTrackRef]:
+        """Returns a GlobalTrackRef (or None), matching how CameraEngine uses
+        the real method's GlobalTrack result: it reads `.global_id` and
+        nothing else. See GlobalTrackRef for why the bare int the server
+        sends must be re-wrapped here.
+
+        On RPC failure this returns None ("not found"), never a fallback:
+        presenting the client's negative local ID as a *found track* would
+        make CameraEngine reassign the person to that fabricated global ID
+        via reassign_local_track — silent identity corruption, the exact
+        failure mode this adapter's degraded path must never produce.
         """
         result = self._client.call("find_global_track_by_identity", identity)
-        return result.value
+        if not result.ok or result.value is None:
+            return None
+        return GlobalTrackRef(global_id=result.value)
 
     def update_global_track_identity(
         self, global_id: int, identity: str, locked: bool = True
