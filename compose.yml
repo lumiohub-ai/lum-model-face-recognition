@@ -64,6 +64,12 @@ services:
       # it on first start rather than assuming the old model volume applies.
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
+      # The two Unix RPC sockets this process serves to camera-worker. They
+      # MUST live on a volume both containers mount: `ipc:` below shares
+      # /dev/shm and the IPC namespace, not the mount namespace, so a socket
+      # under /tmp is invisible to the other container — and the clients
+      # degrade silently to "no detections" rather than failing loudly.
+      - rpc-sockets:/run/lumiohub
     networks:
       - person-tracking-network
     ports:
@@ -74,11 +80,22 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'python' > /dev/null 2>&1"]
+      # Connects to both RPC sockets rather than checking the process exists:
+      # `pgrep python` goes green the instant the interpreter starts, but the
+      # sockets only bind after model warm-up (engine.py's run()), so the
+      # workers' `depends_on: service_healthy` was gating on nothing. connect()
+      # on AF_UNIX fails with ECONNREFUSED when the file exists but nothing is
+      # listening, which a file-existence test would miss.
+      # python3, NOT python: the image installs python3.10 with no
+      # python-is-python3, so `python` here would fail forever and nothing
+      # that depends on this service would ever start.
+      test: ["CMD-SHELL", "python3 -c \"import socket;[socket.socket(socket.AF_UNIX).connect(p) for p in ('/run/lumiohub/gpu-rpc.sock','/run/lumiohub/gpu-worker-rpc.sock')]\" 2>/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # Covers model warm-up before the sockets bind. Too low and the whole
+      # stack never comes up, since three services gate on this.
+      start_period: 180s
     deploy:
       resources:
         limits:
@@ -140,15 +157,18 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ── LSO-67: per-camera CPU work (tracking, identity voting) ───────────────
-  # Previously started by hand during Stage 1 testing; without this service a
-  # `docker compose up` cannot run the pipeline end to end when any camera is
-  # listed in pipeline.celery_camera_ids.
+  # ── Per-camera CPU work: tracking and identity voting ─────────────────────
+  # Every camera's per-frame work runs here; without this service the pipeline
+  # does not process frames at all.
   #
-  # ipc: service:person-tracking is load-bearing, not incidental: frames cross
-  # to this worker through POSIX shared memory (a 720p frame costs ~15.6ms
-  # through the broker vs ~0.3ms as a handle), which requires a shared IPC
-  # namespace with the producer.
+  # Two mounts below are load-bearing, not incidental:
+  #   ipc: service:person-tracking — frames cross to this worker through POSIX
+  #     shared memory (a 720p frame costs ~15.6ms through the broker vs ~0.3ms
+  #     as a handle), which needs a shared IPC namespace with the producer.
+  #   rpc-sockets — this worker calls back into person-tracking for GPU
+  #     inference and global track IDs over Unix sockets. `ipc:` does NOT
+  #     share the mount namespace, so without this volume the sockets are
+  #     unreachable and every call degrades silently to "no detections".
   camera-worker:
     image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
@@ -162,14 +182,24 @@ services:
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
+      - rpc-sockets:/run/lumiohub
     networks:
       - person-tracking-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # --pool=solo: one process, one task at a time. The threads pool collapses
     # ~330x under this app's worker_prefetch_multiplier=1 + task_acks_late
-    # settings (measured, benchmarks/celery_worker/README.md); scale by adding
-    # replicas of this service, not by raising concurrency.
+    # settings (measured, benchmarks/celery_worker/README.md).
+    #
+    # DO NOT scale this service beyond one replica. Sticky routing does not
+    # exist yet, so a second replica would serve the same camera_id and break
+    # two things silently:
+    #   - GPUInferenceWorker._await_response correlates replies by a per-camera
+    #     seq on a shared queue. Two waiters discard each other's replies, and
+    #     its got_seq > seq early-return makes the loss permanent, not transient.
+    #   - Both replicas would create RoiBatchSlot(camera_id) under the same
+    #     shared-memory name; the second unlinks the first's block mid-flight.
+    # Scaling safely needs per-request correlation and camera-affinity routing.
     command: celery -A workers.celery_app worker -Q camera_frames -l warning --pool=solo
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
@@ -191,7 +221,7 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ── LSO-67 Stage 2: YOLO person detection ─────────────────────────────────
+  # ── YOLO person detection ─────────────────────────────────────────────────
   # Owns the YOLO model; main.py no longer loads it. Kept on its own queue so
   # a camera_frames backlog can never occupy the worker that main.py's GPU
   # loop thread is blocked waiting on — see the comment in celery_app.py.
@@ -241,7 +271,7 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ── LSO-67 Stage 2: SCRFD detection + ArcFace embedding ───────────────────
+  # ── SCRFD detection + ArcFace embedding ───────────────────────────────────
   # Owns the face models; main.py keeps only the copy EmbeddingSyncService
   # builds for its startup user sync, which is not on any per-frame path.
   #
@@ -295,6 +325,10 @@ services:
 
 volumes:
   ollama-data:
+    driver: local
+  # Holds the two Unix RPC sockets person-tracking serves to camera-worker.
+  # A volume rather than a bind mount: socket inodes stay out of the repo tree.
+  rpc-sockets:
     driver: local
 
 networks:

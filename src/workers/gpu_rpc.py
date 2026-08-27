@@ -84,8 +84,12 @@ from loguru import logger
 
 from workers.rpc_framing import recv_framed, send_framed
 
+# /run/lumiohub, not /tmp: main and the camera worker are separate containers
+# with separate /tmp, so a socket there is unreachable. compose.yml mounts a
+# shared volume here. The env override exists for tests and for pointing at a
+# deliberately-bogus path when verifying the fallback actually fires.
 DEFAULT_SOCKET_PATH = os.environ.get(
-    "SO_GPU_RPC_SOCKET", "/tmp/lumiohub-gpu-rpc.sock"
+    "SO_GPU_RPC_SOCKET", "/run/lumiohub/gpu-rpc.sock"
 )
 
 # Per detection-interval call, not per video frame — same cadence as today's
@@ -336,6 +340,14 @@ class GpuRpcServer:
                 payload = recv_framed(conn)
                 request: MethodCallRequest = pickle.loads(payload)
                 response: Any = self._dispatch(request)
+            except ConnectionError:
+                # Connected then closed without sending: the compose
+                # healthcheck probing that we are listening, or a client whose
+                # timeout fired mid-handshake. Not exception-worthy — logging
+                # a stack trace every probe would train readers to skim past
+                # the one that matters.
+                logger.debug("GpuRpcServer: connection closed before a request arrived")
+                return
             except Exception as e:
                 logger.exception(f"GpuRpcServer: request failed: {e}")
                 response = e

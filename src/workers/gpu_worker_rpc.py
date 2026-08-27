@@ -59,8 +59,10 @@ from loguru import logger
 from workers import frame_store
 from workers.rpc_framing import recv_framed, send_framed
 
+# /run/lumiohub, not /tmp — see gpu_rpc.py's note: separate containers have
+# separate /tmp, so the socket must live on a shared volume.
 DEFAULT_SOCKET_PATH = os.environ.get(
-    "SO_GPU_WORKER_RPC_SOCKET", "/tmp/lumiohub-gpu-worker-rpc.sock"
+    "SO_GPU_WORKER_RPC_SOCKET", "/run/lumiohub/gpu-worker-rpc.sock"
 )
 
 # The server's own worst case is GPUInferenceWorker.get_detections/
@@ -254,6 +256,13 @@ class GpuWorkerRpcServer:
             try:
                 kind, request = pickle.loads(recv_framed(conn))
                 response: Any = self._dispatch(kind, request)
+            except ConnectionError:
+                # Health probe or an abandoned client — see GpuRpcServer's
+                # matching branch for why this is debug, not exception.
+                logger.debug(
+                    "GpuWorkerRpcServer: connection closed before a request arrived"
+                )
+                return
             except Exception as e:
                 logger.exception(f"GpuWorkerRpcServer: request failed: {e}")
                 response = e
