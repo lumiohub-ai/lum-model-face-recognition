@@ -291,17 +291,26 @@ class MDAManager:
 def _warm_up_models(models) -> None:
     """Eagerly load the models this process actually runs.
 
-    Replaces `ModelFactory.initialize_all()`, which touches every model
-    including `person_detector` — and as of LSO-67 Stage 2 that one belongs
-    to the `yolo` Celery worker, not here. Since ModelFactory's properties
-    are lazy, the omission below is the whole mechanism: never touching
-    `models.person_detector` in this process means YOLO never loads in it.
+    Replaces `ModelFactory.initialize_all()`, which touches every model —
+    including `person_detector` and `face_detector`, both of which belong to
+    their own Celery workers as of LSO-67 Stage 2. Since ModelFactory's
+    properties are lazy, the omissions below are the whole mechanism: never
+    touching those two in this process means neither model loads in it.
 
-    Everything else is still loaded up front, so startup timing for the face
-    path and tracking is unchanged; only YOLO's load moves to the worker.
+    What is still loaded here genuinely runs here: `face_matcher` does numpy
+    similarity against the embedding gallery (no GPU model),
+    `global_track_manager` owns the cross-camera ReID state, and
+    `action_recognizer` talks to Ollama over HTTP.
+
+    Note this does NOT make the process face-model-free: EmbeddingSyncService
+    builds its own FaceDetector for the startup user sync (engine.py). That
+    copy is off the per-frame path but stays resident — see the plan's
+    decision #5.
     """
-    logger.info("Warming up main-process models (YOLO excluded — runs in its own worker)...")
-    _ = models.face_detector
+    logger.info(
+        "Warming up main-process models "
+        "(YOLO and face inference excluded — they run in their own workers)..."
+    )
     if models.embedding_provider is not None:
         _ = models.face_matcher
     _ = models.action_recognizer

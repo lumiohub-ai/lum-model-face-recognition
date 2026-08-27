@@ -30,6 +30,7 @@ celery = Celery(
         'workers.detection_tasks',
         'workers.camera_tasks',
         'workers.yolo_tasks',
+        'workers.face_tasks',
     ]
 )
 
@@ -70,10 +71,12 @@ celery.conf.update(
         'workers.detection_tasks.*': {'queue': 'detections'},
         'workers.camera_tasks.*': {'queue': 'camera_frames'},
         'workers.yolo_tasks.*': {'queue': 'yolo'},
+        'workers.face_tasks.*': {'queue': 'face'},
         'detection.*': {'queue': 'detections'},
         'embedding.*': {'queue': 'embeddings'},
         'camera.*': {'queue': 'camera_frames'},
         'yolo.*': {'queue': 'yolo'},
+        'face.*': {'queue': 'face'},
     },
 
     # Queue definitions with DLQ support
@@ -89,10 +92,12 @@ celery.conf.update(
         Queue('detections', exchange=default_exchange, routing_key='detections'),
         Queue('camera_frames', exchange=default_exchange, routing_key='camera_frames'),
         Queue('yolo', exchange=default_exchange, routing_key='yolo'),
+        Queue('face', exchange=default_exchange, routing_key='face'),
         Queue('dlq.embeddings', exchange=dlq_exchange, routing_key='dlq.embeddings'),
         Queue('dlq.detections', exchange=dlq_exchange, routing_key='dlq.detections'),
         Queue('dlq.camera_frames', exchange=dlq_exchange, routing_key='dlq.camera_frames'),
         Queue('dlq.yolo', exchange=dlq_exchange, routing_key='dlq.yolo'),
+        Queue('dlq.face', exchange=dlq_exchange, routing_key='dlq.face'),
     ),
 
     # Task execution settings

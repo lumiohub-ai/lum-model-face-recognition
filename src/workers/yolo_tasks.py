@@ -33,9 +33,26 @@ from workers.celery_app import celery
 
 @worker_process_init.connect
 def _load_model_in_child(**_kwargs):
-    """Fires post-fork in each prefork child. The solo and threads pools do
-    not emit this, which is why the task body also calls ensure_*_loaded()."""
-    model_holder.ensure_person_detector_loaded()
+    """Preload YOLO post-fork, but ONLY in a worker that actually serves this
+    queue.
+
+    `worker_process_init` is app-global: every task module in the app's
+    `include` list is imported by every worker, so without this guard the
+    face worker and the camera worker would each also load YOLO. Measured
+    before the guard existed: all three workers sat at ~654 MiB having
+    loaded both models, instead of only the one they use.
+
+    Celery gives the handler no way to know which `-Q` queues this process
+    serves (the signal carries no queue context, and `app.amqp.queues` is not
+    narrowed at this point), so the worker declares it explicitly via
+    SO_WORKER_PRELOAD. Absent that, nothing is preloaded and the models load
+    lazily on first task instead — correct either way, just with a slower
+    first task.
+    """
+    import os
+
+    if "yolo" in os.environ.get("SO_WORKER_PRELOAD", "").split(","):
+        model_holder.ensure_person_detector_loaded()
 
 
 def _parse_yolo_result(result) -> List[Dict]:

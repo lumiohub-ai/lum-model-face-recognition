@@ -184,11 +184,10 @@ class SmartOfficeEngine:
         # GPU worker (shared across all cameras). Keyed by DB camera id so a
         # camera can leave the set without re-pointing every other camera's
         # queues (LSO-130).
-        # `detector=` is gone as of LSO-67 Stage 2 step 1: YOLO runs in its
-        # own Celery worker now. `face_detector` is still passed — the face
-        # models move in step 2.
+        # LSO-67 Stage 2 complete: no models passed at all. YOLO runs in the
+        # `yolo` Celery worker, SCRFD+ArcFace in the `face` worker; this
+        # object now owns only queues, batching, and correlation.
         self.gpu_worker = GPUInferenceWorker(
-            face_detector=self.models.face_detector,
             camera_ids=self._camera_ids(),
             metrics_collector=self.metrics,
         )
@@ -301,7 +300,13 @@ class SmartOfficeEngine:
             config["unrecognized_pitch_min"] = self.config.get("unrecognized_pitch_min", 0.4)
             engine = CameraEngine(
                 camera_config=config,
-                face_detector=self.models.face_detector,
+                # None, not the real model: CameraEngine stores this and
+                # never calls it (only `self.face_detector = face_detector`
+                # at camera_engine.py:81). camera_tasks.py has passed None
+                # here since Stage 1; passing the real one would load the
+                # face models into this process for nothing, which is what
+                # moving them to the `face` worker was meant to stop.
+                face_detector=None,
                 face_recognizer=self.models.face_matcher,
                 # A stub, not the real model (LSO-67 Stage 2 step 1).
                 # CameraEngine and PersonTracker read exactly two scalars off

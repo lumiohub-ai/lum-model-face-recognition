@@ -212,7 +212,63 @@ services:
       - person-tracking-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      # Preload only this worker's own model. Without it every worker
+      # loads both (worker_process_init is app-global) — see yolo_tasks.py.
+      SO_WORKER_PRELOAD: yolo
     command: celery -A workers.celery_app worker -Q yolo -l warning --pool=solo
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  # ── LSO-67 Stage 2: SCRFD detection + ArcFace embedding ───────────────────
+  # Owns the face models; main.py keeps only the copy EmbeddingSyncService
+  # builds for its startup user sync, which is not on any per-frame path.
+  #
+  # Separate from yolo-worker on purpose, not just for tidiness: the two
+  # models have very different shapes (SCRFD runs per-ROI, ArcFace per-crop,
+  # neither batchable — versus YOLO's genuinely batched call), so a slow face
+  # cycle must not hold up detection, and each can later move to its own GPU.
+  face-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    ipc: service:person-tracking
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SO_WORKER_PRELOAD: face
+    command: celery -A workers.celery_app worker -Q face -l warning --pool=solo
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
