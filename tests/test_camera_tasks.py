@@ -93,7 +93,6 @@ def _make_context(
     gpu_worker_client=None,
     async_logger=None,
     roi_slot=None,
-    detection_interval=2,
     recognition_interval=3,
 ):
     """Builds a _CameraContext without running __init__ - see module
@@ -105,14 +104,12 @@ def _make_context(
 
     ctx = _CameraContext.__new__(_CameraContext)
     ctx.camera_id = 1
-    ctx.detection_interval = detection_interval
     ctx.recognition_interval = recognition_interval
     ctx.camera_engine = camera_engine if camera_engine is not None else FakeCameraEngine()
     ctx.gpu_worker_client = (
         gpu_worker_client if gpu_worker_client is not None else FakeGpuWorkerClient()
     )
     ctx.async_logger = async_logger if async_logger is not None else FakeAsyncLogger()
-    ctx._frame_num = 0
     ctx._detection_frame_num = 0
 
     slot = roi_slot if roi_slot is not None else FakeRoiSlot()
@@ -120,7 +117,13 @@ def _make_context(
     return ctx, slot
 
 
-class ProcessFrameFrameSkipTests(unittest.TestCase):
+class ProcessFrameSingleGateTests(unittest.TestCase):
+    """The producer is the only frame-skip gate. These tests are the
+    inverted form of the old ProcessFrameFrameSkipTests: the task once
+    skipped again on its own counter, compounding detection_interval to
+    interval² and silently halving the detection rate. Every task call must
+    now run detection — these assertions are the regression fence."""
+
     def setUp(self):
         from workers import frame_store
 
@@ -132,37 +135,36 @@ class ProcessFrameFrameSkipTests(unittest.TestCase):
 
         _ROI_SLOTS.pop(1, None)
 
-    def test_frame_below_detection_interval_is_skipped_without_calling_gpu(self):
-        """detection_interval=2: the 1st call (_frame_num becomes 1) must
-        skip GPU work entirely, matching CameraWorker's Step 3 frame-skip."""
-        ctx, _ = _make_context(detection_interval=2)
+    def test_the_very_first_task_call_runs_detection(self):
+        """The producer already gated on detection_interval before enqueueing,
+        so a second gate here would drop half the frames it forwards."""
+        ctx, _ = _make_context()
         handle = self.slot.write(_random_frame(64, 64))
         result = ctx.process_frame(handle, frame_num=handle.seq)
-        self.assertIsNone(result)
-        self.assertEqual(ctx.gpu_worker_client.calls, [])
-
-    def test_frame_at_detection_interval_boundary_is_processed(self):
-        ctx, _ = _make_context(detection_interval=2)
-        handle1 = self.slot.write(_random_frame(64, 64))
-        ctx.process_frame(handle1, frame_num=handle1.seq)  # frame 1: skipped
-        handle2 = self.slot.write(_random_frame(64, 64))
-        result = ctx.process_frame(handle2, frame_num=handle2.seq)  # frame 2: processed
         self.assertIsNotNone(result)
-        self.assertEqual(result["frame_num"], handle2.seq)
+        self.assertEqual(ctx.gpu_worker_client.calls, [("detect", 1, handle.seq)])
 
-    def test_missing_frame_slot_returns_none_without_advancing_frame_count(self):
+    def test_every_consecutive_task_call_runs_detection(self):
+        ctx, _ = _make_context()
+        for expected_calls in (1, 2, 3):
+            handle = self.slot.write(_random_frame(64, 64))
+            result = ctx.process_frame(handle, frame_num=handle.seq)
+            self.assertIsNotNone(result)
+            detect_calls = [c for c in ctx.gpu_worker_client.calls if c[0] == "detect"]
+            self.assertEqual(len(detect_calls), expected_calls)
+
+    def test_missing_frame_slot_returns_none_without_advancing_detection_count(self):
         """attach_and_read returning None (camera removed, or this reply is
-        for an already-superseded frame) must be a no-op, not a crash - and
-        must bail out BEFORE incrementing _frame_num, mirroring
-        CameraWorker._process_one_frame's Step 1 (stream_handler.read()
-        failing returns before any counter increments)."""
+        for an already-superseded frame) must be a no-op, not a crash — and
+        must bail out BEFORE the detection counter advances, or a run of
+        dropped frames would shift the recognition_interval cadence."""
         from workers.frame_store import FrameHandle
 
-        ctx, _ = _make_context(detection_interval=1)
+        ctx, _ = _make_context()
         phantom = FrameHandle(camera_id=999, seq=1, height=64, width=64, channels=3)
         result = ctx.process_frame(phantom, frame_num=1)
         self.assertIsNone(result)
-        self.assertEqual(ctx._frame_num, 0)  # never touched — bailed before the increment
+        self.assertEqual(ctx._detection_frame_num, 0)  # bailed before the increment
 
 
 class ProcessFrameRecognitionGatingTests(unittest.TestCase):
@@ -178,7 +180,7 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
         _ROI_SLOTS.pop(1, None)
 
     def test_recognition_runs_and_embeds_the_correct_rois_and_track_ids(self):
-        """detection_interval=1, recognition_interval=1: every processed
+        """recognition_interval=1: every processed
         frame should run recognition and submit exactly the ROIs/track_ids
         update_tracking returned - not a subset, not reordered."""
         roi_a = _random_frame(20, 10)
@@ -194,7 +196,7 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
         )
         ctx, roi_slot = _make_context(
             camera_engine=engine, gpu_worker_client=gpu_client,
-            detection_interval=1, recognition_interval=1,
+            recognition_interval=1,
         )
         handle = self.slot.write(_random_frame(64, 64))
         result = ctx.process_frame(handle, frame_num=handle.seq)
@@ -221,7 +223,7 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
         gpu_client = FakeGpuWorkerClient()
         ctx, roi_slot = _make_context(
             camera_engine=engine, gpu_worker_client=gpu_client,
-            detection_interval=1, recognition_interval=3,
+            recognition_interval=3,
         )
         for _ in range(2):
             handle = self.slot.write(_random_frame(64, 64))
@@ -229,6 +231,15 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
             self.assertFalse(result["recognition_ran"])
         self.assertEqual(roi_slot.writes, [])
         self.assertNotIn("embed", [c[0] for c in gpu_client.calls])
+
+        # The 3rd task call must embed. Since every task call is a detection
+        # frame (the producer is the only frame-skip gate), 3 calls at
+        # recognition_interval=3 → exactly 1 embed. A second task-side skip
+        # would have made this the 9th call, not the 3rd.
+        handle = self.slot.write(_random_frame(64, 64))
+        result = ctx.process_frame(handle, frame_num=handle.seq)
+        self.assertTrue(result["recognition_ran"])
+        self.assertEqual([c[0] for c in gpu_client.calls].count("embed"), 1)
 
     def test_recognition_due_but_no_person_rois_does_not_call_embed(self):
         """run_recognition=True with an empty person_rois list must still
@@ -240,7 +251,7 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
         gpu_client = FakeGpuWorkerClient()
         ctx, roi_slot = _make_context(
             camera_engine=engine, gpu_worker_client=gpu_client,
-            detection_interval=1, recognition_interval=1,
+            recognition_interval=1,
         )
         handle = self.slot.write(_random_frame(64, 64))
         ctx.process_frame(handle, frame_num=handle.seq)
@@ -270,7 +281,7 @@ class ProcessFrameEventLoggingTests(unittest.TestCase):
         async_logger = FakeAsyncLogger()
         ctx, _ = _make_context(
             camera_engine=engine, async_logger=async_logger,
-            detection_interval=1, recognition_interval=1,
+            recognition_interval=1,
         )
         handle = self.slot.write(_random_frame(64, 64))
         ctx.process_frame(handle, frame_num=handle.seq)
@@ -278,7 +289,7 @@ class ProcessFrameEventLoggingTests(unittest.TestCase):
 
     def test_emit_positions_is_called_with_active_tracks(self):
         engine = FakeCameraEngine(active_tracks=[{"track_id": 1}, {"track_id": 2}])
-        ctx, _ = _make_context(camera_engine=engine, detection_interval=1, recognition_interval=1)
+        ctx, _ = _make_context(camera_engine=engine, recognition_interval=1)
         handle = self.slot.write(_random_frame(64, 64))
         ctx.process_frame(handle, frame_num=handle.seq)
         emit_call = next(c for c in engine.calls if c[0] == "emit_positions")

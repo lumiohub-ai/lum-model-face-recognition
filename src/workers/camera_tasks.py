@@ -80,9 +80,6 @@ class _CameraContext:
 
         camera_config = self._load_camera_config(camera_id, load_cameras_from_db)
         self.camera_config = camera_config
-        self.detection_interval = int(
-            camera_config.get("pipeline", {}).get("detection_interval", 2)
-        )
         self.recognition_interval = int(
             camera_config.get("pipeline", {}).get("recognition_interval", 5)
         )
@@ -184,7 +181,6 @@ class _CameraContext:
             homography_registry=self.homography_registry,
         )
 
-        self._frame_num = 0
         self._detection_frame_num = 0
 
         logger.info(f"camera_tasks: worker-local context ready for camera {camera_id}")
@@ -224,9 +220,10 @@ class _CameraContext:
             # CameraWorker.submit_frame's False return produces today.
             return None
 
-        self._frame_num += 1
-        if self._frame_num % self.detection_interval != 0:
-            return None
+        # No frame-skip here: the producer already gated on detection_interval
+        # before writing shared memory and paying the broker hop, so every
+        # task call IS a detection frame. A second gate here would compound
+        # to interval² and halve the detection rate.
         self._detection_frame_num += 1
 
         detections = self.gpu_worker_client.detect(
