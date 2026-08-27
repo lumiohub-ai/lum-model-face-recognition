@@ -300,13 +300,23 @@ class FakeStateManager:
         self.name_to_id_map = name_to_id_map
 
 
-class FakeFaceMatcher:
-    def __init__(self, db_names=None):
-        self.reload_calls = 0
-        self.db_names = db_names if db_names is not None else []
+class FakeEmbeddingProvider:
+    """Stands in for PgVectorStore: the names a rebuilt matcher loads."""
 
-    def reload_embeddings(self):
-        self.reload_calls += 1
+    def __init__(self, names):
+        self.names = list(names)
+
+
+class FakeFaceMatcher:
+    """Mirrors the real FaceMatcher's shape where on_embedding_reload's swap
+    depends on it: it exposes `provider`/`match_threshold` so
+    `type(old)(...)` can rebuild it, and it loads db_names from the provider
+    at construction, the way the real one loads embeddings eagerly."""
+
+    def __init__(self, provider=None, match_threshold=0.3):
+        self.provider = provider if provider is not None else FakeEmbeddingProvider([])
+        self.match_threshold = match_threshold
+        self.db_names = list(self.provider.names)
 
 
 class FakeRepository:
@@ -337,7 +347,9 @@ class ReloadHandlerTests(unittest.TestCase):
 
         ctx = _CameraContext.__new__(_CameraContext)
         ctx.camera_id = 1
-        ctx.face_matcher = FakeFaceMatcher(db_names=["alice"])
+        ctx.face_matcher = FakeFaceMatcher(
+            provider=FakeEmbeddingProvider(["alice"])
+        )
         ctx.entry_logger = FakeEntryLogger(rows)
         ctx.camera_engine = FakeCameraEngine()
         ctx.camera_engine.state_manager = FakeStateManager(initial_map)
@@ -354,7 +366,24 @@ class ReloadHandlerTests(unittest.TestCase):
 
         self.assertIs(ctx.camera_engine.state_manager.name_to_id_map, shared_map)
         self.assertEqual(shared_map, {"alice": 1, "bob": 2})
-        self.assertEqual(ctx.face_matcher.reload_calls, 1)
+
+    def test_embedding_reload_swaps_in_a_new_matcher(self):
+        """The matcher must be REPLACED, not mutated in place: reload_embeddings
+        writes db_names and db_embs as two unlocked stores, and the task thread
+        reads them at several points while matching a face — a reload landing
+        mid-match can attribute a face to the wrong person. Both references
+        must move together, or camera_engine keeps matching against the old
+        gallery forever."""
+        ctx = self._ctx({}, rows=[])
+        old_matcher = ctx.face_matcher
+
+        ctx.on_embedding_reload()
+
+        self.assertIsNot(ctx.face_matcher, old_matcher)
+        self.assertIs(ctx.camera_engine.face_recognizer, ctx.face_matcher)
+        # The replacement is built from the original's own wiring.
+        self.assertIs(ctx.face_matcher.provider, old_matcher.provider)
+        self.assertEqual(ctx.face_matcher.match_threshold, old_matcher.match_threshold)
 
     def test_departed_users_are_removed_from_the_map(self):
         shared_map = {"alice": 1, "carol": 3}

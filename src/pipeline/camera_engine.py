@@ -583,7 +583,15 @@ class CameraEngine:
                 )
             return {"face_detected": face_detected, "name": None, "similarity": 0.0}
 
-        if len(self.face_recognizer.db_embs) == 0:
+        # Read the recognizer ONCE for this whole match. An embedding reload
+        # swaps in a new matcher from another thread (camera_tasks'
+        # on_embedding_reload); resolving self.face_recognizer separately per
+        # line would let best_idx be computed against one generation's
+        # embeddings and then index the next generation's name list, which
+        # silently attributes a face to the wrong person.
+        recognizer = self.face_recognizer
+
+        if len(recognizer.db_embs) == 0:
             if self.global_track_manager:
                 self.global_track_manager.on_face_detected(
                     camera_id=self.camera_id,
@@ -601,13 +609,13 @@ class CameraEngine:
                 "face_image": face_image,
             }
 
-        similarities = self.face_recognizer.compute_similarities(
+        similarities = recognizer.compute_similarities(
             np.array([embedding])
         )
-        best_idx, best_similarity = self.face_recognizer.get_best_match(similarities)
+        best_idx, best_similarity = recognizer.get_best_match(similarities)
 
         if best_similarity >= self.match_threshold:
-            name = self.face_recognizer.db_names[best_idx]
+            name = recognizer.db_names[best_idx]
             if self.global_track_manager:
                 self.global_track_manager.on_face_detected(
                     camera_id=self.camera_id,

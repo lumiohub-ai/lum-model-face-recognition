@@ -265,7 +265,26 @@ class _CameraContext:
 
     def on_embedding_reload(self) -> None:
         """Mirror of engine.reload_embeddings for this worker's own copies."""
-        self.face_matcher.reload_embeddings()
+        # Swap in a whole new matcher rather than calling reload_embeddings()
+        # on the existing one. That method assigns db_names and db_embs as two
+        # separate stores with no lock, and the task thread reads them at four
+        # separate points while matching a face (camera_engine._match_face).
+        # A reload landing mid-match lets an index computed against the OLD
+        # embeddings select a name from the NEW list -- a recognised person
+        # logged under someone else's name. Rebinding is a single atomic
+        # assignment, so a reader sees wholly-old or wholly-new.
+        #
+        # type(old) rather than importing FaceMatcher: its __init__ rejects a
+        # provider that isn't a real EmbeddingProvider, so the hermetic tests
+        # (which inject a fake matcher) could not construct one. This way
+        # production builds a FaceMatcher and tests build their fake, unpatched.
+        old_matcher = self.face_matcher
+        new_matcher = type(old_matcher)(
+            provider=old_matcher.provider,
+            match_threshold=old_matcher.match_threshold,
+        )
+        self.face_matcher = new_matcher
+        self.camera_engine.face_recognizer = new_matcher
 
         new_map = {
             u["name"]: u["id"]
