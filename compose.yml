@@ -1,3 +1,13 @@
+# Dev/test harness for this repo — NOT the production deployment.
+#
+# Production is so.stack's compose.yml, which today runs only person-tracking
+# and celery-worker (-Q embeddings,detections). It has no camera-worker,
+# yolo-worker or face-worker, and no `ipc:` sharing — so this pipeline cannot
+# run there as-is. Deploying it needs those three services added with:
+#   - `ipc: service:person-tracking` (frames cross by POSIX shared memory)
+#   - the rpc-sockets volume on person-tracking + camera-worker (see below)
+# Without both, the camera worker's RPC calls fail and every client degrades
+# silently to "no detections" — the stack looks healthy and recognises nobody.
 services:
   ollama:
     image: ollama/ollama:0.18.3

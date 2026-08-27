@@ -181,6 +181,14 @@ class GPUInferenceWorker:
         on stays in the queue and would otherwise be served to the next request
         forever, one frame behind — the desync is permanent because exactly one
         response is produced and one consumed per cycle from then on.
+
+        Assumes ONE outstanding request per camera. That holds only because a
+        single camera-worker replica with --pool=solo serves each camera
+        serially. Two waiters on the same camera's queue would consume and
+        discard each other's replies, and the `got_seq > seq` early-return
+        below turns that into a permanent loss rather than a transient one.
+        Scaling camera-worker past one replica needs per-request correlation
+        (a {seq: future} map) first — see compose.yml's camera-worker note.
         """
         deadline = time.monotonic() + timeout
         while True:
