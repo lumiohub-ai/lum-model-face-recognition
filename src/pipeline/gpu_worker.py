@@ -27,17 +27,29 @@ class GPUInferenceWorker:
 
     def __init__(
         self,
-        detector,
         face_detector,
         camera_ids: Sequence[int],
         metrics_collector=None,
     ):
-        self._detector = detector
+        # LSO-67 Stage 2, step 1: YOLO no longer lives here — it runs in its
+        # own Celery worker and is reached via `yolo.detect_batch`. The face
+        # models are still in-process; they move in step 2, and this arg goes
+        # with them. Everything else in this class is unchanged: the queues,
+        # the cross-camera batching, and LSO-138's correlation all still
+        # belong here, because they are what makes the batched GPU call worth
+        # ~1.8x and what keeps a camera from silently desyncing.
         self._face_detector = face_detector
         self._running = False
         self._yolo_thread: Optional[threading.Thread] = None
         self._arcface_thread: Optional[threading.Thread] = None
         self._metrics = metrics_collector  # Optional[MetricsCollector]
+
+        # Producer-side slot for the cross-camera YOLO batch. One per loop,
+        # not per camera — see FrameBatchSlot's docstring for why
+        # CameraFrameSlot cannot serve this.
+        from workers.frame_store import FrameBatchSlot
+
+        self._yolo_batch_slot = FrameBatchSlot("yolo")
 
         # Queues are keyed by the DB camera id, NOT by position in the camera
         # list (LSO-130). A positional key silently re-points every later
@@ -124,6 +136,10 @@ class GPUInferenceWorker:
         for t in (self._yolo_thread, self._arcface_thread):
             if t and t.is_alive():
                 t.join(timeout=timeout)
+        # Released only after both loops have stopped: the YOLO loop is the
+        # sole writer to this slot, and unlinking it while that thread is
+        # still mid-write would raise BufferError in the releasing thread.
+        self.close()
         logger.info("GPUInferenceWorker stopped")
 
     # ── Camera-thread API ─────────────────────────────────────────────────────
@@ -271,9 +287,11 @@ class GPUInferenceWorker:
                     time.sleep(0.001)
                     continue
 
+                # Sorted order is the alignment contract: FrameBatchSlot packs
+                # in sorted-camera-id order and the worker returns results in
+                # that same order, so index i below belongs to cam_ids[i].
                 cam_ids = sorted(batch.keys())
-                frames = [batch[cid][0] for cid in cam_ids]
-                all_detections = self._run_yolo_batch(frames)
+                all_detections = self._run_yolo_batch(batch)
 
                 for i, cam_id in enumerate(cam_ids):
                     # Same mid-flight-removal case as the submit/get paths, so
@@ -372,27 +390,74 @@ class GPUInferenceWorker:
 
     # ── Inference helpers ─────────────────────────────────────────────────────
 
-    def _run_yolo_batch(self, frames: List[np.ndarray]) -> List[List[Dict]]:
-        """Run YOLO on a batch of frames and return per-frame detections."""
-        if not frames:
+    # How long to wait for the YOLO worker's reply. Sits above the camera
+    # side's own 2.0s get_detections timeout so that when the GPU worker is
+    # merely slow, the camera's timeout fires first and drops one frame —
+    # rather than this thread giving up and stranding a reply that the next
+    # cycle would then have to discard as stale.
+    YOLO_TASK_TIMEOUT_S = 3.0
+
+    def _run_yolo_batch(
+        self, batch: Dict[int, Tuple[np.ndarray, int]]
+    ) -> List[List[Dict]]:
+        """Run YOLO on a cross-camera batch via the `yolo` Celery worker.
+
+        Takes the raw `{camera_id: (frame, frame_num)}` batch rather than a
+        bare frame list (LSO-67 Stage 2): the frames must be packed into
+        shared memory with their camera ids and frame numbers attached, and
+        the packing order is what aligns the returned detections back to
+        their cameras.
+
+        Returns detections positionally aligned to `sorted(batch.keys())`,
+        matching what the in-process version returned and what `_yolo_loop`
+        already expects.
+
+        Never raises. Any failure — dead worker, timeout, an exception inside
+        the task — degrades to one empty detection list per frame, which ages
+        each camera's tracks by a frame. That is what the tracker already
+        does on a dropped frame, and it is strictly better than propagating
+        an exception into the loop thread that owns every camera's queues.
+        """
+        if not batch:
             return []
+
+        n_frames = len(batch)
         try:
+            import dataclasses
+
+            from workers.yolo_tasks import detect_batch_task
+
             t0 = time.time()
-            # Here we inference the batch of frames using the YOLO model. The model is expected to return a list of results, one for each frame.
-            results = self._detector.model(
-                frames,
-                conf=self._detector.confidence_threshold,
-                iou=self._detector.iou_threshold,
-                verbose=False,
-                device=self._detector.device,
+            handle = self._yolo_batch_slot.write(batch)
+            async_result = detect_batch_task.delay(
+                handle=dataclasses.asdict(handle)
             )
+            detections = async_result.get(timeout=self.YOLO_TASK_TIMEOUT_S)
             duration_ms = (time.time() - t0) * 1000
+
             if self._metrics is not None:
-                self._metrics.record_yolo_ms(duration_ms, batch_size=len(frames))
-            return [self._parse_yolo_result(r) for r in results]
+                # Still recorded as "yolo ms", but note this is now
+                # round-trip (pack + broker + inference + reply), not bare
+                # inference — the number is not comparable to pre-Stage-2
+                # history.
+                self._metrics.record_yolo_ms(duration_ms, batch_size=n_frames)
+
+            if len(detections) != n_frames:
+                # A malformed reply would silently misalign every camera's
+                # detections, which is exactly the class of bug LSO-138
+                # existed to kill. Refuse it.
+                logger.error(
+                    f"yolo.detect_batch returned {len(detections)} results for "
+                    f"{n_frames} frames — discarding to avoid misrouting"
+                )
+                return [[] for _ in range(n_frames)]
+            return detections
         except Exception as e:
-            logger.exception(f"YOLO batch inference failed: {e}")
-            return [[] for _ in frames]
+            logger.warning(
+                f"YOLO batch task failed ({type(e).__name__}: {e}) — "
+                f"{n_frames} frame(s) get no detections this cycle"
+            )
+            return [[] for _ in range(n_frames)]
 
     def _run_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
         """Detect face and extract embedding for each person ROI.
@@ -509,25 +574,11 @@ class GPUInferenceWorker:
             self._metrics.record_arcface_ms(duration_ms, batch_size=len(results))
         return results
 
-    @staticmethod
-    def _parse_yolo_result(result) -> List[Dict]:
-        """Convert a YOLO result object to a list of detection dicts."""
-        detections = []
-        boxes = result.boxes
-        if boxes is None or len(boxes) == 0:
-            return detections
-        for idx in range(len(boxes)):
-            cls_id = int(boxes.cls[idx].cpu().numpy())
-            if cls_id != 0:
-                continue
-            bbox = boxes.xyxy[idx].cpu().numpy().tolist()
-            conf = float(boxes.conf[idx].cpu().numpy())
-            detections.append(
-                {
-                    "bbox": bbox,
-                    "confidence": conf,
-                    "keypoints": None,
-                    "person_id": idx,
-                }
-            )
-        return detections
+    # _parse_yolo_result moved to workers/yolo_tasks.py (LSO-67 Stage 2) —
+    # it runs where the ultralytics Results object exists, so that object
+    # never has to cross the broker. Deliberately not left as a duplicate
+    # here: two copies of detection parsing would drift.
+
+    def close(self) -> None:
+        """Release the YOLO batch slot. Called from stop()."""
+        self._yolo_batch_slot.close()

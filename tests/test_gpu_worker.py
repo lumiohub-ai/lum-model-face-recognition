@@ -65,7 +65,7 @@ class FakeFaceDetector:
 
 def make_worker(face_detector):
     return GPUInferenceWorker(
-        detector=None, face_detector=face_detector, camera_ids=[1], metrics_collector=None
+        face_detector=face_detector, camera_ids=[1], metrics_collector=None
     )
 
 
@@ -196,7 +196,7 @@ class TestCameraSetKeying(unittest.TestCase):
 
     def _worker(self, ids):
         return GPUInferenceWorker(
-            detector=None, face_detector=None, camera_ids=ids, metrics_collector=None
+            face_detector=None, camera_ids=ids, metrics_collector=None
         )
 
     def test_ids_need_not_be_contiguous_or_ordered(self):
@@ -272,7 +272,7 @@ class TestRequestResponseCorrelation(unittest.TestCase):
 
     def _worker(self, metrics=None):
         return GPUInferenceWorker(
-            detector=None, face_detector=None, camera_ids=[self.CAM],
+            face_detector=None, camera_ids=[self.CAM],
             metrics_collector=metrics,
         )
 

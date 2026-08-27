@@ -29,6 +29,7 @@ celery = Celery(
         'workers.embedding_tasks',
         'workers.detection_tasks',
         'workers.camera_tasks',
+        'workers.yolo_tasks',
     ]
 )
 
@@ -68,19 +69,30 @@ celery.conf.update(
         'workers.embedding_tasks.*': {'queue': 'embeddings'},
         'workers.detection_tasks.*': {'queue': 'detections'},
         'workers.camera_tasks.*': {'queue': 'camera_frames'},
+        'workers.yolo_tasks.*': {'queue': 'yolo'},
         'detection.*': {'queue': 'detections'},
         'embedding.*': {'queue': 'embeddings'},
         'camera.*': {'queue': 'camera_frames'},
+        'yolo.*': {'queue': 'yolo'},
     },
 
     # Queue definitions with DLQ support
+    #
+    # LSO-67 Stage 2: `yolo` (and later `face`) MUST stay separate queues
+    # with their own worker processes. `main.py`'s GPU loop threads block on
+    # these tasks' results, so if GPU inference shared a queue with the
+    # camera_frames work, a backlog of camera tasks could occupy the very
+    # workers those loops are waiting on. Keeping them separate is what makes
+    # the blocking call safe — do not consolidate these to "simplify".
     task_queues=(
         Queue('embeddings', exchange=default_exchange, routing_key='embeddings'),
         Queue('detections', exchange=default_exchange, routing_key='detections'),
         Queue('camera_frames', exchange=default_exchange, routing_key='camera_frames'),
+        Queue('yolo', exchange=default_exchange, routing_key='yolo'),
         Queue('dlq.embeddings', exchange=dlq_exchange, routing_key='dlq.embeddings'),
         Queue('dlq.detections', exchange=dlq_exchange, routing_key='dlq.detections'),
         Queue('dlq.camera_frames', exchange=dlq_exchange, routing_key='dlq.camera_frames'),
+        Queue('dlq.yolo', exchange=dlq_exchange, routing_key='dlq.yolo'),
     ),
 
     # Task execution settings

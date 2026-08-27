@@ -140,6 +140,103 @@ services:
         max-size: "50m"
         max-file: "10"
 
+  # ── LSO-67: per-camera CPU work (tracking, identity voting) ───────────────
+  # Previously started by hand during Stage 1 testing; without this service a
+  # `docker compose up` cannot run the pipeline end to end when any camera is
+  # listed in pipeline.celery_camera_ids.
+  #
+  # ipc: service:person-tracking is load-bearing, not incidental: frames cross
+  # to this worker through POSIX shared memory (a 720p frame costs ~15.6ms
+  # through the broker vs ~0.3ms as a handle), which requires a shared IPC
+  # namespace with the producer.
+  camera-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    ipc: service:person-tracking
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # --pool=solo: one process, one task at a time. The threads pool collapses
+    # ~330x under this app's worker_prefetch_multiplier=1 + task_acks_late
+    # settings (measured, benchmarks/celery_worker/README.md); scale by adding
+    # replicas of this service, not by raising concurrency.
+    command: celery -A workers.celery_app worker -Q camera_frames -l warning --pool=solo
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  # ── LSO-67 Stage 2: YOLO person detection ─────────────────────────────────
+  # Owns the YOLO model; main.py no longer loads it. Kept on its own queue so
+  # a camera_frames backlog can never occupy the worker that main.py's GPU
+  # loop thread is blocked waiting on — see the comment in celery_app.py.
+  yolo-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    ipc: service:person-tracking
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A workers.celery_app worker -Q yolo -l warning --pool=solo
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
 volumes:
   ollama-data:
     driver: local

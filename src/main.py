@@ -285,6 +285,32 @@ class MDAManager:
 
 
 # ============================================================
+# Model Warm-up
+# ============================================================
+
+def _warm_up_models(models) -> None:
+    """Eagerly load the models this process actually runs.
+
+    Replaces `ModelFactory.initialize_all()`, which touches every model
+    including `person_detector` — and as of LSO-67 Stage 2 that one belongs
+    to the `yolo` Celery worker, not here. Since ModelFactory's properties
+    are lazy, the omission below is the whole mechanism: never touching
+    `models.person_detector` in this process means YOLO never loads in it.
+
+    Everything else is still loaded up front, so startup timing for the face
+    path and tracking is unchanged; only YOLO's load moves to the worker.
+    """
+    logger.info("Warming up main-process models (YOLO excluded — runs in its own worker)...")
+    _ = models.face_detector
+    if models.embedding_provider is not None:
+        _ = models.face_matcher
+    _ = models.action_recognizer
+    _ = models.global_track_manager
+    _ = models.global_id_generator
+    logger.info("Main-process models ready")
+
+
+# ============================================================
 # Signal Handling (No Global State)
 # ============================================================
 
@@ -342,7 +368,7 @@ def main() -> None:
         build_vision_config(config),
         embedding_provider=PgVectorStore(client_slug),
     )
-    models.initialize_all()
+    _warm_up_models(models)
     lifecycle.register_shutdown_callback(models.cleanup)
 
     # Initialize engine — if no cameras yet, wait for a camera command via MDA

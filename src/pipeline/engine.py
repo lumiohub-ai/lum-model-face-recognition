@@ -92,7 +92,12 @@ class SmartOfficeEngine:
                 build_vision_config(self.config),
                 embedding_provider=self.pgvector_store,
             )
-            self.models.initialize_all()
+            # Not initialize_all(): that would eagerly load YOLO, which as of
+            # LSO-67 Stage 2 belongs to the `yolo` Celery worker. Shares
+            # main.py's helper so the two startup paths can't drift.
+            from main import _warm_up_models
+
+            _warm_up_models(self.models)
             self._owns_models = True
 
         # Action recognition: the model is synchronous, so the queue and worker
@@ -179,8 +184,10 @@ class SmartOfficeEngine:
         # GPU worker (shared across all cameras). Keyed by DB camera id so a
         # camera can leave the set without re-pointing every other camera's
         # queues (LSO-130).
+        # `detector=` is gone as of LSO-67 Stage 2 step 1: YOLO runs in its
+        # own Celery worker now. `face_detector` is still passed — the face
+        # models move in step 2.
         self.gpu_worker = GPUInferenceWorker(
-            detector=self.models.person_detector,
             face_detector=self.models.face_detector,
             camera_ids=self._camera_ids(),
             metrics_collector=self.metrics,
@@ -261,6 +268,30 @@ class SmartOfficeEngine:
 
         return ids
 
+    def _person_detector_stub(self):
+        """The two scalars CameraEngine/PersonTracker read off
+        `person_detector`, without loading YOLO into this process.
+
+        Reuses camera_tasks._PersonDetectorStub rather than defining a second
+        one: it already raises AttributeError on any method call, so if a
+        future CameraEngine change starts calling into person_detector, both
+        the Celery worker and this path fail loudly and identically instead
+        of one silently doing nothing.
+
+        The values come from the same VisionConfig the YOLO worker builds its
+        real detector from, so the threshold the tracker filters on matches
+        the one inference actually used. `device` is "cpu" because this
+        process runs no local inference — it only feeds the string to
+        PersonTracker's own device selection.
+        """
+        from workers.camera_tasks import _PersonDetectorStub
+
+        vision_config = build_vision_config(self.config)
+        return _PersonDetectorStub(
+            confidence_threshold=vision_config.person_detection_threshold,
+            device="cpu",
+        )
+
     def _init_camera_engines(self) -> List[CameraEngine]:
         engines = []
         for config in self.camera_configs:
@@ -272,7 +303,15 @@ class SmartOfficeEngine:
                 camera_config=config,
                 face_detector=self.models.face_detector,
                 face_recognizer=self.models.face_matcher,
-                person_detector=self.models.person_detector,
+                # A stub, not the real model (LSO-67 Stage 2 step 1).
+                # CameraEngine and PersonTracker read exactly two scalars off
+                # `person_detector` — `.confidence_threshold` and `.device` —
+                # and never call a method on it; verified by tracing every
+                # `self.person_detector.` reference in camera_engine.py.
+                # Passing the real one would load YOLO into the main process,
+                # which is precisely what moving it to a Celery worker was
+                # meant to stop.
+                person_detector=self._person_detector_stub(),
                 client_slug=self.client_slug,
                 global_id_generator=self.models.global_id_generator,
                 name_to_id_map=self.name_to_id_map,
