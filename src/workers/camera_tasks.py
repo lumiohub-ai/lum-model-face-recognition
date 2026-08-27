@@ -86,12 +86,10 @@ class _CameraContext:
 
         vision_config = build_vision_config(_load_yaml_config())
 
-        # FaceMatcher: its own PgVectorStore, no reference to the main
-        # process's copy. The Redis reload fan-out (embedding_tasks.py)
-        # already exists and works process-agnostically — a hot reload
-        # published from anywhere reaches every subscriber, this one
-        # included, so a worker-local instance does not go stale relative
-        # to the main process's.
+        # Its own PgVectorStore, unrelated to the main process's matcher.
+        # Kept current by _ensure_listeners_started's EMBEDDING_RELOAD
+        # subscription — without that this would go stale permanently, since
+        # the context is cached for the life of the worker process.
         self.face_matcher = FaceMatcher(
             provider=PgVectorStore(self.client_slug),
             match_threshold=vision_config.match_threshold,
@@ -121,7 +119,9 @@ class _CameraContext:
             self.rpc_client, enabled=bool(_load_yaml_config().get("enable_global_tracking", False))
         )
 
-        self.homography_registry = HomographyRegistry()
+        # Shared across every context in this process so the single
+        # CalibrationSubscriber started below can invalidate all of them.
+        self.homography_registry = _shared_homography_registry(HomographyRegistry)
 
         entry_logger_args = _make_entry_logger_args(
             client_slug=self.client_slug,
@@ -267,6 +267,76 @@ class _CameraContext:
             "recognition_ran": run_recognition,
         }
 
+    # ── Reload handlers, called from the listener threads ──────────────────
+
+    def on_embedding_reload(self) -> None:
+        """Mirror of engine.reload_embeddings for this worker's own copies."""
+        self.face_matcher.reload_embeddings()
+
+        new_map = {
+            u["name"]: u["id"]
+            for u in self.entry_logger.repository.get_user_name_to_id()
+            if u.get("name") and u.get("id")
+        }
+
+        # Mutate the dict PersonStateManager holds rather than rebinding
+        # camera_engine.name_to_id_map: it captured the object by reference at
+        # construction, so a rebind would never reach it.
+        #
+        # Update-then-remove, never clear()-then-update: the task thread reads
+        # this dict concurrently, and clearing first opens a window where every
+        # lookup returns None (publishing a null user_id for a known person).
+        # Growing then shrinking never exposes an empty map, so no lock is
+        # needed -- which matters because the reader is a dict.get() deep
+        # inside lum_vision that we cannot wrap.
+        target = self.camera_engine.state_manager.name_to_id_map
+        target.update(new_map)
+        for name in [k for k in target if k not in new_map]:
+            target.pop(name, None)
+
+        self.entry_logger.current_users = self.face_matcher.db_names
+        self.entry_logger.name_to_id = [
+            {"name": name, "id": user_id} for name, user_id in new_map.items()
+        ]
+        self.entry_logger.reload_status()
+        logger.info(
+            f"camera_tasks[cam={self.camera_id}]: reloaded embeddings "
+            f"({len(new_map)} users)"
+        )
+
+    def on_status_reload(self) -> None:
+        """The backend publishes this; this worker's EntryLogger is now one of
+        the loggers it is about."""
+        self.entry_logger.reload_status()
+
+    def on_camera_config_reload(self) -> None:
+        """Pick up config changes (currently `application`) without a restart."""
+        from config.camera_loader import load_cameras_from_db
+
+        try:
+            camera_config = self._load_camera_config(
+                self.camera_id, load_cameras_from_db
+            )
+        except RuntimeError as e:
+            # Camera removed from the org: this context is now orphaned, but
+            # nothing will route frames to it either.
+            logger.warning(f"camera_tasks[cam={self.camera_id}]: {e}")
+            return
+
+        self.camera_config = camera_config
+        self.recognition_interval = int(
+            camera_config.get("pipeline", {}).get("recognition_interval", 5)
+        )
+        # Only `application` is pushed onto the engine — it is the one field
+        # engine.reload_camera_configs itself updates on a live camera.
+        self.camera_engine.application = camera_config.get(
+            "application", ["attendance"]
+        )
+        logger.info(
+            f"camera_tasks[cam={self.camera_id}]: config reloaded, "
+            f"applications={self.camera_engine.application}"
+        )
+
 
 class _PersonDetectorStub:
     """See _CameraContext's comment on why this exists instead of a real
@@ -318,6 +388,75 @@ _CONTEXTS_LOCK = threading.Lock()
 _ROI_SLOTS: Dict[int, Any] = {}
 _ROI_SLOTS_LOCK = threading.Lock()
 
+_HOMOGRAPHY_REGISTRY = None
+_LISTENERS_STARTED = False
+_LISTENERS_LOCK = threading.Lock()
+
+
+def _shared_homography_registry(registry_cls):
+    """One registry per process, so a single CalibrationSubscriber thread can
+    invalidate the entries every camera context reads."""
+    global _HOMOGRAPHY_REGISTRY
+    if _HOMOGRAPHY_REGISTRY is None:
+        _HOMOGRAPHY_REGISTRY = registry_cls()
+    return _HOMOGRAPHY_REGISTRY
+
+
+def _for_each_context(method_name: str) -> None:
+    """Call a reload handler on every live context.
+
+    Iterates a snapshot: the task thread can create a context concurrently,
+    and one created after this snapshot has already built itself fresh from
+    the DB, so skipping it loses nothing.
+    """
+    for ctx in list(_CONTEXTS.values()):
+        try:
+            getattr(ctx, method_name)()
+        except Exception as e:
+            logger.exception(f"camera_tasks[cam={ctx.camera_id}]: {method_name} failed: {e}")
+
+
+def _ensure_listeners_started() -> None:
+    """Subscribe this process to the reload notifications the main process has
+    always consumed. The workers now own the CameraEngine, FaceMatcher and
+    EntryLogger those notifications are about.
+
+    One set of listeners per process, not per camera: the handlers fan out
+    over every context themselves. Called from _context_for rather than at
+    import, because celery_app's `include=` also imports this module into the
+    yolo and face workers, which must not open these subscriptions.
+    """
+    global _LISTENERS_STARTED
+    if _LISTENERS_STARTED:
+        return
+    with _LISTENERS_LOCK:
+        if _LISTENERS_STARTED:
+            return
+
+        from messaging.calibration_subscriber import CalibrationSubscriber
+        from messaging.channels import INTERNAL_CHANNELS
+        from messaging.subscriber import start_listener
+
+        start_listener(
+            INTERNAL_CHANNELS["EMBEDDING_RELOAD"],
+            lambda _data: _for_each_context("on_embedding_reload"),
+            name="reload-embeddings",
+        )
+        start_listener(
+            INTERNAL_CHANNELS["CAMERA_CONFIG_RELOAD"],
+            lambda _data: _for_each_context("on_camera_config_reload"),
+            name="reload-camera-config",
+        )
+        start_listener(
+            INTERNAL_CHANNELS["STATUS_RELOAD"],
+            lambda _data: _for_each_context("on_status_reload"),
+            name="reload-status",
+        )
+        if _HOMOGRAPHY_REGISTRY is not None:
+            CalibrationSubscriber(_HOMOGRAPHY_REGISTRY).start()
+
+        _LISTENERS_STARTED = True
+
 
 def _context_for(camera_id: int) -> _CameraContext:
     ctx = _CONTEXTS.get(camera_id)
@@ -328,7 +467,10 @@ def _context_for(camera_id: int) -> _CameraContext:
         if ctx is None:
             ctx = _CameraContext(camera_id)
             _CONTEXTS[camera_id] = ctx
-        return ctx
+    # After the lock: a handler firing mid-construction would otherwise
+    # block on _CONTEXTS_LOCK from the listener thread.
+    _ensure_listeners_started()
+    return ctx
 
 
 def _roi_slot_for(camera_id: int):

@@ -296,6 +296,145 @@ class ProcessFrameEventLoggingTests(unittest.TestCase):
         self.assertEqual(emit_call[1], 2)
 
 
+class FakeStateManager:
+    def __init__(self, name_to_id_map):
+        self.name_to_id_map = name_to_id_map
+
+
+class FakeFaceMatcher:
+    def __init__(self, db_names=None):
+        self.reload_calls = 0
+        self.db_names = db_names if db_names is not None else []
+
+    def reload_embeddings(self):
+        self.reload_calls += 1
+
+
+class FakeRepository:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def get_user_name_to_id(self):
+        return self.rows
+
+
+class FakeEntryLogger:
+    def __init__(self, rows):
+        self.repository = FakeRepository(rows)
+        self.current_users = []
+        self.name_to_id = []
+        self.status_reloads = 0
+
+    def reload_status(self):
+        self.status_reloads += 1
+
+
+class ReloadHandlerTests(unittest.TestCase):
+    """The worker owns its own FaceMatcher/EntryLogger/CameraEngine, so it
+    must react to the same reload notifications the main process does."""
+
+    def _ctx(self, initial_map, rows):
+        from workers.camera_tasks import _CameraContext
+
+        ctx = _CameraContext.__new__(_CameraContext)
+        ctx.camera_id = 1
+        ctx.face_matcher = FakeFaceMatcher(db_names=["alice"])
+        ctx.entry_logger = FakeEntryLogger(rows)
+        ctx.camera_engine = FakeCameraEngine()
+        ctx.camera_engine.state_manager = FakeStateManager(initial_map)
+        return ctx
+
+    def test_embedding_reload_mutates_the_map_object_rather_than_rebinding(self):
+        """PersonStateManager captured the dict by reference at construction,
+        so rebinding camera_engine.name_to_id_map would never reach it. This
+        assertion is what makes the in-place update non-negotiable."""
+        shared_map = {"alice": 1}
+        ctx = self._ctx(shared_map, rows=[{"name": "alice", "id": 1}, {"name": "bob", "id": 2}])
+
+        ctx.on_embedding_reload()
+
+        self.assertIs(ctx.camera_engine.state_manager.name_to_id_map, shared_map)
+        self.assertEqual(shared_map, {"alice": 1, "bob": 2})
+        self.assertEqual(ctx.face_matcher.reload_calls, 1)
+
+    def test_departed_users_are_removed_from_the_map(self):
+        shared_map = {"alice": 1, "carol": 3}
+        ctx = self._ctx(shared_map, rows=[{"name": "alice", "id": 1}])
+
+        ctx.on_embedding_reload()
+
+        self.assertEqual(shared_map, {"alice": 1})
+
+    def test_embedding_reload_refreshes_entry_logger_fields(self):
+        ctx = self._ctx({}, rows=[{"name": "bob", "id": 2}])
+
+        ctx.on_embedding_reload()
+
+        self.assertEqual(ctx.entry_logger.current_users, ["alice"])
+        self.assertEqual(ctx.entry_logger.name_to_id, [{"name": "bob", "id": 2}])
+        self.assertEqual(ctx.entry_logger.status_reloads, 1)
+
+    def test_status_reload_delegates_to_the_entry_logger(self):
+        ctx = self._ctx({}, rows=[])
+
+        ctx.on_status_reload()
+
+        self.assertEqual(ctx.entry_logger.status_reloads, 1)
+
+    def test_config_reload_updates_the_engines_application_list(self):
+        from workers import camera_tasks
+
+        ctx = self._ctx({}, rows=[])
+        ctx.camera_engine.application = ["attendance"]
+        original = _CameraContextLoadPatch(
+            camera_tasks,
+            {"camera_id": 1, "application": ["attendance", "activity"],
+             "pipeline": {"recognition_interval": 7}},
+        )
+        with original:
+            ctx.on_camera_config_reload()
+
+        self.assertEqual(ctx.camera_engine.application, ["attendance", "activity"])
+        self.assertEqual(ctx.recognition_interval, 7)
+
+    def test_config_reload_for_a_removed_camera_is_logged_not_raised(self):
+        from workers import camera_tasks
+
+        ctx = self._ctx({}, rows=[])
+        ctx.camera_engine.application = ["attendance"]
+        with _CameraContextLoadPatch(camera_tasks, None):
+            ctx.on_camera_config_reload()  # must not raise
+
+        self.assertEqual(ctx.camera_engine.application, ["attendance"])
+
+
+class _CameraContextLoadPatch:
+    """Swaps _CameraContext._load_camera_config for the duration of a test.
+    Passing None makes it raise, standing in for a camera removed from the org."""
+
+    def __init__(self, module, config):
+        self._module = module
+        self._config = config
+        self._saved = None
+
+    def __enter__(self):
+        cls = self._module._CameraContext
+        self._saved = cls._load_camera_config
+        config = self._config
+
+        def fake(camera_id, load_cameras_from_db):
+            if config is None:
+                raise RuntimeError(f"camera_id={camera_id} not found")
+            return config
+
+        cls._load_camera_config = staticmethod(fake)
+        return self
+
+    def __exit__(self, *exc):
+        self._module._CameraContext._load_camera_config = self._saved
+        return False
+
+
 class PersonDetectorStubTests(unittest.TestCase):
     """See camera_tasks._PersonDetectorStub's docstring: CameraEngine/
     PersonTracker must only ever read .confidence_threshold/.device off

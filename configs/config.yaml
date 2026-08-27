@@ -72,15 +72,6 @@ pipeline:
   recognition_interval: 3      # run ArcFace every N detection frames
   async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200
 
-  # LSO-67 Stage 1: camera_ids listed here run their per-frame CPU work
-  # (tracking, identity voting) as a Celery task (workers.camera_tasks)
-  # instead of a CameraWorker thread. Empty by default — today's threaded
-  # behavior is unchanged for every camera not explicitly listed here.
-  # Temporary, config-only selection: no DB migration in Stage 1, so this
-  # is not a per-camera DB flag, just a local override for testing one
-  # camera end-to-end against the real backend before Stage 2 (all
-  # cameras, sticky routing) is designed.
-  celery_camera_ids: []
 
 # Monitoring & alerting thresholds
 monitoring:

@@ -19,6 +19,8 @@ from config.settings import settings
 # Infrastructure
 from infrastructure.video import StreamManager
 from infrastructure import EntryLogger
+from messaging import RedisClient
+from messaging.channels import INTERNAL_CHANNELS
 from infrastructure.storage import Repository, EmbeddingSyncService, PgVectorStore
 
 # Models
@@ -514,6 +516,12 @@ class SmartOfficeEngine:
                 self.camera_configs = new_configs
                 self.stop()
 
+            # Notify the camera workers in both branches: they hold their own
+            # CameraEngine per camera and re-read config from the DB, and the
+            # restart above restarts this engine, not their container.
+            RedisClient.get_instance().publish(
+                INTERNAL_CHANNELS["CAMERA_CONFIG_RELOAD"], {}
+            )
             return True
 
         except Exception as e:

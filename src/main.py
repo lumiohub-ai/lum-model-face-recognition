@@ -13,8 +13,6 @@ import sys
 import signal
 import atexit
 import threading
-import json
-import time
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -30,6 +28,7 @@ from config.settings import settings
 from infrastructure.storage import PgVectorStore
 from messaging import RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
+from messaging.subscriber import start_listener
 from lum_vision import ModelFactory
 
 
@@ -138,47 +137,17 @@ class MDAManager:
 
     def _start_reload_listeners(self) -> None:
         """Start background listeners for internal reload notifications."""
-        def create_listener(channel: str, handler):
-            def listener():
-                retry_delay = 1
-                while self._running:
-                    try:
-                        pubsub = RedisClient.get_instance().client.pubsub()
-                        pubsub.subscribe(channel)
-                        logger.debug(f"Subscribed to {channel}")
-                        retry_delay = 1  # reset on successful connect
-
-                        for message in pubsub.listen():
-                            if not self._running:
-                                return
-                            if message['type'] == 'message':
-                                try:
-                                    data = json.loads(message['data'])
-                                    handler(data)
-                                except Exception as e:
-                                    logger.exception(f"Error in {channel}: {e}")
-
-                    except Exception as e:
-                        if not self._running:
-                            return
-                        logger.warning(f"[{channel}] Redis disconnected: {e} — retrying in {retry_delay}s")
-                        time.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, 30)
-
-            thread = threading.Thread(target=listener, daemon=True)
-            thread.start()
-            return thread
-
-        # Embedding reload listener
-        create_listener(
+        start_listener(
             INTERNAL_CHANNELS['EMBEDDING_RELOAD'],
-            self._handle_embedding_reload
+            self._handle_embedding_reload,
+            is_running=lambda: self._running,
+            name="reload-embeddings",
         )
-
-        # Status reload listener
-        create_listener(
+        start_listener(
             INTERNAL_CHANNELS['STATUS_RELOAD'],
-            self._handle_status_reload
+            self._handle_status_reload,
+            is_running=lambda: self._running,
+            name="reload-status",
         )
 
     def _handle_embedding_reload(self, data: dict) -> None:

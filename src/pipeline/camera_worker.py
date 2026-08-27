@@ -271,6 +271,10 @@ class CameraWorker:
         self.video_writer.write(annotated)
 
 
+#: Drop a queued frame older than this rather than processing it late.
+_TASK_EXPIRES_S = 1.0
+
+
 class CeleryCameraProducer:
     """LSO-67 Stage 1: the producer half of the Celery path for one flagged
     camera (configs/config.yaml's pipeline.celery_camera_ids).
@@ -393,10 +397,19 @@ class CeleryCameraProducer:
         # task_serializer='json' can't encode a FrameHandle instance —
         # see process_frame_task's docstring for why the fix lives at this
         # boundary rather than in the global Celery config.
-        process_frame_task.delay(
-            camera_id=self.camera_id,
-            frame_handle=dataclasses.asdict(handle),
-            frame_num=frame_num,
+        # expires: the thread path's bounded queues dropped frames under load
+        # and stayed responsive; Celery queues are unbounded, so without this
+        # an overloaded worker accumulates silent lag instead. 1s rather than
+        # one frame interval (~130ms) because the goal is bounding a backlog,
+        # not enforcing cadence — a healthy queue never expires anything, and
+        # the frame's shared-memory slot is long overwritten by then anyway.
+        process_frame_task.apply_async(
+            kwargs={
+                "camera_id": self.camera_id,
+                "frame_handle": dataclasses.asdict(handle),
+                "frame_num": frame_num,
+            },
+            expires=_TASK_EXPIRES_S,
         )
         # Deliberately fire-and-forget: this producer does not wait for the
         # task's result. Waiting here would recreate the exact synchronous
