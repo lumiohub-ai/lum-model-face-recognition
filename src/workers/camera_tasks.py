@@ -71,7 +71,8 @@ class _CameraContext:
         from infrastructure.entry_logger import EntryLogger
         from infrastructure.async_logger import AsyncLogger
         from domain.calibration.homography_registry import HomographyRegistry
-        from lum_vision import FaceMatcher
+        from lum_vision import ActionRecognizer, FaceMatcher
+        from pipeline.action_worker import ActionRecognitionWorker
         from pipeline.camera_engine import CameraEngine
 
         self.camera_id = camera_id
@@ -147,6 +148,29 @@ class _CameraContext:
             if u.get("name") and u.get("id")
         }
 
+        # Action recognition (LSO-67): safe to run per-worker because the
+        # recognizer only talks to Ollama over HTTP -- no GPU weights are
+        # loaded here, so this costs no VRAM the way YOLO/face would.
+        #
+        # The per-identity throttle inside ActionRecognitionWorker is what
+        # makes several of these instances safe to run at once: it is backed
+        # by Redis (workers/identity_throttle.py), so "classify this person
+        # once per interval" still holds across worker processes. With the
+        # old in-memory dict, each worker would have claimed the same person
+        # independently and fired N duplicate VLM inferences.
+        action_cfg = _load_yaml_config().get("action_recognition", {}) or {}
+        self.action_worker = ActionRecognitionWorker(
+            recognizer=ActionRecognizer(vision_config.action),
+            client_slug=self.client_slug,
+            max_queue_size=action_cfg.get("max_queue_size", 50),
+            num_workers=action_cfg.get("async_workers", 1),
+            min_crop_height=action_cfg.get("min_crop_height", 0),
+            min_crop_width=action_cfg.get("min_crop_width", 0),
+            min_crop_area=action_cfg.get("min_crop_area", 0),
+        )
+        self.action_worker.set_async_logger(self.async_logger)
+        self.action_worker.start_workers()
+
         self.camera_engine = CameraEngine(
             camera_config=camera_config,
             face_detector=None,  # never called by CameraEngine — see module docstring
@@ -156,7 +180,7 @@ class _CameraContext:
             global_id_generator=None,  # Stage 2: Redis INCR, not duplicated here
             name_to_id_map=name_to_id_map,
             global_track_manager=self.global_track_manager,
-            action_recognizer=None,  # action recognition stays on the thread path for Stage 1
+            action_recognizer=self.action_worker,
             homography_registry=self.homography_registry,
         )
 

@@ -93,13 +93,46 @@ def install_fake_celery(task):
     return module
 
 
-def build(recognizer=None, async_logger=None, **kwargs):
-    return ActionRecognitionWorker(
+class FakeRedis:
+    """Enough of the redis client for the throttle: SET NX EX and DEL.
+
+    Keeps these tests hermetic (the module docstring's premise) now that the
+    throttle is Redis-backed. Expiry is driven by an explicit clock rather
+    than real time so the interval tests stay instant and deterministic.
+    """
+
+    def __init__(self, fail=False):
+        self.store = {}
+        self.now = 1000.0
+        self.fail = fail
+
+    def set(self, key, value, nx=False, ex=None):
+        if self.fail:
+            raise ConnectionError("redis down")
+        expires = self.store.get(key)
+        if nx and expires is not None and expires > self.now:
+            return None
+        self.store[key] = self.now + (ex or 0)
+        return True
+
+    def delete(self, key):
+        if self.fail:
+            raise ConnectionError("redis down")
+        self.store.pop(key, None)
+
+
+def build(recognizer=None, async_logger=None, redis=None, **kwargs):
+    worker = ActionRecognitionWorker(
         recognizer=recognizer or StubRecognizer(StubResult()),
         client_slug="test-slug",
         async_logger=async_logger,
         **kwargs,
     )
+    # Inject before any reserve_check, so the throttle never reaches for the
+    # real RedisClient singleton.
+    worker._throttle._redis = redis if redis is not None else FakeRedis()
+    worker._throttle._owns_client = False
+    return worker
 
 
 def request(image=None, request_id="req-1", **metadata):
@@ -249,47 +282,59 @@ class ThrottleTests(unittest.TestCase):
     def test_first_check_is_allowed_and_the_second_is_not(self):
         worker = build()
 
-        self.assertTrue(worker.reserve_check("Alice", now=1000.0))
-        self.assertFalse(worker.reserve_check("Alice", now=1030.0))
+        self.assertTrue(worker.reserve_check("Alice"))
+        self.assertFalse(worker.reserve_check("Alice"))
 
     def test_check_is_allowed_again_after_the_interval(self):
-        worker = build()
+        redis = FakeRedis()
+        worker = build(redis=redis)
 
-        worker.reserve_check("Alice", now=1000.0)
+        worker.reserve_check("Alice")
+        redis.now += worker.check_interval_seconds + 1
 
-        self.assertTrue(worker.reserve_check("Alice", now=1061.0))
+        self.assertTrue(worker.reserve_check("Alice"))
 
     def test_two_cameras_yield_exactly_one_reservation(self):
-        """The whole point of moving the throttle off CameraEngine."""
+        """The whole point of the throttle: one inference per interval, not one
+        per camera. Now enforced across processes, not just threads."""
         worker = build()
 
-        results = [worker.reserve_check("Alice", now=1000.0) for _ in range(2)]
+        results = [worker.reserve_check("Alice") for _ in range(2)]
 
         self.assertEqual(results.count(True), 1)
 
     def test_distinct_identities_are_independent(self):
         worker = build()
 
-        self.assertTrue(worker.reserve_check("Alice", now=1000.0))
-        self.assertTrue(worker.reserve_check("Bob", now=1000.0))
+        self.assertTrue(worker.reserve_check("Alice"))
+        self.assertTrue(worker.reserve_check("Bob"))
 
     def test_cancel_restores_eligibility_immediately(self):
         worker = build()
-        worker.reserve_check("Alice", now=1000.0)
+        worker.reserve_check("Alice")
 
         worker.cancel_check("Alice")
 
-        self.assertTrue(worker.reserve_check("Alice", now=1001.0))
+        self.assertTrue(worker.reserve_check("Alice"))
 
-    def test_stale_entries_are_pruned_above_the_cap(self):
-        worker = build()
-        for i in range(worker.MAX_TRACKED + 1):
-            worker.reserve_check(f"person-{i}", now=1000.0)
+    def test_a_redis_outage_declines_rather_than_raising(self):
+        """Declining costs one interval of latency; letting every worker
+        through would fan one person out into N VLM inferences."""
+        worker = build(redis=FakeRedis(fail=True))
 
-        # Far enough ahead that every existing entry is stale.
-        worker.reserve_check("trigger", now=1000.0 + worker.check_interval_seconds * 3)
+        self.assertFalse(worker.reserve_check("Alice"))
+        worker.cancel_check("Alice")  # must not raise either
 
-        self.assertLessEqual(len(worker._last_check), worker.MAX_TRACKED)
+    def test_recovery_clears_the_degraded_flag(self):
+        redis = FakeRedis(fail=True)
+        worker = build(redis=redis)
+        worker.reserve_check("Alice")
+        self.assertTrue(worker._throttle.degraded)
+
+        redis.fail = False
+
+        self.assertTrue(worker.reserve_check("Alice"))
+        self.assertFalse(worker._throttle.degraded)
 
 
 class QueueTests(unittest.TestCase):
