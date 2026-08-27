@@ -1,10 +1,10 @@
 """SmartOfficeEngine - Unified person tracking and face recognition system.
 
-Architecture (parallel multi-camera):
-- GPUInferenceWorker: single thread owns the GPU, batches YOLO + ArcFace
-- CameraWorker: one thread per camera (frame read + CPU processing)
-- AsyncLogger: three background I/O threads (db, gcs, redis)
-- StreamManager/StreamHandler: background threads for RTSP read (existing)
+Each camera runs as a CeleryCameraProducer thread here (frame read, ROI,
+frame-skip) that hands off to a Celery task; tracking, identity and logging
+run in workers.camera_tasks, in a separate process. This process holds the
+GPU inference queues (GPUInferenceWorker) and the cross-camera identity state
+(GlobalTrackManager), both served to the workers over RPC.
 """
 
 import threading
@@ -30,22 +30,16 @@ from lum_vision import ModelFactory, VisionConfig
 from config import load_cameras_from_db, build_vision_config
 
 # Local
-from pipeline.camera_engine import CameraEngine
-
 from pipeline.gpu_worker import GPUInferenceWorker
-from pipeline.camera_worker import CameraWorker, CeleryCameraProducer
-from pipeline.action_worker import ActionRecognitionWorker
-from infrastructure.async_logger import AsyncLogger
+from pipeline.camera_worker import CeleryCameraProducer
 from infrastructure.video.annotator import FrameAnnotator
 
 
 class SmartOfficeEngine:
     """Unified engine for Smart Office person tracking and face recognition.
 
-    Replaces the sequential FrameProcessor loop with a parallel architecture:
-      - GPUInferenceWorker batches inference across all camera threads
-      - CameraWorker runs one thread per camera for frame read + CPU processing
-      - AsyncLogger offloads all I/O to background threads
+    GPUInferenceWorker batches inference for every camera; each camera runs a
+    CeleryCameraProducer thread that reads frames and hands them to Celery.
     """
 
     def __init__(
@@ -68,7 +62,6 @@ class SmartOfficeEngine:
         pipeline_cfg = kwargs.get("pipeline", {})
         self._detection_interval: int = pipeline_cfg.get("detection_interval", 2)
         self._recognition_interval: int = pipeline_cfg.get("recognition_interval", 5)
-        self._async_queue_size: int = pipeline_cfg.get("async_queue_size", 500)
 
         # Database repository
         self.repository = Repository(client_slug)
@@ -102,21 +95,6 @@ class SmartOfficeEngine:
             _warm_up_models(self.models)
             self._owns_models = True
 
-        # Action recognition: the model is synchronous, so the queue and worker
-        # threads that drive it are owned here. Constructed now because the
-        # camera engines need the reference; started in run(), once the
-        # AsyncLogger it uploads through exists.
-        action_cfg = kwargs.get("action_recognition", {}) or {}
-        self.action_worker = ActionRecognitionWorker(
-            recognizer=self.models.action_recognizer,
-            client_slug=client_slug,
-            max_queue_size=action_cfg.get("max_queue_size", 50),
-            num_workers=action_cfg.get("async_workers", 1),
-            min_crop_height=action_cfg.get("min_crop_height", 0),
-            min_crop_width=action_cfg.get("min_crop_width", 0),
-            min_crop_area=action_cfg.get("min_crop_area", 0),
-        )
-
         # Sync missing embeddings on startup
         self._sync_embeddings_on_startup()
 
@@ -134,16 +112,6 @@ class SmartOfficeEngine:
             self._annotator = FrameAnnotator()
         else:
             self._annotator = None
-
-        # Homography registry + calibration subscriber 
-        from domain.calibration.homography_registry import HomographyRegistry
-        from messaging.calibration_subscriber import CalibrationSubscriber
-        self.homography_registry = HomographyRegistry()
-        self._calibration_subscriber = CalibrationSubscriber(self.homography_registry)
-        self._calibration_subscriber.start()
-
-        # Initialize per-camera engines (CPU-only components)
-        self.camera_engines = self._init_camera_engines()
 
         # Entry logger (handles status tracking + Celery dispatch)
         self.entry_logger = self._init_entry_logger()
@@ -194,36 +162,15 @@ class SmartOfficeEngine:
             metrics_collector=self.metrics,
         )
 
-        # Async logger (non-blocking I/O)
-        self.async_logger = AsyncLogger(
-            entry_logger=self.entry_logger,
-            async_queue_size=self._async_queue_size,
-        )
-        # The action worker is constructed early (before models/metrics/logger
-        # exist) so it can start its threads as soon as models are ready. Wire
-        # its late-bound dependencies now that both exist — without this,
-        # action-recognition metrics stay permanently zero (LSO-66) and
-        # activity proof images are silently dropped rather than uploaded.
-        self.action_worker.set_metrics_collector(self.metrics)
-        self.action_worker.set_async_logger(self.async_logger)
-
-        # One CameraWorker per camera
         self.camera_workers = self._init_camera_workers()
 
-        # LSO-67 Stage 1: RPC servers so camera_frames Celery tasks can
-        # reach this process's GPUInferenceWorker and GlobalTrackManager.
-        # Constructed only when at least one camera is actually flagged
-        # (self.camera_workers contains a CeleryCameraProducer) — no socket,
-        # no listener thread, no overhead when every camera is still on the
-        # thread path, which is every deployment except this Stage 1 test.
-        self._gpu_rpc_server = None
-        self._gpu_worker_rpc_server = None
-        if any(isinstance(w, CeleryCameraProducer) for w in self.camera_workers):
-            from workers.gpu_rpc import GpuRpcServer
-            from workers.gpu_worker_rpc import GpuWorkerRpcServer
+        # How the camera workers reach this process's GPUInferenceWorker and
+        # GlobalTrackManager.
+        from workers.gpu_rpc import GpuRpcServer
+        from workers.gpu_worker_rpc import GpuWorkerRpcServer
 
-            self._gpu_rpc_server = GpuRpcServer(self.models.global_track_manager)
-            self._gpu_worker_rpc_server = GpuWorkerRpcServer(self.gpu_worker)
+        self._gpu_rpc_server = GpuRpcServer(self.models.global_track_manager)
+        self._gpu_worker_rpc_server = GpuWorkerRpcServer(self.gpu_worker)
 
         logger.debug(
             f"SmartOfficeEngine initialised: {len(self.camera_configs)} camera(s), "
@@ -269,66 +216,6 @@ class SmartOfficeEngine:
 
         return ids
 
-    def _person_detector_stub(self):
-        """The two scalars CameraEngine/PersonTracker read off
-        `person_detector`, without loading YOLO into this process.
-
-        Reuses camera_tasks._PersonDetectorStub rather than defining a second
-        one: it already raises AttributeError on any method call, so if a
-        future CameraEngine change starts calling into person_detector, both
-        the Celery worker and this path fail loudly and identically instead
-        of one silently doing nothing.
-
-        The values come from the same VisionConfig the YOLO worker builds its
-        real detector from, so the threshold the tracker filters on matches
-        the one inference actually used. `device` is "cpu" because this
-        process runs no local inference — it only feeds the string to
-        PersonTracker's own device selection.
-        """
-        from workers.camera_tasks import _PersonDetectorStub
-
-        vision_config = build_vision_config(self.config)
-        return _PersonDetectorStub(
-            confidence_threshold=vision_config.person_detection_threshold,
-            device="cpu",
-        )
-
-    def _init_camera_engines(self) -> List[CameraEngine]:
-        engines = []
-        for config in self.camera_configs:
-            # Gate thresholds (LSO-7) are global config.yaml, not per-camera DB —
-            # inject so CameraEngine._best_face_signals can prefer passing frames.
-            config["unrecognized_frontality_min"] = self.config.get("unrecognized_frontality_min", 0.6)
-            config["unrecognized_pitch_min"] = self.config.get("unrecognized_pitch_min", 0.4)
-            engine = CameraEngine(
-                camera_config=config,
-                # None, not the real model: CameraEngine stores this and
-                # never calls it (only `self.face_detector = face_detector`
-                # at camera_engine.py:81). camera_tasks.py has passed None
-                # here since Stage 1; passing the real one would load the
-                # face models into this process for nothing, which is what
-                # moving them to the `face` worker was meant to stop.
-                face_detector=None,
-                face_recognizer=self.models.face_matcher,
-                # A stub, not the real model (LSO-67 Stage 2 step 1).
-                # CameraEngine and PersonTracker read exactly two scalars off
-                # `person_detector` — `.confidence_threshold` and `.device` —
-                # and never call a method on it; verified by tracing every
-                # `self.person_detector.` reference in camera_engine.py.
-                # Passing the real one would load YOLO into the main process,
-                # which is precisely what moving it to a Celery worker was
-                # meant to stop.
-                person_detector=self._person_detector_stub(),
-                client_slug=self.client_slug,
-                global_id_generator=self.models.global_id_generator,
-                name_to_id_map=self.name_to_id_map,
-                global_track_manager=self.models.global_track_manager,
-                action_recognizer=self.action_worker,
-                homography_registry=self.homography_registry,
-            )
-            engines.append(engine)
-        return engines
-
     def _init_entry_logger(self) -> EntryLogger:
         args = type("Args", (), {})()
         args.client_slug = self.client_slug
@@ -340,56 +227,21 @@ class SmartOfficeEngine:
         args.unrecognized_pitch_min = self.config.get("unrecognized_pitch_min", 0.4)
         return EntryLogger(args=args)
 
-    def _init_camera_workers(self) -> List[Any]:
-        # LSO-67 Stage 1: cameras listed in pipeline.celery_camera_ids get a
-        # CeleryCameraProducer (frame read + ROI + frame-skip only, then
-        # hands off via Celery) instead of a full CameraWorker. The
-        # CameraEngine built for that camera_id in _init_camera_engines is
-        # simply unused in that case — cheap to construct and skip rather
-        # than complicating that method's 1:1 zip with camera_configs for a
-        # Stage 1 flag that Stage 2 will replace with a real routing
-        # mechanism anyway.
-        celery_camera_ids = set(
-            self.config.get("pipeline", {}).get("celery_camera_ids", []) or []
-        )
-        workers: List[Any] = []
-        for config, engine in zip(self.camera_configs, self.camera_engines):
+    def _init_camera_workers(self) -> List[CeleryCameraProducer]:
+        """One producer per camera: read the frame, apply ROI, frame-skip,
+        hand off. Tracking and identity run in workers.camera_tasks."""
+        workers = []
+        for config in self.camera_configs:
             camera_id = config.get("camera_id")
-
-            if camera_id in celery_camera_ids:
-                producer = CeleryCameraProducer(
+            workers.append(
+                CeleryCameraProducer(
                     camera_id=camera_id,
                     camera_config=config,
                     stream_handler=self.stream_manager.streams.get(camera_id),
                     detection_interval=self._detection_interval,
                     metrics_collector=self.metrics,
                 )
-                workers.append(producer)
-                logger.info(
-                    f"Camera {camera_id} routed to Celery (LSO-67 Stage 1) — "
-                    f"see workers.camera_tasks for its per-frame processing"
-                )
-                continue
-
-            video_writer = (
-                self.stream_manager.video_writers.get(camera_id)
-                if self.save_video
-                else None
             )
-            worker = CameraWorker(
-                camera_id=camera_id,
-                camera_config=config,
-                camera_engine=engine,
-                gpu_worker=self.gpu_worker,
-                async_logger=self.async_logger,
-                stream_handler=self.stream_manager.streams.get(camera_id),
-                detection_interval=self._detection_interval,
-                recognition_interval=self._recognition_interval,
-                annotator=self._annotator,
-                video_writer=video_writer,
-                metrics_collector=self.metrics,
-            )
-            workers.append(worker)
         return workers
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -409,21 +261,11 @@ class SmartOfficeEngine:
         # Start GPU worker thread
         self.gpu_worker.start()
 
-        # LSO-67 Stage 1: RPC servers for any camera_frames Celery tasks
-        if self._gpu_rpc_server is not None:
-            self._gpu_rpc_server.start()
-        if self._gpu_worker_rpc_server is not None:
-            self._gpu_worker_rpc_server.start()
+        # Serve GPU inference and global-track state to the camera workers.
+        self._gpu_rpc_server.start()
+        self._gpu_worker_rpc_server.start()
 
-        # Start async logger workers
-        self.async_logger.start()
-
-        # Start action recognition workers (after the AsyncLogger they upload through).
-        # The late-bound async_logger/metrics wiring dev added here already happens
-        # earlier in __init__, so only the start call belongs at this point.
-        self.action_worker.start_workers()
-
-        # Start camera worker threads
+        # Start camera producer threads
         for worker in self.camera_workers:
             worker.start()
 
@@ -495,15 +337,6 @@ class SmartOfficeEngine:
                     for i, old_config in enumerate(self.camera_configs):
                         if old_config.get("camera_id") == new_config.get("camera_id"):
                             self.camera_configs[i] = new_config
-                            for engine in self.camera_engines:
-                                if engine.camera_id == new_config.get("camera_id"):
-                                    engine.application = new_config.get(
-                                        "application", ["attendance"]
-                                    )
-                                    logger.info(
-                                        f"Updated camera {engine.camera_id} "
-                                        f"applications: {engine.application}"
-                                    )
                             break
                 logger.info(
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
@@ -540,8 +373,6 @@ class SmartOfficeEngine:
             self.models.face_matcher.reload_embeddings()
 
             self.name_to_id_map = self._build_name_to_id_map()
-            for engine in self.camera_engines:
-                engine.name_to_id_map = self.name_to_id_map
 
             self.entry_logger.current_users = self.models.face_matcher.db_names
             self.entry_logger.name_to_id = [
@@ -908,56 +739,12 @@ class SmartOfficeEngine:
     def _register_pipeline_gauges(self) -> None:
         """Expose live pipeline sizes to the metrics collector.
 
-        These are the counts that reveal *why* memory moves. Per-track state is
-        bounded (history capped, `remove_track` on disappearance), so total
-        memory scales with how many tracks are alive — without these gauges a
-        growing footprint is indistinguishable from a leak.
-
-        Crops dominate the per-track cost: `max_crops` full-resolution person
-        crops each, so `tracks` multiplied by that is the real memory driver.
+        The per-track gauges (tracks/crops/identities/states) used to live
+        here. That state belongs to the camera Celery workers now, so this
+        process cannot see it — a constant 0 would be worse than no gauge at
+        all. Reinstating them means collecting over RPC.
         """
-        engines = self.camera_engines
         _MISSING = object()  # distinguishes "attribute doesn't exist" from "value is None"
-
-        def _check_attr_chain(label: str, attr: str, sub: str) -> None:
-            """Verify attr/sub actually resolve on a live engine, once at
-            startup. _sum()'s getattr(..., None) fallback means a renamed
-            attribute (this reaches into lum_vision, an external package not
-            visible in this repo) would otherwise report a silent, permanent
-            0 forever - indistinguishable from "genuinely empty" and exactly
-            the false-flat signal that could mislead the next leak
-            investigation this instrumentation exists to catch."""
-            if not engines:
-                return
-            mgr = getattr(engines[0], attr, _MISSING)
-            if mgr is _MISSING:
-                logger.warning(f"[metrics] gauge '{label}': camera engine has no attribute '{attr}' - will always report 0")
-                return
-            if getattr(mgr, sub, _MISSING) is _MISSING:
-                logger.warning(f"[metrics] gauge '{label}': '{attr}' has no attribute '{sub}' - will always report 0")
-
-        def _sum(attr: str, sub: str) -> int:
-            total = 0
-            for e in engines:
-                mgr = getattr(e, attr, None)
-                coll = getattr(mgr, sub, None) if mgr is not None else None
-                if coll is not None:
-                    total += len(coll)
-            return total
-
-        _check_attr_chain("tracks", "track_manager", "track_bbox_history")
-        _check_attr_chain("crops", "track_manager", "track_crop_history")
-        _check_attr_chain("identities", "identity_manager", "locked_identities")
-        _check_attr_chain("states", "state_manager", "person_states")
-
-        self.metrics.register_gauge("tracks", lambda: _sum("track_manager", "track_bbox_history"))
-        self.metrics.register_gauge("crops", lambda: sum(
-            len(frames)
-            for e in engines
-            for frames in getattr(getattr(e, "track_manager", None), "track_crop_history", {}).values()
-        ))
-        self.metrics.register_gauge("identities", lambda: _sum("identity_manager", "locked_identities"))
-        self.metrics.register_gauge("states", lambda: _sum("state_manager", "person_states"))
 
         gtm = self.models.global_track_manager
         if gtm is not None:
@@ -1048,22 +835,12 @@ class SmartOfficeEngine:
         # Stop GPU worker
         self.gpu_worker.stop(timeout=5.0)
 
-        # LSO-67 Stage 1: RPC servers, if this run had any camera on Celery
-        if self._gpu_rpc_server is not None:
-            self._gpu_rpc_server.stop()
-        if self._gpu_worker_rpc_server is not None:
-            self._gpu_worker_rpc_server.stop()
-
-        # Stop async logger (let queued events drain briefly)
-        self.async_logger.stop(timeout=5.0)
+        self._gpu_rpc_server.stop()
+        self._gpu_worker_rpc_server.stop()
 
         # Log final global tracking metrics
         if self.models.global_track_manager and self.models.global_track_manager.enabled:
             self._log_final_metrics()
-
-        # Stop action recognition workers — always, since this engine owns them
-        # regardless of where the models came from.
-        self.action_worker.stop_workers()
 
         if self._owns_models:
             self.models.cleanup()
