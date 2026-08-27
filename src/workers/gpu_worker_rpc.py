@@ -156,8 +156,8 @@ class GpuWorkerRpcServer:
     Frame/ROI pixels never pass through this class — it reads them out of
     shared memory via frame_store, then calls straight into the existing
     submit_frame/get_detections and submit_faces/get_embeddings pair, which
-    already implement the correlation and drop-handling logic (LSO-138).
-    This class adds no new synchronisation of its own.
+    already implement the correlation and drop-handling logic. This class
+    adds no new synchronisation of its own.
     """
 
     def __init__(self, gpu_worker, socket_path: str = DEFAULT_SOCKET_PATH):
@@ -215,10 +215,10 @@ class GpuWorkerRpcServer:
                 # Dropped (queue full even after drop-oldest, or camera
                 # unregistered): no reply will EVER be produced for this
                 # frame, so waiting on get_detections would burn its full
-                # timeout for nothing. This is LSO-138's exact contract —
-                # camera_worker.py skips its get on False for the same
-                # reason — and drops happen precisely under load, when a
-                # 2s stall per dropped frame hurts most.
+                # timeout for nothing — and drops happen precisely under
+                # load, when a stall per dropped frame hurts most. Returning
+                # [] here immediately is why this class needs no timeout of
+                # its own for the drop case.
                 return []
             return self._gpu_worker.get_detections(request.camera_id, request.frame_num)
 
@@ -229,9 +229,9 @@ class GpuWorkerRpcServer:
             person_rois = [c for _tid, c in crops]
             track_ids = [tid for tid, _c in crops]
             # get_embeddings must be given the seq submit_faces RETURNS —
-            # the GPU worker issues its own per-camera counter (LSO-138:
-            # "there is no caller-side id to reuse, so the worker issues
-            # one"). RoiBatchHandle.seq is a DIFFERENT counter
+            # the GPU worker issues its own per-camera counter, since there
+            # is no caller-side id to reuse. RoiBatchHandle.seq is a
+            # DIFFERENT counter
             # (RoiBatchSlot's own); the two only coincide while both
             # processes live in lockstep forever. After a camera-worker
             # restart the slot's counter resets while the GPU worker's

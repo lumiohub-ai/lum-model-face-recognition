@@ -1,10 +1,10 @@
-"""YOLO person detection as a Celery task (LSO-67 Stage 2).
+"""YOLO person detection as a Celery task.
 
 The `_run_yolo_batch` + `_parse_yolo_result` pair moved here from
 `pipeline/gpu_worker.py` essentially verbatim; `main.py` now dispatches to
 this task instead of calling the model in-process. What did *not* move is
 everything around them — the per-camera queues, the cross-camera batch
-collector, and LSO-138's request/response correlation all stay in
+collector, and the request/response correlation all stay in
 `GPUInferenceWorker`, which still owns the batching that makes a batched GPU
 call worth ~1.8x over per-frame calls.
 
@@ -89,8 +89,7 @@ def detect_batch_task(handle: Dict[str, Any]) -> List[List[Dict]]:
 
     `handle` is a `FrameBatchHandle` flattened to a plain dict — task
     payloads stay JSON-serialised (see celery_app.py), so the dataclass is
-    reconstructed here, the same boundary conversion Stage 1 established for
-    `FrameHandle`.
+    reconstructed here, the same boundary conversion used for `FrameHandle`.
 
     Returns detections **positionally aligned to `handle.frames`**, which
     `FrameBatchSlot.write` packs in sorted-camera-id order. That alignment is

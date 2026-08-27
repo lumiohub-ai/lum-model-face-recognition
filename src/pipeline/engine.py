@@ -87,9 +87,9 @@ class SmartOfficeEngine:
                 build_vision_config(self.config),
                 embedding_provider=self.pgvector_store,
             )
-            # Not initialize_all(): that would eagerly load YOLO, which as of
-            # LSO-67 Stage 2 belongs to the `yolo` Celery worker. Shares
-            # main.py's helper so the two startup paths can't drift.
+            # Not initialize_all(): that would eagerly load YOLO, which
+            # belongs to the `yolo` Celery worker. Shares main.py's helper
+            # so the two startup paths can't drift.
             from main import _warm_up_models
 
             _warm_up_models(self.models)
@@ -151,12 +151,11 @@ class SmartOfficeEngine:
             self._metrics_store = None
             self._metrics_dashboard = None
 
-        # GPU worker (shared across all cameras). Keyed by DB camera id so a
-        # camera can leave the set without re-pointing every other camera's
-        # queues (LSO-130).
-        # LSO-67 Stage 2 complete: no models passed at all. YOLO runs in the
-        # `yolo` Celery worker, SCRFD+ArcFace in the `face` worker; this
-        # object now owns only queues, batching, and correlation.
+        # Shared by every camera. Keyed by DB camera id so a camera can leave
+        # the set without re-pointing every other camera's queues (LSO-130).
+        # Holds no models: YOLO runs in the `yolo` Celery worker and
+        # SCRFD+ArcFace in the `face` worker, so this owns only queues,
+        # batching and correlation.
         self.gpu_worker = GPUInferenceWorker(
             camera_ids=self._camera_ids(),
             metrics_collector=self.metrics,

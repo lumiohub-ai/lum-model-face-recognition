@@ -1,4 +1,4 @@
-"""Unit tests for gpu_rpc + global_track_adapter (LSO-67, Stage 1).
+"""Unit tests for gpu_rpc + global_track_adapter.
 
 Covers the Unix-socket RPC bridge to GlobalTrackManager: correct dispatch
 across the blocking/one-way split, the local-ID fallback on every failure

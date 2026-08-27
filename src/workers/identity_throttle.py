@@ -1,4 +1,4 @@
-"""Cross-process per-identity throttle, backed by Redis (LSO-67).
+"""Cross-process per-identity throttle, backed by Redis.
 
 `ActionRecognitionWorker` throttles action recognition per *identity*, not
 per camera: a person visible on three cameras should be classified once per

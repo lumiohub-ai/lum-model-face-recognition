@@ -262,9 +262,9 @@ def _warm_up_models(models) -> None:
 
     Replaces `ModelFactory.initialize_all()`, which touches every model —
     including `person_detector` and `face_detector`, both of which belong to
-    their own Celery workers as of LSO-67 Stage 2. Since ModelFactory's
-    properties are lazy, the omissions below are the whole mechanism: never
-    touching those two in this process means neither model loads in it.
+    their own Celery workers. Since ModelFactory's properties are lazy, the
+    omissions below are the whole mechanism: never touching those two in
+    this process means neither model loads in it.
 
     What is still loaded here genuinely runs here: `face_matcher` does numpy
     similarity against the embedding gallery (no GPU model),

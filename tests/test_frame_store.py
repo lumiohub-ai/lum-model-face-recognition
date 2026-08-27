@@ -1,4 +1,4 @@
-"""Unit tests for frame_store.py (LSO-67, Stage 1).
+"""Unit tests for frame_store.py.
 
 Covers the shared-memory transport that carries camera frames and ROI-crop
 batches across the Celery broker without ever serialising pixels into a task
@@ -30,8 +30,8 @@ def _random_frame(h, w, c=3):
 # ── Cross-process worker functions ──────────────────────────────────────────
 # Defined at module scope (not as closures/methods) so they're picklable for
 # multiprocessing's spawn/fork machinery, and so each does exactly one
-# producer or reader role - mirroring the real CameraWorker (producer) /
-# Celery worker (reader) split this module exists to support.
+# producer or reader role - mirroring the real CeleryCameraProducer
+# (producer) / Celery worker (reader) split this module exists to support.
 
 
 def _frame_producer(camera_id, conn, frames):
@@ -209,7 +209,7 @@ class RoiBatchSlotTests(unittest.TestCase):
 class SameProcessReadTests(unittest.TestCase):
     """Reads in the PRODUCER'S OWN process - not a degenerate test setup but
     the real deployment path: GpuWorkerRpcServer runs in the main process,
-    the same process whose CameraWorker threads own the slots. These reads
+    the same process whose CeleryCameraProducer threads own the slots. These reads
     must take the _LOCAL_SLOTS fast path (straight from the owning slot's
     mapping) rather than _attach_fresh, whose resource_tracker.unregister
     would delete the producer's own tracker entry - a KeyError at clean
@@ -276,9 +276,9 @@ class SameProcessReadTests(unittest.TestCase):
 
 
 class FrameBatchSlotTests(unittest.TestCase):
-    """LSO-67 Stage 2: one batch spanning several cameras, for the GPU
-    workers. Unlike every other slot here it is keyed by GPU loop, not by
-    camera, and each packed frame carries its own camera_id/frame_num."""
+    """One batch spanning several cameras, for the GPU workers. Unlike
+    every other slot here it is keyed by GPU loop, not by camera, and each
+    packed frame carries its own camera_id/frame_num."""
 
     def setUp(self):
         from workers import frame_store
@@ -289,9 +289,9 @@ class FrameBatchSlotTests(unittest.TestCase):
         self.slot.close()
 
     def test_multi_camera_batch_round_trips_with_frame_nums(self):
-        """frame_num must survive per frame: it is the correlation key
-        LSO-138 added, and the GPU loop needs it to route each result back
-        to the right camera's waiting request."""
+        """frame_num must survive per frame: it is the correlation key the
+        GPU loop needs to route each result back to the right camera's
+        waiting request."""
         from workers import frame_store
 
         f29 = _random_frame(480, 640)

@@ -71,7 +71,7 @@ class ActionRecognitionWorker:
         self.running = False
 
         # Per-identity throttle, shared across every camera in this engine.
-        # Redis-backed, not an in-process dict (LSO-67): the throttle's whole
+        # Redis-backed, not an in-process dict: the throttle's whole
         # job is cross-CAMERA ("classify a person once per interval, not once
         # per camera"), and cameras now run as Celery tasks in separate
         # processes where a threading.Lock protects nothing. See

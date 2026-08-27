@@ -1,11 +1,10 @@
 """Unit tests for GPUInferenceWorker's queue, batching and correlation logic.
 
 The arcface inference tests that used to live here moved to
-tests/test_face_tasks.py when that code moved into its own Celery worker
-(LSO-67 Stage 2). What remains is what stayed in this class: per-camera
-queue keying by DB id (LSO-130) and the request/response correlation that
-keeps a timed-out or dropped frame from permanently desyncing a camera
-(LSO-138).
+tests/test_face_tasks.py when that code moved into its own Celery worker.
+What remains is what stayed in this class: per-camera queue keying by DB id
+(LSO-130) and the request/response correlation that keeps a timed-out or
+dropped frame from permanently desyncing a camera.
 
 Run: PYTHONPATH=src python tests/test_gpu_worker.py
 """
@@ -83,7 +82,7 @@ class TestCameraSetKeying(unittest.TestCase):
 
 
 class CountingMetrics:
-    """Records only what LSO-138 asserts on."""
+    """Records only what TestRequestResponseCorrelation asserts on."""
 
     def __init__(self):
         self.drops = 0
@@ -97,7 +96,7 @@ class CountingMetrics:
 
 
 class TestRequestResponseCorrelation(unittest.TestCase):
-    """LSO-138: responses are matched to their request, not counted.
+    """Responses are matched to their request, not counted.
 
     Before this, a reply the caller had given up on stayed in the out-queue and
     was served to the next request — so every later frame got the *previous*

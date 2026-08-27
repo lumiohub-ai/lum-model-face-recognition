@@ -1,18 +1,17 @@
 """IPC to the main process's GlobalTrackManager, over a Unix domain socket.
 
-Why a Unix socket and not Redis pub/sub: LSO-138 was a whole ticket about an
-uncorrelated async reply queue silently desyncing a camera on timeout.
-Re-deriving that correlation scheme for a second, higher-frequency call site
-(every detection interval, per camera) is not worth it. A Unix socket gives a
-direct call/response with a library-level timeout and no separate correlation
-protocol to get wrong.
+Why a Unix socket and not Redis pub/sub: an uncorrelated async reply queue
+can silently desync a camera on timeout. Re-deriving a correlation scheme for
+a second, higher-frequency call site (every detection interval, per camera)
+is not worth it. A Unix socket gives a direct call/response with a
+library-level timeout and no separate correlation protocol to get wrong.
 
 Why this stays a narrow RPC instead of moving GlobalTrackManager's state into
 Redis: `assign_global_id` does numpy similarity matching over the whole
 embedding gallery, which doesn't decompose into Redis operations cleanly.
-Keeping the dicts and the ReID model in the main process preserves LSO-137's
-locking work verbatim and needs no lum_vision rewrite — the cost is one small
-control message per call. Measured against this module's own implementation,
+Keeping the dicts and the ReID model in the main process preserves the
+existing locking work verbatim and needs no lum_vision rewrite — the cost is
+one small control message per call. Measured against this module's own implementation,
 one call carrying a realistic payload (a person crop + a 512-float embedding)
 round-trips in p50=0.16ms / p95=0.34ms over a local Unix socket — negligible
 against the ~66ms per-frame budget (configs/config.yaml's
@@ -26,9 +25,9 @@ local-only ID from its own negative-ID counter, distinguishable at a glance
 from a real global ID (which starts at 1000 and counts up — see
 lum_vision.person_tracking.global_track.GlobalTrackManager.global_id_counter
 and lum_vision.person_tracking.ids.GlobalTrackIDGenerator). The camera keeps
-tracking and voting locally; nothing blocks. Reconciling a local-only ID into
-its real global ID once the main process recovers is a Stage 2 concern, not
-solved here — Stage 1 only needs the failure to be non-blocking and visible.
+tracking and voting locally; nothing blocks. Reconciling a local-only ID into its real global ID once the main process
+recovers is a later concern, not solved here — this only needs the failure
+to be non-blocking and visible.
 
 ## RPC surface
 
@@ -52,10 +51,9 @@ camera_engine.py nor PersonTracker branches on them — so they are one-way
 (fire-and-forget): sending never blocks a camera frame, and a dropped one-way
 call degrades silently to "this camera's view of identity state is very
 slightly behind," which is what already happens today whenever the periodic
-validator or another camera's thread wins a race on the same unlocked dict
-(that race LSO-137 has now closed in-process, but a lost one-way RPC message
-reopens the same class of staleness across the process boundary — acceptable
-for Stage 1, called out here so it isn't mistaken for solved).
+validator or another camera's thread wins a race on the same unlocked dict —
+a lost one-way RPC message reopens the same class of staleness across the
+process boundary. Acceptable, called out here so it isn't mistaken for solved.
 
   - on_face_detected(camera_id, local_track_id, quality=0.0, recognized=False, identity=None) -> None
   - on_face_not_visible(camera_id, local_track_id)                                             -> None
@@ -157,7 +155,7 @@ class _LocalIdFallback:
     guarantees no two *processes* collide as long as each process's IDs are
     tagged with its own identity downstream (not handled by this class —
     the caller is responsible for that if two local IDs must ever be told
-    apart, which Stage 1 does not yet require).
+    apart, which is not currently required).
     """
 
     def __init__(self):
@@ -264,7 +262,7 @@ class GpuRpcServer:
     from worker processes over a Unix domain socket.
 
     One request handled per connection — GlobalTrackManager's own RLock
-    (LSO-137) is what actually serialises concurrent callers; this server
+    is what actually serialises concurrent callers; this server
     does not add a second layer of locking, it just marshals bytes to/from
     that already-thread-safe object and dispatches by method name from the
     fixed allow-list in _BLOCKING_METHODS / _ONE_WAY_METHODS.

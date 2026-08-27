@@ -1,12 +1,12 @@
-"""Unit tests for camera_tasks.py (LSO-67, Stage 1).
+"""Unit tests for camera_tasks.py.
 
 _CameraContext.__init__ does real construction (DB queries via FaceMatcher/
 EntryLogger, AsyncLogger's background threads) that these tests deliberately
 never exercise — same reasoning as tests/test_action_worker.py's fake-the-
 heavy-imports pattern. Instead, _CameraContext.__new__ is used to build an
 instance with every real dependency replaced by a fake, and process_frame()
-is tested directly: this is the method with actual logic (the port of
-CameraWorker._process_one_frame's Steps 4-9), while __init__ is wiring.
+is tested directly: this is the method with the actual per-frame logic,
+while __init__ is wiring.
 
 Run: PYTHONPATH=src python tests/test_camera_tasks.py
 """
@@ -212,10 +212,9 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
     def test_recognition_skipped_interval_does_not_call_embed(self):
         """recognition_interval=3: only every 3rd detection-frame should
         submit for embedding - the rest must skip the embed RPC entirely,
-        not send an empty batch (that workaround was removed by LSO-138 for
-        the in-process path; this bridge should not need to reintroduce it,
-        since gpu_worker_rpc's detect/embed are independent round-trips,
-        not paired queue operations that need a keepalive)."""
+        not send an empty batch. gpu_worker_rpc's detect/embed are
+        independent round-trips, not paired queue operations that need a
+        keepalive."""
         engine = FakeCameraEngine(
             active_tracks=[{"track_id": 1}],
             person_rois=[(1, _random_frame(10, 10), (0, 0))],

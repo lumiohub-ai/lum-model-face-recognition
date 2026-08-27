@@ -1,4 +1,4 @@
-"""Unit tests for gpu_worker_rpc.py (LSO-67, Stage 1).
+"""Unit tests for gpu_worker_rpc.py.
 
 Covers the Unix-socket RPC bridge to GPUInferenceWorker: submit_frame+
 get_detections collapsed into one detect() round-trip, submit_faces+
@@ -58,7 +58,7 @@ class FakeGpuWorker:
     """Stands in for GPUInferenceWorker - just the four methods this bridge
     calls, recording every call for assertions, and honouring the real
     contracts the bridge depends on: submit_frame returns a bool drop
-    report (LSO-138: False means no reply will ever come), and submit_faces
+    report (False means no reply will ever come), and submit_faces
     returns the seq IT issues from its own counter - deliberately started
     far from RoiBatchSlot's counter (which begins at 1) so any bridge code
     that confuses the two counters fails these tests instead of passing by
@@ -144,10 +144,10 @@ class DetectPathTests(unittest.TestCase):
         submit_call = next(c for c in self.gpu_worker.calls if c[0] == "submit_frame")
         self.assertEqual(submit_call[2], (233, 401, 3))
 
-    def test_detect_passes_frame_num_through_for_lso_138_correlation(self):
-        """get_detections' correlation-by-frame_num (LSO-138) only works if
-        this bridge actually forwards the caller's frame_num rather than,
-        say, always using handle.seq or a locally generated counter."""
+    def test_detect_passes_frame_num_through_for_correlation(self):
+        """get_detections' correlation-by-frame_num only works if this
+        bridge actually forwards the caller's frame_num rather than, say,
+        always using handle.seq or a locally generated counter."""
         frame = _random_frame(64, 64)
         handle = self.slot.write(frame)
         self.client.detect(camera_id=1, frame_handle=handle, frame_num=777)
@@ -155,7 +155,7 @@ class DetectPathTests(unittest.TestCase):
         self.assertEqual(get_call[2], 777)
 
     def test_detect_honours_submit_frames_drop_report(self):
-        """submit_frame returning False is LSO-138's drop report: the frame
+        """submit_frame returning False is the drop report: the frame
         was discarded and NO reply will ever be produced for it, so waiting
         on get_detections would burn its full timeout per dropped frame -
         under exactly the load conditions where drops happen. The bridge
@@ -230,8 +230,8 @@ class EmbedPathTests(unittest.TestCase):
     def test_embed_uses_the_seq_submit_faces_returned_not_the_handles(self):
         """The regression this suite exists to prevent: get_embeddings must
         be given the seq submit_faces RETURNS (the GPU worker's own
-        per-camera counter - LSO-138: 'the worker issues one'), never
-        RoiBatchHandle.seq, which is RoiBatchSlot's independent counter.
+        per-camera counter), never RoiBatchHandle.seq, which is
+        RoiBatchSlot's independent counter.
         The two coincide only while both processes restart in lockstep; a
         camera-worker restart resets the slot's counter while the GPU
         worker's keeps counting, and _await_response treats the mismatch as

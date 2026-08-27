@@ -1,7 +1,7 @@
 """Per-process GPU model singletons for the inference Celery workers.
 
-LSO-67 Stage 2. Each GPU worker process loads exactly one model family and
-keeps it for the process lifetime — the YOLO worker loads `PersonDetector`,
+Each GPU worker process loads exactly one model family and keeps it for
+the process lifetime — the YOLO worker loads `PersonDetector`,
 the face worker loads `FaceDetector`, and neither loads the other's. Adapted
 from the two proven benchmark holders (`benchmarks/celery_worker/` and
 `benchmarks/celery_face/model_holder.py`), which validated this pattern

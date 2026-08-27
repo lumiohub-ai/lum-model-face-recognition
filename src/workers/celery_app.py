@@ -42,8 +42,8 @@ dlq_exchange = Exchange('dlq', type='direct')
 celery.conf.update(
     # Task settings
     #
-    # Results are pickled, not JSON (LSO-67 Stage 2). The face inference
-    # result dicts carry numpy throughout — `embedding` (512-float vector),
+    # Results are pickled, not JSON. The face inference result dicts carry
+    # numpy throughout — `embedding` (512-float vector),
     # `face_image` (a raw pixel crop), and even `face_bbox`, whose elements
     # are numpy.int64 from `face.bbox.astype(int)` rather than Python ints.
     # json.dumps rejects all of these, so a JSON result serializer fails the
@@ -81,8 +81,8 @@ celery.conf.update(
 
     # Queue definitions with DLQ support
     #
-    # LSO-67 Stage 2: `yolo` (and later `face`) MUST stay separate queues
-    # with their own worker processes. `main.py`'s GPU loop threads block on
+    # `yolo` and `face` MUST stay separate queues with their own worker
+    # processes. `main.py`'s GPU loop threads block on
     # these tasks' results, so if GPU inference shared a queue with the
     # camera_frames work, a backlog of camera tasks could occupy the very
     # workers those loops are waiting on. Keeping them separate is what makes

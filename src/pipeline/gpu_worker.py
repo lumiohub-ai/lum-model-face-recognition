@@ -15,9 +15,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from loguru import logger
 
-# frontality/pitch moved with _run_arcface_batch to workers/face_tasks.py
-# (LSO-67 Stage 2) — they annotate the result dict where it is built, so this
-# module no longer imports lum_vision at all.
+# frontality/pitch moved with _run_arcface_batch to workers/face_tasks.py —
+# they annotate the result dict where it is built, so this module no longer
+# imports lum_vision at all.
 
 
 class GPUInferenceWorker:
@@ -32,12 +32,12 @@ class GPUInferenceWorker:
         camera_ids: Sequence[int],
         metrics_collector=None,
     ):
-        # LSO-67 Stage 2 complete: this class holds NO models. YOLO runs in
-        # the `yolo` Celery worker, SCRFD+ArcFace in the `face` worker, both
-        # reached by task. What remains here is exactly what should: the
-        # per-camera queues, the cross-camera batch collection that makes the
-        # batched GPU call worth ~1.8x, and LSO-138's request/response
-        # correlation that keeps a camera from silently desyncing.
+        # This class holds NO models. YOLO runs in the `yolo` Celery worker,
+        # SCRFD+ArcFace in the `face` worker, both reached by task. What
+        # remains here is exactly what should: the per-camera queues, the
+        # cross-camera batch collection that makes the batched GPU call worth
+        # ~1.8x, and the request/response correlation that keeps a camera
+        # from silently desyncing.
         self._running = False
         self._yolo_thread: Optional[threading.Thread] = None
         self._arcface_thread: Optional[threading.Thread] = None
@@ -177,7 +177,7 @@ class GPUInferenceWorker:
                         camera_id: int, default):
         """Return the payload tagged *seq*, discarding anything older.
 
-        Responses are matched, not counted (LSO-138). A reply the caller gave up
+        Responses are matched, not counted. A reply the caller gave up
         on stays in the queue and would otherwise be served to the next request
         forever, one frame behind — the desync is permanent because exactly one
         response is produced and one consumed per cycle from then on.
@@ -411,10 +411,9 @@ class GPUInferenceWorker:
         """Run YOLO on a cross-camera batch via the `yolo` Celery worker.
 
         Takes the raw `{camera_id: (frame, frame_num)}` batch rather than a
-        bare frame list (LSO-67 Stage 2): the frames must be packed into
-        shared memory with their camera ids and frame numbers attached, and
-        the packing order is what aligns the returned detections back to
-        their cameras.
+        bare frame list: the frames must be packed into shared memory with
+        their camera ids and frame numbers attached, and the packing order
+        is what aligns the returned detections back to their cameras.
 
         Returns detections positionally aligned to `sorted(batch.keys())`,
         matching what the in-process version returned and what `_yolo_loop`
@@ -446,14 +445,12 @@ class GPUInferenceWorker:
             if self._metrics is not None:
                 # Still recorded as "yolo ms", but note this is now
                 # round-trip (pack + broker + inference + reply), not bare
-                # inference — the number is not comparable to pre-Stage-2
-                # history.
+                # inference — not comparable to older, in-process history.
                 self._metrics.record_yolo_ms(duration_ms, batch_size=n_frames)
 
             if len(detections) != n_frames:
                 # A malformed reply would silently misalign every camera's
-                # detections, which is exactly the class of bug LSO-138
-                # existed to kill. Refuse it.
+                # detections. Refuse it.
                 logger.error(
                     f"yolo.detect_batch returned {len(detections)} results for "
                     f"{n_frames} frames — discarding to avoid misrouting"
@@ -532,8 +529,7 @@ class GPUInferenceWorker:
 
             if len(results) != n_rois:
                 # A short or reordered reply would hand one person's embedding
-                # to another person's track — the exact identity-corruption
-                # class LSO-138 exists to prevent. Refuse it.
+                # to another person's track. Refuse it.
                 logger.error(
                     f"face.embed_batch returned {len(results)} results for "
                     f"{n_rois} ROIs — discarding to avoid misrouting identities"
@@ -547,8 +543,8 @@ class GPUInferenceWorker:
             )
             return _blank()
 
-    # _parse_yolo_result moved to workers/yolo_tasks.py (LSO-67 Stage 2) —
-    # it runs where the ultralytics Results object exists, so that object
+    # _parse_yolo_result moved to workers/yolo_tasks.py — it runs where
+    # the ultralytics Results object exists, so that object
     # never has to cross the broker. Deliberately not left as a duplicate
     # here: two copies of detection parsing would drift.
 

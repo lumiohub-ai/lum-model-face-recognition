@@ -1,4 +1,4 @@
-"""SCRFD detection + ArcFace embedding as a Celery task (LSO-67 Stage 2).
+"""SCRFD detection + ArcFace embedding as a Celery task.
 
 `_run_arcface_batch` moved here from `pipeline/gpu_worker.py` essentially
 verbatim — including, deliberately, its one-crop-per-call embedding loop.
@@ -9,8 +9,8 @@ size versus ~2.6ms at a fixed one). The comment marking that is carried
 across with the code.
 
 What stays in `GPUInferenceWorker`: the per-camera queues, the cross-camera
-ROI collection, LSO-138's correlation, and the scatter of results back to
-the camera that submitted each crop.
+ROI collection, the request/response correlation, and the scatter of
+results back to the camera that submitted each crop.
 
 Crops arrive as a `RoiBatchHandle` (shared memory) rather than pixels
 through the broker. Results come back through the broker as pickled dicts —
@@ -113,9 +113,9 @@ def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
         faces_to_embed: List[Any] = []
         crops: List[Any] = []
 
-        # Timed separately from embedding below (LSO-117): detection is still
-        # N per-ROI calls (SCRFD has no batch path - LSO-118), so this number
-        # won't move with batch size the way embedding does.
+        # Timed separately from embedding below: detection is still N
+        # per-ROI calls (SCRFD has no batch path), so this number won't
+        # move with batch size the way embedding does.
         det_t0 = time.time()
         for i, roi in enumerate(person_rois):
             result: Dict = {

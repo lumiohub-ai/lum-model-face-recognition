@@ -1,9 +1,9 @@
-"""Unit tests for workers.face_tasks.embed_batch_task (LSO-67 Stage 2).
+"""Unit tests for workers.face_tasks.embed_batch_task.
 
 Ported from tests/test_gpu_worker.py's TestRunArcfaceBatch when the arcface
-inference moved out of GPUInferenceWorker into its own Celery worker
-(LSO-117 originally). The behaviour these protect is unchanged by that move
-and is exactly the kind that breaks silently:
+inference moved out of GPUInferenceWorker into its own Celery worker. The
+behaviour these protect was originally fixed under LSO-117 and is unchanged
+by that move — exactly the kind that breaks silently:
 
   - one embed_batch() call per crop, never a combined batch (batching all
     crops shipped as 0.3.0 and halved production FPS — ORT re-plans on every
@@ -225,8 +225,8 @@ class EmbedBatchTaskTests(unittest.TestCase):
 
 
 class EmbedBatchTaskDegradationTests(unittest.TestCase):
-    """New for Stage 2: the task must never raise into the caller. The GPU
-    loop thread blocks on this task's result, so an exception here would
+    """The task must never raise into the caller. The GPU loop thread
+    blocks on this task's result, so an exception here would
     surface as a task failure and make that thread wait out its whole
     timeout for nothing."""
 

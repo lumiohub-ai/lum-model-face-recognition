@@ -70,10 +70,7 @@ class CeleryCameraProducer:
         name = f"cam-producer-{self.camera_id}"
         self._thread = threading.Thread(target=self.run, daemon=True, name=name)
         self._thread.start()
-        logger.info(
-            f"CeleryCameraProducer[cam={self.camera_id}] started "
-            f"(routing frames to Celery — LSO-67 Stage 1)"
-        )
+        logger.info(f"CeleryCameraProducer[cam={self.camera_id}] started")
 
     def stop(self, timeout: float = 5.0) -> None:
         self._running = False

@@ -1,4 +1,4 @@
-"""Serializer contract tests for the Celery app (LSO-67 Stage 2).
+"""Serializer contract tests for the Celery app.
 
 Both serializer bugs in this migration were found by a *live camera run*, not
 by tests: first `FrameHandle` (a frozen dataclass) failing `task_serializer=
@@ -77,8 +77,9 @@ class TaskPayloadStaysJsonTests(unittest.TestCase):
         self.assertEqual(celery.conf.task_serializer, "json")
 
     def test_camera_task_payload_round_trips(self):
-        """Stage 1's payload shape: a FrameHandle flattened to a plain dict at
-        the boundary. If someone re-introduces the dataclass here, this fails."""
+        """The camera task's payload shape: a FrameHandle flattened to a plain
+        dict at the boundary. If someone re-introduces the dataclass here,
+        this fails."""
         payload = {
             "camera_id": 40,
             "frame_handle": {

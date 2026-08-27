@@ -14,7 +14,7 @@ that the producer overwrites every detection cycle — a single-writer,
 single-slot ring of depth 1, not a corpus. A worker reads whatever is
 currently in the slot; staleness is caught by comparing the sequence number
 the task payload carries against what's actually written, the same
-correlation discipline LSO-138 added to the in-process GPU reply queues.
+correlation discipline the in-process GPU reply queues use.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ _ATTACHED_LOCK = threading.Lock()
 # Producer-side registry: block name -> the live slot object that owns it,
 # for readers running IN THE PRODUCER'S OWN PROCESS. This is not a
 # hypothetical: the GpuWorkerRpcServer (gpu_worker_rpc.py) runs in the main
-# process — the same process whose CameraWorker threads own the frame slots —
+# process — the same process whose CeleryCameraProducer threads own the frame slots —
 # so its reads would otherwise go through _attach_fresh, whose
 # resource_tracker.unregister would delete the PRODUCER'S OWN tracker entry
 # for the block (the tracker keys by name, one entry per process): a spurious
@@ -68,7 +68,7 @@ class CameraFrameSlot:
     """Producer-side owner of one camera's shared-memory slot.
 
     One instance per camera, held by the process that reads frames from the
-    stream (today: `CameraWorker`). Sized to the camera's frame shape on
+    stream (`CeleryCameraProducer`). Sized to the camera's frame shape on
     first write; a later write with a different shape (e.g. ROI config
     changed at runtime) reallocates the block.
     """
@@ -116,7 +116,7 @@ class CameraFrameSlot:
         mid-write) are fine: a reader may see a partially-written frame if
         it races a write, which is why the consumer must not trust it
         without the sequence number matching what it expected — the same
-        reasoning as LSO-138's request/response correlation.
+        reasoning as the GPU request/response correlation.
         """
         shape = frame.shape
         if len(shape) != 3:
@@ -536,8 +536,8 @@ class FrameBatchHandle:
 class FrameBatchSlot:
     """Producer-side owner of one GPU loop's cross-camera frame batch.
 
-    LSO-67 Stage 2. Keyed by GPU **loop** name (there is one YOLO loop and
-    one ArcFace loop), NOT by camera — the whole point is that one batch
+    Keyed by GPU **loop** name (there is one YOLO loop and one ArcFace
+    loop), NOT by camera — the whole point is that one batch
     holds frames from several cameras, which is what makes the batched GPU
     call worth ~1.8x over per-frame calls.
 

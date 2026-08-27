@@ -1,36 +1,30 @@
-"""Celery task for per-camera CPU work (LSO-67, Stage 1).
+"""Celery task for per-camera tracking, identity and logging.
 
-Replaces CameraWorker._process_one_frame's Steps 4-9 (camera_worker.py) for
-whichever camera is flagged onto Celery. Steps 1-3 (read frame, apply ROI,
-frame-skip) stay in the main process, which still owns the StreamHandler's
-persistent RTSP connection — a Celery task instance is stateless per call and
-cannot hold that connection open the way a thread does. The main process
-writes the cropped frame into a `frame_store.CameraFrameSlot` and enqueues
-this task with the resulting handle; everything from "submit to GPU" onward
-happens here, in a separate OS process, escaping the GIL that motivated this
-migration in the first place.
+The main process (CeleryCameraProducer, camera_worker.py) reads each
+camera's frames, applies ROI and frame-skip, then writes the frame into a
+`frame_store.CameraFrameSlot` and enqueues this task with the resulting
+handle — it still owns the StreamHandler's persistent RTSP connection, which
+a stateless-per-call task cannot hold open. Everything from "submit to GPU"
+onward happens here, in a separate OS process.
 
 No torch/ultralytics/insightface/onnxruntime import at module scope, and no
 GPU model construction anywhere in this file — this process holds zero
 models. GPU inference is reached via gpu_worker_rpc (never local), and
-GlobalTrackManager via gpu_rpc/global_track_adapter (also never local). Both
-principles carried over directly from the benchmark harnesses'
-model_holder.py convention, generalised here to "this process touches no
-main-process-owned object directly, only through an RPC client."
+GlobalTrackManager via gpu_rpc/global_track_adapter (also never local): this
+process touches no main-process-owned object directly, only through an RPC
+client.
 
-## What this task does NOT yet handle (explicitly out of scope for Stage 1)
+## What this task does not handle
 
   - Cross-camera global identity: RemoteGlobalTrackManager is wired in, but
     GlobalTrackIDGenerator (PersonTracker's local-track-ID counter) is left
-    at its own local-fallback default (global_id_generator=None) — Stage 2's
-    Redis INCR work, not duplicated here.
+    at its own local-fallback default (global_id_generator=None).
   - save_video / annotated debug output: tied to a local cv2.VideoWriter
-    file handle, which doesn't cross a process boundary meaningfully. The
-    flagged camera simply does not support it while running on Celery.
+    file handle, which doesn't cross a process boundary meaningfully.
   - Sticky-routing enforcement: this task assumes whatever routes it here
-    keeps sending the same camera_id to the same worker process (so the
-    per-process caches below stay valid) — the routing mechanism itself is
-    Stage 2.
+    keeps sending the same camera_id to the same worker process, so the
+    per-process caches below stay valid. See compose.yml's camera-worker
+    service for why that means exactly one replica today.
 """
 
 from __future__ import annotations
@@ -145,9 +139,9 @@ class _CameraContext:
             if u.get("name") and u.get("id")
         }
 
-        # Action recognition (LSO-67): safe to run per-worker because the
-        # recognizer only talks to Ollama over HTTP -- no GPU weights are
-        # loaded here, so this costs no VRAM the way YOLO/face would.
+        # Action recognition: safe to run per-worker because the recognizer
+        # only talks to Ollama over HTTP -- no GPU weights are loaded here,
+        # so this costs no VRAM the way YOLO/face would.
         #
         # The per-identity throttle inside ActionRecognitionWorker is what
         # makes several of these instances safe to run at once: it is backed
@@ -174,7 +168,7 @@ class _CameraContext:
             face_recognizer=self.face_matcher,
             person_detector=self._person_detector_stub,
             client_slug=self.client_slug,
-            global_id_generator=None,  # Stage 2: Redis INCR, not duplicated here
+            global_id_generator=None,  # local-fallback default; see module docstring
             name_to_id_map=name_to_id_map,
             global_track_manager=self.global_track_manager,
             action_recognizer=self.action_worker,
