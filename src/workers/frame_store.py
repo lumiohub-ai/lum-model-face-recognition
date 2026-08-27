@@ -498,3 +498,237 @@ def attach_and_read_roi_batch(
         return None
 
     return crops
+
+
+_FRAME_BATCH_SLOT_NAME_PREFIX = "framebatch"
+
+
+def _frame_batch_slot_name(loop_name: str) -> str:
+    return f"{_FRAME_BATCH_SLOT_NAME_PREFIX}_{loop_name}"
+
+
+@dataclass(frozen=True)
+class BatchedFrameHandle:
+    """One frame's location within a FrameBatchHandle's packed block.
+
+    Carries `camera_id` and `frame_num` per frame because — unlike every
+    other slot type here — a single batch spans multiple cameras, and the
+    consumer must be able to route each result back to the camera that
+    submitted it (GPUInferenceWorker._yolo_loop distributes by camera).
+    """
+
+    camera_id: int
+    frame_num: int
+    offset: int  # byte offset into the block
+    height: int
+    width: int
+    channels: int
+
+
+@dataclass(frozen=True)
+class FrameBatchHandle:
+    """What travels through the Celery broker for one cross-camera batch."""
+
+    seq: int
+    frames: Tuple[BatchedFrameHandle, ...]
+
+
+class FrameBatchSlot:
+    """Producer-side owner of one GPU loop's cross-camera frame batch.
+
+    LSO-67 Stage 2. Keyed by GPU **loop** name (there is one YOLO loop and
+    one ArcFace loop), NOT by camera — the whole point is that one batch
+    holds frames from several cameras, which is what makes the batched GPU
+    call worth ~1.8x over per-frame calls.
+
+    Why CameraFrameSlot cannot be reused for this, despite also holding
+    frames: it is one continuously-overwritten slot per camera, so by the
+    time a worker reads camera X's slot the producer may already have
+    written a newer frame there — a batch assembled from those handles
+    would silently mix frames from different instants. The batch that
+    `_collect_frames` hands over holds arrays already copied *out* of those
+    slots, so there is nothing for a per-camera handle to point at anyway.
+    This slot takes its own copy of exactly the frames in one batch, and
+    that copy is stable until the next batch replaces it.
+
+    Single writer (the GPU loop thread), one batch in flight at a time,
+    overwritten per batch — same discipline as RoiBatchSlot, which this
+    otherwise mirrors (offset-packed, variable-size, capacity-reusing).
+    """
+
+    def __init__(self, loop_name: str):
+        self.loop_name = loop_name
+        self._name = _frame_batch_slot_name(loop_name)
+        self._shm: Optional[shared_memory.SharedMemory] = None
+        self._capacity: int = 0
+        self._seq = 0
+        with _ATTACHED_LOCK:
+            _LOCAL_SLOTS[self._name] = self
+
+    def _ensure_capacity(self, nbytes: int) -> None:
+        if self._shm is not None and self._capacity >= nbytes:
+            return
+        self._release()
+        alloc = max(nbytes, 1)  # SharedMemory requires size > 0
+        try:
+            # See CameraFrameSlot._ensure_capacity — same crashed-prior-run
+            # cleanup, same close()-before-unlink() requirement.
+            stale = shared_memory.SharedMemory(name=self._name)
+            stale.close()
+            stale.unlink()
+        except FileNotFoundError:
+            pass
+        self._shm = shared_memory.SharedMemory(
+            name=self._name, create=True, size=alloc
+        )
+        self._capacity = alloc
+        logger.debug(
+            f"FrameBatchSlot[{self.loop_name}]: allocated {alloc / 1024:.0f} KiB "
+            f"as '{self._name}'"
+        )
+
+    def write(
+        self, batch: Dict[int, Tuple[np.ndarray, int]]
+    ) -> FrameBatchHandle:
+        """Pack one cross-camera batch and return its handle.
+
+        `batch` is exactly what `GPUInferenceWorker._collect_frames()`
+        returns: `{camera_id: (frame, frame_num)}`. Iterated in sorted
+        camera-id order so the packed order is deterministic and matches
+        `_yolo_loop`'s existing `cam_ids = sorted(batch.keys())` — the
+        results come back as a list positionally aligned to that order.
+
+        An empty batch is legitimate (the loop simply had nothing ready) and
+        produces an empty `frames` tuple; the reader branches on that
+        without touching the block, matching `_run_yolo_batch([])` → `[]`.
+        """
+        cam_ids = sorted(batch.keys())
+        total_bytes = sum(int(np.prod(batch[cid][0].shape)) for cid in cam_ids)
+        self._ensure_capacity(total_bytes)
+        shm = self._shm
+        assert shm is not None  # _ensure_capacity always allocates or reuses
+
+        frames: List[BatchedFrameHandle] = []
+        offset = 0
+        for cam_id in cam_ids:
+            frame, frame_num = batch[cam_id]
+            shape = frame.shape
+            if len(shape) != 3:
+                raise ValueError(f"expected an HxWxC frame, got shape {shape}")
+            nbytes = int(np.prod(shape))
+            view = np.ndarray(shape, dtype=np.uint8, buffer=shm.buf, offset=offset)
+            view[:] = frame
+            frames.append(
+                BatchedFrameHandle(
+                    camera_id=cam_id,
+                    frame_num=frame_num,
+                    offset=offset,
+                    height=shape[0],
+                    width=shape[1],
+                    channels=shape[2],
+                )
+            )
+            offset += nbytes
+
+        self._seq += 1
+        return FrameBatchHandle(seq=self._seq, frames=tuple(frames))
+
+    def _release(self) -> None:
+        # Same _ATTACHED_LOCK serialisation as the other slots, for the same
+        # BufferError-on-reshape/close reason.
+        with _ATTACHED_LOCK:
+            if self._shm is not None:
+                self._shm.close()
+                try:
+                    self._shm.unlink()
+                except FileNotFoundError:
+                    pass
+                self._shm = None
+                self._capacity = 0
+
+    def close(self) -> None:
+        """Release the slot. Call when the GPU loop stops."""
+        with _ATTACHED_LOCK:
+            if _LOCAL_SLOTS.get(self._name) is self:
+                del _LOCAL_SLOTS[self._name]
+        self._release()
+
+
+def attach_and_read_frame_batch(
+    loop_name: str, handle: FrameBatchHandle
+) -> Optional[List[Tuple[int, int, np.ndarray]]]:
+    """Worker side: map the batch block and copy out every frame it names, as
+    `(camera_id, frame_num, frame)` triples in packed order.
+
+    Returns `[]` for a legitimately empty batch, and `None` if the slot does
+    not exist at all — same None-means-gone convention as the other readers
+    here, so a caller can treat a vanished batch slot exactly like a vanished
+    frame or ROI slot.
+
+    `loop_name` is a separate argument rather than a handle field because the
+    handle describes *what is in* the batch, while the slot name identifies
+    *which producer* owns it — the worker knows which queue it consumes and
+    therefore which loop's slot to read.
+    """
+    if not handle.frames:
+        return []
+
+    name = _frame_batch_slot_name(loop_name)
+    needed = max(
+        f.offset + int(np.prod((f.height, f.width, f.channels)))
+        for f in handle.frames
+    )
+
+    with _ATTACHED_LOCK:
+        local_slot = _LOCAL_SLOTS.get(name)
+        if local_slot is not None:
+            # Same-process fast path — see _LOCAL_SLOTS. Each copy is a
+            # single expression so no view outlives its statement.
+            local_shm = getattr(local_slot, "_shm", None)
+            if local_shm is None or local_shm.size < needed:
+                return None
+            return [
+                (
+                    f.camera_id,
+                    f.frame_num,
+                    np.ndarray(
+                        (f.height, f.width, f.channels),
+                        dtype=np.uint8,
+                        buffer=local_shm.buf,
+                        offset=f.offset,
+                    ).copy(),
+                )
+                for f in handle.frames
+            ]
+
+        shm = _ATTACHED.get(name)
+
+        if shm is not None and shm.size < needed:
+            del _ATTACHED[name]
+            shm = None
+
+        if shm is None:
+            shm = _attach_fresh(name)
+            if shm is None:
+                return None
+            _ATTACHED[name] = shm
+
+        out: List[Tuple[int, int, np.ndarray]] = []
+        for f in handle.frames:
+            view = np.ndarray(
+                (f.height, f.width, f.channels),
+                dtype=np.uint8,
+                buffer=shm.buf,
+                offset=f.offset,
+            )
+            out.append((f.camera_id, f.frame_num, view.copy()))
+
+    if not shared_memory_exists(name):
+        # Same post-copy re-validation as the other readers: a producer that
+        # reallocated or closed the slot mid-read leaves the copies above
+        # reading garbage or a torn batch.
+        with _ATTACHED_LOCK:
+            _ATTACHED.pop(name, None)
+        return None
+
+    return out

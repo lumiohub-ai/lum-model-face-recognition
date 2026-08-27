@@ -39,9 +39,27 @@ dlq_exchange = Exchange('dlq', type='direct')
 # Celery configuration
 celery.conf.update(
     # Task settings
+    #
+    # Results are pickled, not JSON (LSO-67 Stage 2). The face inference
+    # result dicts carry numpy throughout — `embedding` (512-float vector),
+    # `face_image` (a raw pixel crop), and even `face_bbox`, whose elements
+    # are numpy.int64 from `face.bbox.astype(int)` rather than Python ints.
+    # json.dumps rejects all of these, so a JSON result serializer fails the
+    # first face task outright. Converting field-by-field was considered and
+    # rejected: the numpy leaks are not all obvious (face_bbox looks like a
+    # plain list), so it would be a standing trap for anyone adding a field.
+    #
+    # Task *payloads* stay JSON: they only ever carry small handles/scalars,
+    # and keeping them JSON preserves the readable-in-Redis property that
+    # makes broker inspection useful during incidents.
+    #
+    # Pickle is safe here only because the broker is internal and every
+    # producer and consumer is one of our own processes. If either stops
+    # being true, this needs revisiting.
     task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
+    accept_content=['json', 'pickle'],
+    result_serializer='pickle',
+    result_accept_content=['json', 'pickle'],
     timezone='UTC',
     enable_utc=True,
 
