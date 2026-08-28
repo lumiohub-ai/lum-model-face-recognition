@@ -1,13 +1,3 @@
-# Dev/test harness for this repo — NOT the production deployment.
-#
-# Production is so.stack's compose.yml, which today runs only person-tracking
-# and celery-worker (-Q embeddings,detections). It has no camera-worker,
-# yolo-worker or face-worker, and no `ipc:` sharing — so this pipeline cannot
-# run there as-is. Deploying it needs those three services added with:
-#   - `ipc: service:person-tracking` (frames cross by POSIX shared memory)
-#   - the rpc-sockets volume on person-tracking + camera-worker (see below)
-# Without both, the camera worker's RPC calls fail and every client degrades
-# silently to "no detections" — the stack looks healthy and recognises nobody.
 services:
   ollama:
     image: ollama/ollama:0.18.3
@@ -75,11 +65,11 @@ services:
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
       # The two Unix RPC sockets this process serves to camera-worker. They
-      # MUST live on a volume both containers mount: `ipc:` below shares
-      # /dev/shm and the IPC namespace, not the mount namespace, so a socket
-      # under /tmp is invisible to the other container — and the clients
-      # degrade silently to "no detections" rather than failing loudly.
+      # MUST live on a volume both containers mount — each container has its
+      # own /tmp, so a socket there is invisible to the other, and the
+      # clients degrade silently to "no detections" rather than failing loudly.
       - rpc-sockets:/run/lumiohub
+      - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     ports:
@@ -138,13 +128,19 @@ services:
       # face model from here rather than downloading its own copy.
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
+      - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
     healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -167,18 +163,6 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ── Per-camera CPU work: tracking and identity voting ─────────────────────
-  # Every camera's per-frame work runs here; without this service the pipeline
-  # does not process frames at all.
-  #
-  # Two mounts below are load-bearing, not incidental:
-  #   ipc: service:person-tracking — frames cross to this worker through POSIX
-  #     shared memory (a 720p frame costs ~15.6ms through the broker vs ~0.3ms
-  #     as a handle), which needs a shared IPC namespace with the producer.
-  #   rpc-sockets — this worker calls back into person-tracking for GPU
-  #     inference and global track IDs over Unix sockets. `ipc:` does NOT
-  #     share the mount namespace, so without this volume the sockets are
-  #     unreachable and every call degrades silently to "no detections".
   camera-worker:
     image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
@@ -186,13 +170,13 @@ services:
     depends_on:
       person-tracking:
         condition: service_healthy
-    ipc: service:person-tracking
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
       - rpc-sockets:/run/lumiohub
+      - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     extra_hosts:
@@ -210,9 +194,14 @@ services:
     #   - Both replicas would create RoiBatchSlot(camera_id) under the same
     #     shared-memory name; the second unlinks the first's block mid-flight.
     # Scaling safely needs per-request correlation and camera-affinity routing.
+    environment:
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q camera_frames -l warning --pool=solo
     healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -231,10 +220,6 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ── YOLO person detection ─────────────────────────────────────────────────
-  # Owns the YOLO model; main.py no longer loads it. Kept on its own queue so
-  # a camera_frames backlog can never occupy the worker that main.py's GPU
-  # loop thread is blocked waiting on — see the comment in celery_app.py.
   yolo-worker:
     image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
@@ -242,12 +227,12 @@ services:
     depends_on:
       person-tracking:
         condition: service_healthy
-    ipc: service:person-tracking
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
+      - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     extra_hosts:
@@ -256,9 +241,13 @@ services:
       # Preload only this worker's own model. Without it every worker
       # loads both (worker_process_init is app-global) — see yolo_tasks.py.
       SO_WORKER_PRELOAD: yolo
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q yolo -l warning --pool=solo
     healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -281,14 +270,6 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ── SCRFD detection + ArcFace embedding ───────────────────────────────────
-  # Owns the face models; main.py keeps only the copy EmbeddingSyncService
-  # builds for its startup user sync, which is not on any per-frame path.
-  #
-  # Separate from yolo-worker on purpose, not just for tidiness: the two
-  # models have very different shapes (SCRFD runs per-ROI, ArcFace per-crop,
-  # neither batchable — versus YOLO's genuinely batched call), so a slow face
-  # cycle must not hold up detection, and each can later move to its own GPU.
   face-worker:
     image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
@@ -296,21 +277,25 @@ services:
     depends_on:
       person-tracking:
         condition: service_healthy
-    ipc: service:person-tracking
     volumes:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
+      - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       SO_WORKER_PRELOAD: face
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q face -l warning --pool=solo
     healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -339,6 +324,12 @@ volumes:
   # Holds the two Unix RPC sockets person-tracking serves to camera-worker.
   # A volume rather than a bind mount: socket inodes stay out of the repo tree.
   rpc-sockets:
+    driver: local
+  # POSIX shared memory for the frame transport. `ipc:` shares the IPC
+  # NAMESPACE but not the /dev/shm MOUNT, and multiprocessing.shared_memory
+  # is backed by files under /dev/shm — so without this every worker sees an
+  # empty /dev/shm and each task bails out before inference.
+  frame-shm:
     driver: local
 
 networks:

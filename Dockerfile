@@ -8,6 +8,24 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_DEFAULT_TIMEOUT=300
 ENV PIP_RETRIES=5
 
+# Optional apt mirror, for hosts whose network corrupts sustained container
+# downloads (apt reports it as "Hash Sum mismatch"). Point it at a local
+# caching proxy to build there; unset = stock Ubuntu repos, so CI is unchanged.
+#   --build-arg APT_MIRROR=http://172.17.0.1:8899
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      printf 'deb %s/ubuntu jammy main restricted universe multiverse\ndeb %s/ubuntu jammy-updates main restricted universe multiverse\ndeb %s/ubuntu-security jammy-security main restricted universe multiverse\n' \
+        "$APT_MIRROR" "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list && \
+      rm -f /etc/apt/sources.list.d/*.list; \
+    fi
+
+# Same idea for pip. ARG alone is not enough — pip reads these from the
+# ENVIRONMENT, so promote them here. Empty = pip's own defaults.
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
+
 WORKDIR /app
 
 # Install Python + build tools (build-time only)
@@ -34,10 +52,26 @@ RUN mkdir -p -m 0700 /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_ho
 # Upgrade pip
 RUN pip install --upgrade pip setuptools wheel
 
-# Install PyTorch with CUDA 12.2
-RUN pip install --no-cache-dir \
-    torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
-    --extra-index-url https://download.pytorch.org/whl/cu121
+# Install PyTorch with CUDA 12.2.
+#
+# vendor/wheels is an OPTIONAL local cache (gitignored, normally empty): drop
+# the torch/torchvision wheels there and pip installs them instead of
+# downloading ~770MB. Needed on hosts where pip's TLS dies mid-download on
+# wheels this large (BAD_RECORD_MAC); curl the wheels first, then build.
+# With the directory empty this is a normal download, so CI is unaffected.
+COPY vendor/wheels/ /wheels/
+# TORCH_INDEX_URL: same mirror workaround as APT_MIRROR/PIP_INDEX_URL above —
+# this line hits download.pytorch.org directly via --extra-index-url, which
+# PIP_INDEX_URL does not override. Empty = pytorch.org, unaffected for CI.
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+RUN if ls /wheels/torch-*.whl >/dev/null 2>&1; then \
+        echo "installing torch from vendor/wheels" && \
+        pip install --no-cache-dir /wheels/torch-*.whl /wheels/torchvision-*.whl; \
+    else \
+        pip install --no-cache-dir \
+            torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
+            --extra-index-url "$TORCH_INDEX_URL"; \
+    fi
 
 # Install requirements. This pulls lum-model-vision from its own private repo
 # (git+ssh, see requirements.txt) — build with `docker build --ssh default .`
@@ -65,6 +99,15 @@ RUN pip uninstall -y onnxruntime 2>/dev/null || true && \
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+
+# See the builder stage: same optional mirror, redeclared because ARGs do not
+# cross stage boundaries.
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      printf 'deb %s/ubuntu jammy main restricted universe multiverse\ndeb %s/ubuntu jammy-updates main restricted universe multiverse\ndeb %s/ubuntu-security jammy-security main restricted universe multiverse\n' \
+        "$APT_MIRROR" "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list && \
+      rm -f /etc/apt/sources.list.d/*.list; \
+    fi
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1

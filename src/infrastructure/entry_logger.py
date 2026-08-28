@@ -67,26 +67,7 @@ class EntryLogger:
         return person_status
 
     def reload_status(self) -> None:
-        """Reload person status from the database.
-
-        KNOWN RACE, not currently fixed. This runs on a caller's thread while
-        AsyncLogger's "async-db" thread can be inside log_person_entry, and
-        `person_status` / `person_last_camera` are unsynchronised:
-
-          - the comprehension below iterates `person_last_camera` while
-            log_person_entry may insert into it -> RuntimeError: dictionary
-            changed size during iteration. In the camera worker that is
-            swallowed by camera_tasks._for_each_context, so it surfaces as
-            "status reloads quietly stopped working", not a crash.
-          - log_person_entry reads `person_status` before its DB write and
-            writes it after, so a rebind here in between loses that update
-            (a missed IN/OUT transition).
-
-        Pre-dates the Celery work — camera threads could already hit it. The
-        fix is a lock over both dicts taken by this method and by
-        log_person_entry, with _send_attendance's synchronous GCS upload kept
-        OUTSIDE it (it is an unbounded network call).
-        """
+        """Reload person status from the database."""
         logger.info("Reloading person status from database...")
         old_status = self.person_status.copy()
         self.person_status = self._get_last_status()
