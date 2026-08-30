@@ -86,6 +86,8 @@ def run_task(face_detector, rois):
     handle = {
         "camera_id": -1,
         "seq": 1,
+        "segment": 1,
+        "instance_id": 1,
         "rois": [
             {
                 "track_id": i,
@@ -234,7 +236,10 @@ class EmbedBatchTaskDegradationTests(unittest.TestCase):
         from workers import face_tasks
 
         self.assertEqual(
-            face_tasks.embed_batch_task({"camera_id": -1, "seq": 1, "rois": []}), []
+            face_tasks.embed_batch_task(
+                {"camera_id": -1, "seq": 1, "segment": 1, "instance_id": 1, "rois": []}
+            ),
+            [],
         )
 
     def test_missing_shared_memory_returns_one_blank_per_roi(self):
@@ -245,6 +250,8 @@ class EmbedBatchTaskDegradationTests(unittest.TestCase):
         handle = {
             "camera_id": -1,
             "seq": 7,
+            "segment": 7,
+            "instance_id": 7,
             "rois": [
                 {"track_id": i, "offset": 0, "height": 2, "width": 2, "channels": 3}
                 for i in range(3)

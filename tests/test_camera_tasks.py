@@ -85,7 +85,10 @@ class FakeRoiSlot:
             RoiHandle(track_id=tid, offset=0, height=r.shape[0], width=r.shape[1], channels=3)
             for tid, r in zip(track_ids, rois)
         )
-        return RoiBatchHandle(camera_id=1, seq=self._seq, rois=rois_meta)
+        return RoiBatchHandle(
+            camera_id=1, seq=self._seq, segment=self._seq % 8, instance_id=1,
+            rois=rois_meta,
+        )
 
 
 def _make_context(
@@ -161,7 +164,10 @@ class ProcessFrameSingleGateTests(unittest.TestCase):
         from workers.frame_store import FrameHandle
 
         ctx, _ = _make_context()
-        phantom = FrameHandle(camera_id=999, seq=1, height=64, width=64, channels=3)
+        phantom = FrameHandle(
+            camera_id=999, seq=1, segment=1, instance_id=1,
+            height=64, width=64, channels=3,
+        )
         result = ctx.process_frame(phantom, frame_num=1)
         self.assertIsNone(result)
         self.assertEqual(ctx._detection_frame_num, 0)  # bailed before the increment

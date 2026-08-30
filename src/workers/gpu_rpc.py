@@ -96,8 +96,15 @@ DEFAULT_SOCKET_PATH = os.environ.get(
 # in-process assign_global_id. 250ms is generous relative to the ~66ms
 # per-frame budget (configs/config.yaml's fps_alert_threshold: 15.0) because
 # a timeout here degrades to a local ID rather than dropping the frame; it
-# does not need to be as tight as the frame budget itself.
-DEFAULT_TIMEOUT_S = 0.25
+# does not need to be as tight as the frame budget itself. That said, 250ms
+# assumes the main process is keeping up — under sustained CPU contention
+# (several cameras' YOLO+ArcFace+tracking sharing one process's cores) the
+# RPC server thread may not get scheduled in time even though it isn't
+# actually stuck, producing a fallback storm rather than the rare failure
+# this was sized for. SO_GPU_RPC_TIMEOUT_S exists for exactly that: loosen it
+# on a box that's genuinely CPU-bound rather than broken, without changing
+# the default for everyone else.
+DEFAULT_TIMEOUT_S = float(os.environ.get("SO_GPU_RPC_TIMEOUT_S", "0.25"))
 
 # The methods a one-way call is allowed to name. A closed set rather than
 # "any string" — the server executes these by attribute lookup on a live

@@ -96,7 +96,10 @@ class TaskPayloadStaysJsonTests(unittest.TestCase):
         camera_tasks.py could be dropped without anything failing."""
         from workers.frame_store import FrameHandle
 
-        handle = FrameHandle(camera_id=40, seq=1, height=720, width=1280, channels=3)
+        handle = FrameHandle(
+            camera_id=40, seq=1, segment=1, instance_id=1,
+            height=720, width=1280, channels=3,
+        )
         with self.assertRaises(Exception):
             _round_trip_task_payload({"frame_handle": handle})
 

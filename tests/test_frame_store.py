@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
 
@@ -273,6 +274,93 @@ class SameProcessReadTests(unittest.TestCase):
         handle = slot.write([_random_frame(20, 10)], [7])
         slot.close()
         self.assertIsNone(frame_store.attach_and_read_roi_batch(handle))
+
+    def test_frame_read_of_recycled_generation_returns_none_not_wrong_pixels(self):
+        """The actual bug measured live: a single depth-1 slot let a reader
+        silently see whichever frame currently occupies the segment, not the
+        one its handle names, because a same-shape overwrite never tripped
+        the old size-only staleness check. The ring's in-segment seq stamp
+        must catch this: a handle from a generation that has since been
+        recycled onto the same segment must read back as gone, never as
+        another generation's pixels."""
+        from workers import frame_store
+
+        slot = frame_store.CameraFrameSlot(camera_id=306)
+        try:
+            first_frame = _random_frame(32, 32)
+            stale_handle = slot.write(first_frame)
+            # Write enough more generations to cycle the ring all the way
+            # back around to stale_handle's segment.
+            for _ in range(frame_store._RING_SIZE):
+                slot.write(_random_frame(32, 32))
+            got = frame_store.attach_and_read(stale_handle)
+            self.assertIsNone(
+                got, "recycled generation must read as gone, not as newer pixels"
+            )
+        finally:
+            slot.close()
+
+    def test_frame_read_survives_restart_with_same_shape(self):
+        """A CameraFrameSlot's shape (and therefore each segment's byte size)
+        is stable across a producer restart for the common case (same camera
+        resolution) — the old size-only staleness check never caught this,
+        so a worker's cached mapping kept serving frozen pixels from before
+        the restart forever. A bare seq counter isn't enough either: a fresh
+        process's counter also starts at 0/1, so it can coincidentally stamp
+        the exact seq a stale reader is still checking for. Only the random
+        per-process instance id catches this reliably, which is what this
+        test actually exercises by patching `_INSTANCE_ID` to a different
+        value for the 'post-restart' writer — a real restart is a different
+        OS process and therefore a genuinely different random id, not
+        something a same-process test gets from doing nothing."""
+        from workers import frame_store
+
+        old_slot = frame_store.CameraFrameSlot(camera_id=307)
+        try:
+            frame_before = _random_frame(32, 32)
+            stale_handle = old_slot.write(frame_before)
+            # A real restart's worker process doesn't have _LOCAL_SLOTS
+            # populated (it is a separate process reading via _ATTACHED), so
+            # exercise the cross-process cache path explicitly instead of
+            # the same-process fast path this test class is otherwise about.
+            with frame_store._ATTACHED_LOCK:
+                del frame_store._LOCAL_SLOTS[old_slot._base_name]
+            segment_name = frame_store._segment_name(
+                old_slot._base_name, stale_handle.segment
+            )
+            cached_shm = frame_store._attach_segment(segment_name)
+            self.assertIsNotNone(cached_shm)
+            got_before = frame_store.attach_and_read(stale_handle)
+            self.assertTrue(np.array_equal(got_before, frame_before))
+
+            # Same segment, same size, but a genuinely different process
+            # would stamp a different instance id — simulate that instead of
+            # relying on the seq counter to happen to differ.
+            with mock.patch.object(
+                frame_store, "_INSTANCE_ID", frame_store._INSTANCE_ID + 1
+            ):
+                new_slot = frame_store.CameraFrameSlot(camera_id=307)
+                try:
+                    frame_data_after = _random_frame(32, 32)
+                    new_handle = new_slot.write(frame_data_after)
+                    if new_handle.segment == stale_handle.segment:
+                        # Same segment reused post-restart, same size: the
+                        # old size-only check would have kept trusting the
+                        # cached mapping forever here. The header check
+                        # (seq AND instance id) must not.
+                        self.assertIsNone(
+                            frame_store.attach_and_read(stale_handle)
+                        )
+                    got_after = frame_store.attach_and_read(new_handle)
+                    self.assertTrue(np.array_equal(got_after, frame_data_after))
+                finally:
+                    new_slot.close()
+        finally:
+            old_slot.close()
+            frame_store._ATTACHED.pop(
+                frame_store._segment_name(old_slot._base_name, stale_handle.segment),
+                None,
+            )
 
 
 class FrameBatchSlotTests(unittest.TestCase):

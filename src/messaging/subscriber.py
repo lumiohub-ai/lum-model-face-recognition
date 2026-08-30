@@ -39,6 +39,7 @@ def start_listener(channel, handler, *, is_running=None, name=None):
 
     def listener():
         retry_delay = 1
+        pubsub = None
         while still_running():
             try:
                 pubsub = RedisClient.get_instance().client.pubsub()
@@ -64,6 +65,15 @@ def start_listener(channel, handler, *, is_running=None, name=None):
                 )
                 time.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30)
+            finally:
+                # Every iteration creates a fresh pubsub (a new connection);
+                # without closing the previous one on retry, each reconnect
+                # leaked the old connection/socket instead of relying on GC.
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
 
     thread = threading.Thread(target=listener, daemon=True, name=name)
     thread.start()

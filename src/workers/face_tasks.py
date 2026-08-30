@@ -76,6 +76,8 @@ def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
     batch_handle = RoiBatchHandle(
         camera_id=handle["camera_id"],
         seq=handle["seq"],
+        segment=handle["segment"],
+        instance_id=handle["instance_id"],
         rois=tuple(RoiHandle(**r) for r in handle["rois"]),
     )
 

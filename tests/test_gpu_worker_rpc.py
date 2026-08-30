@@ -315,7 +315,8 @@ class FailureModeTests(unittest.TestCase):
             # A handle naming a slot that was never written - simulates the
             # producer having closed it already.
             phantom_handle = frame_store.FrameHandle(
-                camera_id=999, seq=1, height=64, width=64, channels=3
+                camera_id=999, seq=1, segment=1, instance_id=1,
+                height=64, width=64, channels=3,
             )
             result = client.detect(camera_id=999, frame_handle=phantom_handle, frame_num=1)
             self.assertEqual(result, [])

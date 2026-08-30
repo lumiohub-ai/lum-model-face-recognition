@@ -75,7 +75,7 @@ class _CameraContext:
         camera_config = self._load_camera_config(camera_id, load_cameras_from_db)
         self.camera_config = camera_config
         self.recognition_interval = int(
-            camera_config.get("pipeline", {}).get("recognition_interval", 5)
+            _load_yaml_config().get("pipeline", {}).get("recognition_interval", 5)
         )
 
         vision_config = build_vision_config(_load_yaml_config())
@@ -234,14 +234,12 @@ class _CameraContext:
         if run_recognition and person_rois:
             track_ids = [tid for tid, _roi, _off in person_rois]
             rois = [roi for _tid, roi, _off in person_rois]
-            roi_offsets = {tid: off for tid, _roi, off in person_rois}
             roi_slot = _roi_slot_for(self.camera_id)
             roi_handle = roi_slot.write(rois, track_ids)
             embeddings_map = self.gpu_worker_client.embed(
                 camera_id=self.camera_id, roi_batch_handle=roi_handle
             )
         else:
-            roi_offsets = {}
             embeddings_map = {}
 
         events = self.camera_engine.finalize_identities(
@@ -338,7 +336,7 @@ class _CameraContext:
 
         self.camera_config = camera_config
         self.recognition_interval = int(
-            camera_config.get("pipeline", {}).get("recognition_interval", 5)
+            _load_yaml_config().get("pipeline", {}).get("recognition_interval", 5)
         )
         # Only `application` is pushed onto the engine — it is the one field
         # engine.reload_camera_configs itself updates on a live camera.
@@ -500,7 +498,7 @@ def _roi_slot_for(camera_id: int):
         return slot
 
 
-@celery.task(name="camera.process_frame", queue="camera_frames")
+@celery.task(name="camera.process_frame", queue="camera_frames", ignore_result=True)
 def process_frame_task(
     camera_id: int, frame_handle: Dict[str, int], frame_num: int
 ) -> Optional[Dict[str, Any]]:

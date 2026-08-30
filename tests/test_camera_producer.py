@@ -48,7 +48,7 @@ class FakeSlot:
 
         self._seq += 1
         return FrameHandle(
-            camera_id=1, seq=self._seq,
+            camera_id=1, seq=self._seq, segment=self._seq % 8, instance_id=1,
             height=frame.shape[0], width=frame.shape[1], channels=3,
         )
 
@@ -134,6 +134,38 @@ class EnqueueTests(unittest.TestCase):
             producer._produce_one_frame()
 
         self.assertEqual(task.calls, [])
+
+    def test_roi_is_read_live_from_camera_config_not_cached(self):
+        """LSO-155: engine.reload_camera_configs mutates camera_config in
+        place on a same-camera-set reload, rather than rebinding it — a
+        cached self.roi captured once at construction would never see that
+        update. The producer must read roi from camera_config on every
+        frame instead."""
+        from pipeline.camera_worker import CeleryCameraProducer
+
+        camera_config = {"camera_id": 1}
+        producer = CeleryCameraProducer(
+            camera_id=1,
+            camera_config=camera_config,
+            stream_handler=FakeStream([_frame(64, 64), _frame(64, 64)]),
+            detection_interval=1,
+        )
+        producer._frame_slot = FakeSlot()
+        task = FakeTask()
+
+        with _PatchedTask(task):
+            producer._produce_one_frame()  # no roi set yet
+            self.assertEqual(task.calls[0]["kwargs"]["frame_num"], 1)
+
+            # Simulate reload_camera_configs' in-place mutation.
+            camera_config["roi"] = [0, 0, 10, 10]
+            producer._produce_one_frame()
+
+        # The second call must have used the new roi — the cropped frame's
+        # handle carries the cropped height/width, not the original 64x64.
+        second_handle = task.calls[1]["kwargs"]["frame_handle"]
+        self.assertEqual(second_handle["height"], 10)
+        self.assertEqual(second_handle["width"], 10)
 
 
 if __name__ == "__main__":

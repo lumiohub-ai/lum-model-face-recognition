@@ -106,6 +106,8 @@ def detect_batch_task(handle: Dict[str, Any]) -> List[List[Dict]]:
 
     batch_handle = FrameBatchHandle(
         seq=handle["seq"],
+        segment=handle["segment"],
+        instance_id=handle["instance_id"],
         frames=tuple(BatchedFrameHandle(**f) for f in handle["frames"]),
     )
 
