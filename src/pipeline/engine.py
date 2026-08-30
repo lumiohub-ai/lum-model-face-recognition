@@ -9,7 +9,7 @@ GPU inference queues (GPUInferenceWorker) and the cross-camera identity state
 
 import threading
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -243,6 +243,41 @@ class SmartOfficeEngine:
             )
         return workers
 
+    def _restart_camera_stream(self, camera_id: int, new_config: Dict[str, Any]) -> None:
+        """Reconnect one camera's video stream after its `stream_url` changed
+        (LSO-155), without touching any other camera.
+
+        StreamManager.add_stream is a no-op if `camera_id` is already in
+        `self.streams` (it exists for adding a NEW camera, LSO-130) — so
+        remove_stream must run first, or add_stream would just hand back the
+        stale StreamHandler. CeleryCameraProducer holds a direct StreamHandler
+        reference from construction (not re-read per frame), so the producer
+        itself must be recreated too, not just the stream underneath it.
+        """
+        old_worker = next(
+            (w for w in self.camera_workers if w.camera_id == camera_id), None
+        )
+        if old_worker is not None:
+            old_worker.stop()
+
+        self.stream_manager.remove_stream(camera_id)
+        self.stream_manager.add_stream(new_config)
+
+        new_worker = CeleryCameraProducer(
+            camera_id=camera_id,
+            camera_config=new_config,
+            stream_handler=self.stream_manager.streams.get(camera_id),
+            detection_interval=self._detection_interval,
+            metrics_collector=self.metrics,
+        )
+        new_worker.start()
+
+        self.camera_workers = [
+            new_worker if w.camera_id == camera_id else w
+            for w in self.camera_workers
+        ]
+        logger.info(f"Camera {camera_id}: stream restarted (stream_url changed)")
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def stop(self) -> None:
@@ -333,10 +368,31 @@ class SmartOfficeEngine:
 
             if old_ids == new_ids:
                 for new_config in new_configs:
-                    for i, old_config in enumerate(self.camera_configs):
-                        if old_config.get("camera_id") == new_config.get("camera_id"):
-                            self.camera_configs[i] = new_config
-                            break
+                    for old_config in self.camera_configs:
+                        if old_config.get("camera_id") != new_config.get("camera_id"):
+                            continue
+                        # LSO-155: a rename/re-IP keeps the same camera_id but
+                        # changes stream_url. The old code rebound this list
+                        # slot to a brand-new dict (self.camera_configs[i] =
+                        # new_config) — CeleryCameraProducer/StreamManager
+                        # hold their own references from construction, so
+                        # that swap never reached them and the camera kept
+                        # streaming from the dead URL until a full service
+                        # restart (a real 19h attendance outage). Mutating in
+                        # place instead means every live reader that already
+                        # holds `old_config` (e.g. CeleryCameraProducer.roi
+                        # lookups) sees the update for free; stream_url still
+                        # needs an explicit restart since the RTSP connection
+                        # itself isn't re-read per frame the way roi is.
+                        old_url = old_config.get("stream_url")
+                        new_url = new_config.get("stream_url")
+                        old_config.clear()
+                        old_config.update(new_config)
+                        if new_url != old_url:
+                            self._restart_camera_stream(
+                                new_config.get("camera_id"), old_config
+                            )
+                        break
                 logger.info(
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
                 )

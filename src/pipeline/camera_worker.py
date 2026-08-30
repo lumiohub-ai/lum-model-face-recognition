@@ -9,7 +9,7 @@ separate process.
 import dataclasses
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
@@ -40,7 +40,6 @@ class CeleryCameraProducer:
         self.detection_interval = max(1, detection_interval)
         self._metrics = metrics_collector
 
-        self.roi: Optional[List[int]] = camera_config.get("roi")
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._frame_num: int = 0
@@ -103,8 +102,13 @@ class CeleryCameraProducer:
         self._frame_num += 1
 
         # ── Step 2: Apply ROI — identical to CameraWorker ──────────────────
-        if self.roi:
-            x1, y1, x2, y2 = self.roi
+        # Read live off camera_config rather than a cached self.roi: a config
+        # reload mutates this dict in place (see engine.py's
+        # reload_camera_configs), so this always sees the current ROI without
+        # needing its own restart the way a stream_url change does.
+        roi = self.camera_config.get("roi")
+        if roi:
+            x1, y1, x2, y2 = roi
             frame = frame[y1:y2, x1:x2]
             if frame.size == 0:
                 return
