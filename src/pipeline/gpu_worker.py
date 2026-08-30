@@ -7,6 +7,7 @@ Two independent GPU threads:
 Camera threads are fully independent — a slow camera never blocks a fast one.
 """
 
+import os
 import queue
 import threading
 import time
@@ -14,6 +15,17 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from loguru import logger
+
+# Per-camera detect/embed round-trip budget (Celery dispatch + inference +
+# reply). Sized for a lightly-loaded host; under sustained CPU contention
+# (several cameras' YOLO+ArcFace+tracking sharing one process's cores, or a
+# broker hiccup) this is too tight and produces a "timeout, then a stranded
+# reply gets discarded as stale" pair that costs the camera one frame's
+# detections per occurrence — self-healing, but avoidable with more
+# headroom. Configurable per deployment rather than baked in, same reasoning
+# as gpu_rpc.py's SO_GPU_RPC_TIMEOUT_S.
+_DETECTION_TIMEOUT_S = float(os.environ.get("SO_GET_DETECTIONS_TIMEOUT_S", "2.0"))
+_EMBEDDING_TIMEOUT_S = float(os.environ.get("SO_GET_EMBEDDINGS_TIMEOUT_S", "2.0"))
 
 # frontality/pitch moved with _run_arcface_batch to workers/face_tasks.py —
 # they annotate the result dict where it is built, so this module no longer
@@ -250,7 +262,7 @@ class GPUInferenceWorker:
                 return False
 
     def get_detections(
-        self, camera_id: int, frame_num: int, timeout: float = 2.0
+        self, camera_id: int, frame_num: int, timeout: float = _DETECTION_TIMEOUT_S
     ) -> List[Dict]:
         """Block until this camera's detections for *frame_num* are available."""
         q = self._queue_for(self._detection_out_queues, camera_id, "get_detections")
@@ -282,7 +294,7 @@ class GPUInferenceWorker:
         return seq
 
     def get_embeddings(
-        self, camera_id: int, seq: int, timeout: float = 2.0
+        self, camera_id: int, seq: int, timeout: float = _EMBEDDING_TIMEOUT_S
     ) -> Dict[int, Dict]:
         """Block until this camera's ArcFace results for *seq* are available."""
         q = self._queue_for(self._embedding_out_queues, camera_id, "get_embeddings")
@@ -407,11 +419,17 @@ class GPUInferenceWorker:
     # ── Inference helpers ─────────────────────────────────────────────────────
 
     # How long to wait for the YOLO worker's reply. Sits above the camera
-    # side's own 2.0s get_detections timeout so that when the GPU worker is
-    # merely slow, the camera's timeout fires first and drops one frame —
-    # rather than this thread giving up and stranding a reply that the next
-    # cycle would then have to discard as stale.
-    YOLO_TASK_TIMEOUT_S = 3.0
+    # side's own get_detections timeout (_DETECTION_TIMEOUT_S) so that when
+    # the GPU worker is merely slow, the camera's timeout fires first and
+    # drops one frame — rather than this thread giving up and stranding a
+    # reply that the next cycle would then have to discard as stale.
+    # Configurable via SO_YOLO_TASK_TIMEOUT_S for the same reason as
+    # SO_GET_DETECTIONS_TIMEOUT_S above — keep the +1.0s margin over
+    # _DETECTION_TIMEOUT_S if you raise one, or you reintroduce the race
+    # this ordering exists to avoid.
+    YOLO_TASK_TIMEOUT_S = float(
+        os.environ.get("SO_YOLO_TASK_TIMEOUT_S", str(_DETECTION_TIMEOUT_S + 1.0))
+    )
 
     def _run_yolo_batch(
         self, batch: Dict[int, Tuple[np.ndarray, int]]
@@ -472,11 +490,15 @@ class GPUInferenceWorker:
             )
             return [[] for _ in range(n_frames)]
 
-    # Sits above the camera side's own 2.0s get_embeddings timeout, for the
-    # same reason as YOLO_TASK_TIMEOUT_S. The face path is the slower of the
-    # two (SCRFD runs per-ROI and ArcFace per-crop, both un-batchable), so it
-    # gets more headroom.
-    FACE_TASK_TIMEOUT_S = 4.0
+    # Sits above the camera side's own get_embeddings timeout
+    # (_EMBEDDING_TIMEOUT_S), for the same reason as YOLO_TASK_TIMEOUT_S. The
+    # face path is the slower of the two (SCRFD runs per-ROI and ArcFace
+    # per-crop, both un-batchable), so it gets more headroom. Configurable
+    # via SO_FACE_TASK_TIMEOUT_S — keep the +2.0s margin over
+    # _EMBEDDING_TIMEOUT_S if you raise one.
+    FACE_TASK_TIMEOUT_S = float(
+        os.environ.get("SO_FACE_TASK_TIMEOUT_S", str(_EMBEDDING_TIMEOUT_S + 2.0))
+    )
 
     def _run_arcface_batch(self, person_rois: List[np.ndarray]) -> List[Dict]:
         """Detect + embed faces for a flat, cross-camera list of person ROIs,

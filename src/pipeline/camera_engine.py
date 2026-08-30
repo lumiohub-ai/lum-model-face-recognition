@@ -352,7 +352,21 @@ class CameraEngine:
                                 f"old_global={current_global_id} -> new_global={new_global_id} "
                                 f"camera={self.camera_id} local_track={track_id}"
                             )
-                        elif existing_global is None and current_global_id is not None:
+                        elif (
+                            existing_global is None
+                            and current_global_id is not None
+                            and current_global_id >= 0
+                        ):
+                            # Only publish a REAL global id. When the
+                            # assign_global_id RPC fails, gpu_rpc's
+                            # _LocalIdFallback hands back a negative,
+                            # process-local id (real ones start at 1000 and
+                            # count up). Sending that to the shared manager
+                            # names a global track that does not exist, so
+                            # the identity is recorded against nothing and
+                            # is silently lost. Skipping keeps this camera
+                            # tracking locally until the RPC recovers, which
+                            # is the documented degraded mode.
                             self.global_track_manager.update_global_track_identity(
                                 current_global_id, identity, locked=True
                             )

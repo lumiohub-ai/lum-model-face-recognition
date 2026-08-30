@@ -77,6 +77,7 @@ import os
 import pickle
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
@@ -198,6 +199,20 @@ class GpuRpcClient:
         self._socket_path = socket_path
         self._timeout_s = timeout_s
         self._fallback = _LocalIdFallback()
+        # One long-lived connection instead of one per call. At 6 cameras x
+        # ~3 tracks x ~15 detection fps the old connect-per-call pattern cost
+        # ~550 connects/sec, and (with the server's old thread-per-connection
+        # accept loop) ~550 thread spawns/sec inside the main process —
+        # enough GIL contention on its own to push assign_global_id past its
+        # timeout and trigger the local-only-ID fallback storm this class's
+        # docstring anticipates.
+        #
+        # The lock is not for camera-worker's task path (Celery runs it
+        # --pool=solo, one task at a time) but for the reload listener
+        # threads camera_tasks.py starts, which share the same _CameraContext
+        # and therefore the same client.
+        self._sock: Optional[socket.socket] = None
+        self._sock_lock = threading.Lock()
         # Metrics hook: set by the caller (camera_tasks.py) so a struggling
         # main process is visible as a failure-rate metric rather than only
         # inferable from a spike in local-only ("unreconciled") IDs. Fires on
@@ -209,17 +224,55 @@ class GpuRpcClient:
         # so this module has no dependency on src/infrastructure.
         self.on_fallback: Optional[Any] = None
 
+    def _connect(self) -> socket.socket:
+        """Open the persistent connection. Caller must hold _sock_lock."""
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self._timeout_s)
+        sock.connect(self._socket_path)
+        return sock
+
+    def close(self) -> None:
+        """Drop the persistent connection. Safe to call repeatedly; the next
+        call reconnects. Exposed for tests and for a clean shutdown."""
+        with self._sock_lock:
+            self._drop_locked()
+
+    def _drop_locked(self) -> None:
+        """Close and forget the current socket. Caller must hold _sock_lock."""
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+
     def _send_and_maybe_recv(
         self, request: MethodCallRequest
     ) -> Optional[MethodCallResult]:
         payload = pickle.dumps(request, protocol=pickle.HIGHEST_PROTOCOL)
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(self._timeout_s)
-            sock.connect(self._socket_path)
-            send_framed(sock, payload)
-            if request.one_way:
-                return None
-            response = pickle.loads(recv_framed(sock))
+        # One retry: a persistent socket can be closed at the far end between
+        # calls (server restart, idle reap) and the failure only surfaces on
+        # the next send. That is an expected, recoverable state — not the
+        # "main process is unreachable" case the caller's fallback is for —
+        # so reconnect once and retry before giving up. The retry is safe for
+        # every method here: the blocking ones are idempotent server-side
+        # (assign_global_id returns the cached mapping for an already-assigned
+        # track), and a dropped one-way call is what the old per-call socket
+        # produced anyway.
+        with self._sock_lock:
+            for attempt in (1, 2):
+                try:
+                    if self._sock is None:
+                        self._sock = self._connect()
+                    send_framed(self._sock, payload)
+                    if request.one_way:
+                        return None
+                    response = pickle.loads(recv_framed(self._sock))
+                    break
+                except Exception:
+                    self._drop_locked()
+                    if attempt == 2:
+                        raise
         if isinstance(response, Exception):
             raise response
         return MethodCallResult(value=response, ok=True)
@@ -272,19 +325,43 @@ class GpuRpcServer:
     """Main-process side: owns the real GlobalTrackManager, serves requests
     from worker processes over a Unix domain socket.
 
-    One request handled per connection — GlobalTrackManager's own RLock
-    is what actually serialises concurrent callers; this server
-    does not add a second layer of locking, it just marshals bytes to/from
-    that already-thread-safe object and dispatches by method name from the
-    fixed allow-list in _BLOCKING_METHODS / _ONE_WAY_METHODS.
+    Connections are long-lived and serve many requests in a loop, handled by
+    a bounded worker pool. The previous shape — a fresh thread per
+    connection, one request per connection — cost ~550 thread spawns/sec at
+    6 cameras (one connect per track per detection frame), and every one of
+    those spawns held the GIL in the same process running YOLO, ArcFace and
+    tracking. That contention, not the work itself, is what pushed
+    assign_global_id past its timeout and produced the local-only-ID fallback
+    storm. Pool size is small on purpose: GlobalTrackManager's own RLock
+    serialises the real work anyway, so extra threads would only add
+    scheduling overhead, not throughput.
+
+    GlobalTrackManager's RLock remains what actually serialises concurrent
+    callers; this server does not add a second layer of locking, it just
+    marshals bytes to/from that already-thread-safe object and dispatches by
+    method name from the fixed allow-list in _BLOCKING_METHODS /
+    _ONE_WAY_METHODS.
     """
 
-    def __init__(self, global_track_manager, socket_path: str = DEFAULT_SOCKET_PATH):
+    # One per expected client process (camera-worker, plus headroom for the
+    # healthcheck probe and a reconnecting client overlapping its old
+    # connection). Not per camera: a client multiplexes all its cameras'
+    # calls over its single connection.
+    DEFAULT_MAX_WORKERS = int(os.environ.get("SO_GPU_RPC_MAX_WORKERS", "8"))
+
+    def __init__(
+        self,
+        global_track_manager,
+        socket_path: str = DEFAULT_SOCKET_PATH,
+        max_workers: Optional[int] = None,
+    ):
         self._manager = global_track_manager
         self._socket_path = socket_path
         self._server_sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._max_workers = max_workers or self.DEFAULT_MAX_WORKERS
+        self._pool: Optional[ThreadPoolExecutor] = None
 
     def start(self) -> None:
         if os.path.exists(self._socket_path):
@@ -293,6 +370,9 @@ class GpuRpcServer:
         self._server_sock.bind(self._socket_path)
         self._server_sock.listen(64)
         self._running = True
+        self._pool = ThreadPoolExecutor(
+            max_workers=self._max_workers, thread_name_prefix="gpu-rpc"
+        )
         self._thread = threading.Thread(
             target=self._serve_forever, daemon=True, name="gpu-rpc-server"
         )
@@ -305,6 +385,11 @@ class GpuRpcServer:
             self._server_sock.close()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+        if self._pool is not None:
+            # Connection loops exit on _running=False or on the client
+            # closing; don't block shutdown waiting for an idle one.
+            self._pool.shutdown(wait=False)
+            self._pool = None
         if os.path.exists(self._socket_path):
             os.unlink(self._socket_path)
 
@@ -316,9 +401,16 @@ class GpuRpcServer:
                 conn, _ = server_sock.accept()
             except OSError:
                 break  # socket closed by stop()
-            threading.Thread(
-                target=self._handle_connection, args=(conn,), daemon=True
-            ).start()
+            pool = self._pool
+            if pool is None:
+                conn.close()
+                break
+            try:
+                pool.submit(self._handle_connection, conn)
+            except RuntimeError:
+                # Pool shut down between the accept and the submit.
+                conn.close()
+                break
 
     def _dispatch(self, request: MethodCallRequest) -> Any:
         """Execute one request against the real GlobalTrackManager.
@@ -342,27 +434,45 @@ class GpuRpcServer:
         return result
 
     def _handle_connection(self, conn: socket.socket) -> None:
-        with conn:
-            try:
-                payload = recv_framed(conn)
-                request: MethodCallRequest = pickle.loads(payload)
-                response: Any = self._dispatch(request)
-            except ConnectionError:
-                # Connected then closed without sending: the compose
-                # healthcheck probing that we are listening, or a client whose
-                # timeout fired mid-handshake. Not exception-worthy — logging
-                # a stack trace every probe would train readers to skim past
-                # the one that matters.
-                logger.debug("GpuRpcServer: connection closed before a request arrived")
-                return
-            except Exception as e:
-                logger.exception(f"GpuRpcServer: request failed: {e}")
-                response = e
-                request = None  # type: ignore[assignment]
+        """Serve requests from one client until it disconnects.
 
-            if request is not None and request.one_way:
-                return  # caller isn't reading a reply — see docstring
-            try:
-                send_framed(conn, pickle.dumps(response, protocol=pickle.HIGHEST_PROTOCOL))
-            except OSError:
-                pass  # client already gave up (its own timeout fired first)
+        A loop, not a single request: clients hold their connection open
+        across calls (see GpuRpcClient), so one connection carries every
+        call that client makes for the life of its process.
+        """
+        with conn:
+            while self._running:
+                try:
+                    payload = recv_framed(conn)
+                except ConnectionError:
+                    # Client closed, or connected then went away without
+                    # sending — the compose healthcheck probing that we are
+                    # listening, or a client whose timeout fired
+                    # mid-handshake. Not exception-worthy: logging a stack
+                    # trace every probe would train readers to skim past the
+                    # one that matters.
+                    logger.debug("GpuRpcServer: client disconnected")
+                    return
+                except OSError:
+                    return
+
+                request: Optional[MethodCallRequest] = None
+                try:
+                    request = pickle.loads(payload)
+                    response: Any = self._dispatch(request)
+                except Exception as e:
+                    logger.exception(f"GpuRpcServer: request failed: {e}")
+                    response = e
+
+                # A failed one-way call must not send a reply: the client is
+                # not reading one, so the bytes would sit in the socket and
+                # be mis-read as the response to its NEXT request. Only skip
+                # when we actually decoded the request far enough to know.
+                if request is not None and request.one_way:
+                    continue
+                try:
+                    send_framed(
+                        conn, pickle.dumps(response, protocol=pickle.HIGHEST_PROTOCOL)
+                    )
+                except OSError:
+                    return  # client gave up (its own timeout fired first)

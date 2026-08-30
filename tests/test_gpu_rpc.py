@@ -283,6 +283,77 @@ class GpuRpcFailureModeTests(unittest.TestCase):
             server.stop()
 
 
+class GpuRpcPersistentConnectionTests(unittest.TestCase):
+    """The client holds ONE connection across calls and the server serves
+    many requests per connection (both changed together to kill the
+    ~550 connects+thread-spawns/sec that starved the main process). These
+    pin the behaviours that only a persistent connection can get wrong.
+    """
+
+    def setUp(self):
+        self.socket_path = _free_socket_path(self.id())
+        self.manager = FakeGlobalTrackManager()
+        self.server = GpuRpcServer(self.manager, socket_path=self.socket_path)
+        self.server.start()
+        self.client = GpuRpcClient(socket_path=self.socket_path, timeout_s=2.0)
+
+    def tearDown(self):
+        self.client.close()
+        self.server.stop()
+        if os.path.exists(self.socket_path):
+            os.unlink(self.socket_path)
+
+    def test_many_calls_reuse_one_connection(self):
+        """The point of the change: N calls must not mean N connections."""
+        for i in range(10):
+            result = self.client.call("assign_global_id", camera_id=1, local_track_id=i)
+            self.assertTrue(result.ok)
+        first = self.client._sock
+        self.assertIsNotNone(first)
+        self.client.call("assign_global_id", camera_id=1, local_track_id=99)
+        self.assertIs(self.client._sock, first, "client reconnected mid-run")
+        self.assertEqual(len(self.manager.calls), 11)
+
+    def test_one_way_and_blocking_interleave_without_desync(self):
+        """The real hazard of a persistent connection: a one-way call sends
+        no reply, so if the server ever wrote one anyway it would be read as
+        the answer to the NEXT blocking call. Interleave them and check every
+        blocking answer is the one its own request asked for.
+        """
+        for i in range(5):
+            self.client.call_one_way("on_track_update", camera_id=7, local_track_id=i)
+            result = self.client.call(
+                "assign_global_id", camera_id=7, local_track_id=i
+            )
+            self.assertTrue(result.ok)
+            self.assertEqual(result.value, 1000 + 7 * 100 + i)
+
+    def test_a_failing_one_way_call_does_not_desync_the_stream(self):
+        """A one-way call that raises server-side must still send nothing,
+        or the error object becomes the next blocking call's 'answer'."""
+        self.client.call_one_way("on_track_removed", camera_id=1, local_track_id=1)
+        # boom: unknown kwarg makes the real dispatch raise inside the server
+        self.client.call_one_way("on_track_update", camera_id=1, nonsense=True)
+        result = self.client.call("assign_global_id", camera_id=2, local_track_id=3)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.value, 1000 + 2 * 100 + 3)
+
+    def test_client_reconnects_after_the_server_restarts(self):
+        """A persistent socket dies when the server does; the client must
+        transparently reconnect rather than fall back forever. This is the
+        failure mode connect-per-call never had."""
+        first = self.client.call("assign_global_id", camera_id=1, local_track_id=1)
+        self.assertTrue(first.ok)
+
+        self.server.stop()
+        self.server = GpuRpcServer(self.manager, socket_path=self.socket_path)
+        self.server.start()
+
+        after = self.client.call("assign_global_id", camera_id=1, local_track_id=2)
+        self.assertTrue(after.ok, "client did not recover after server restart")
+        self.assertEqual(after.value, 1000 + 1 * 100 + 2)
+
+
 class GpuRpcConcurrencyTests(unittest.TestCase):
     def test_concurrent_clients_get_correct_independent_results(self):
         socket_path = _free_socket_path("concurrent")
