@@ -343,11 +343,18 @@ class GpuRpcServer:
     _ONE_WAY_METHODS.
     """
 
-    # One per expected client process (camera-worker, plus headroom for the
+    # One per persistent client connection, not per client process: each
+    # camera gets its own _CameraContext with its own GpuRpcClient
+    # (camera_tasks.py's _context_for/_CameraContext), and each holds one
+    # long-lived connection for the process lifetime — _handle_connection
+    # never returns while the client stays connected, so it permanently
+    # pins a pool slot per camera, not per process. Default must exceed the
+    # expected camera count on this camera-worker (plus headroom for the
     # healthcheck probe and a reconnecting client overlapping its old
-    # connection). Not per camera: a client multiplexes all its cameras'
-    # calls over its single connection.
-    DEFAULT_MAX_WORKERS = int(os.environ.get("SO_GPU_RPC_MAX_WORKERS", "8"))
+    # connection) or cameras beyond the limit are accepted but never
+    # serviced, timing out forever. Override via SO_GPU_RPC_MAX_WORKERS if a
+    # deployment runs more cameras than this default.
+    DEFAULT_MAX_WORKERS = int(os.environ.get("SO_GPU_RPC_MAX_WORKERS", "64"))
 
     def __init__(
         self,
