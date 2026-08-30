@@ -29,25 +29,53 @@ ENV PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 WORKDIR /app
 
 # Install Python + build tools (build-time only)
-RUN rm -rf /var/lib/apt/lists/* && \
-    apt-get clean && \
-    apt-get update --fix-missing && \
-    apt-get install -y --no-install-recommends \
-    python3.10 \
-    python3-pip \
-    python3.10-dev \
-    build-essential \
-    wget \
-    curl \
-    git \
-    openssh-client \
-    ca-certificates \
-    && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+#
+# The retry loop is for the same intermittent network corruption pip's
+# vendor/wheels workaround exists for (see below) — on this class of host,
+# apt-get update's index download occasionally comes back with a "Hash Sum
+# mismatch" (a genuinely different, wrong SHA256 each time, confirmed live —
+# not a broken mirror, transient bit corruption in transit). --fix-missing
+# does not recover from this; only clearing the downloaded list and retrying
+# the whole update+install does.
+RUN for i in 1 2 3 4 5; do \
+        rm -rf /var/lib/apt/lists/* && \
+        apt-get clean && \
+        apt-get update --fix-missing && \
+        apt-get install -y --no-install-recommends \
+            python3.10 \
+            python3-pip \
+            python3.10-dev \
+            build-essential \
+            wget \
+            curl \
+            git \
+            openssh-client \
+            ca-certificates \
+        && touch /tmp/apt-ok && break; \
+        echo "apt-get attempt $i failed, retrying..." && sleep 3; \
+    done && \
+    test -f /tmp/apt-ok && rm -f /tmp/apt-ok && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # github.com must be a known host before pip can clone lum-model-vision over
 # SSH, or the clone hangs on an interactive host-key prompt.
 RUN mkdir -p -m 0700 /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+# PEP 517 build isolation spawns a FRESH pip in a subprocess to install a
+# package's build deps (insightface needs setuptools/numpy/cython to compile
+# its Cython extensions). That subprocess inherits none of the outer pip's
+# command-line flags, so `--find-links /wheels` on the install below never
+# reaches it — it resolves its build deps straight from PyPI and, on a host
+# whose network corrupts sustained downloads, dies with BAD_RECORD_MAC
+# partway through numpy (observed: 14.9/16.8 MB in).
+#
+# PIP_FIND_LINKS is the env-var form of --find-links, and env vars DO cross
+# the subprocess boundary, so the isolated build sees /wheels too. Left as an
+# additive source rather than PIP_NO_INDEX: anything not vendored must still
+# resolve from PyPI, so an incomplete /wheels degrades to today's behaviour
+# instead of failing outright. Empty /wheels = unchanged, so CI is unaffected.
+ENV PIP_FIND_LINKS=/wheels
 
 # Upgrade pip
 RUN pip install --upgrade pip setuptools wheel
@@ -159,17 +187,24 @@ ENV LD_LIBRARY_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/u
 WORKDIR /app
 
 # Install only runtime system libraries (no build tools)
-RUN rm -rf /var/lib/apt/lists/* && \
-    apt-get clean && \
-    apt-get update --fix-missing && \
-    apt-get install -y --no-install-recommends \
-    python3.10 \
-    python3-setuptools \
-    ca-certificates \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Same retry loop as the builder stage's apt-get, for the same intermittent
+# Hash Sum mismatch reason.
+RUN for i in 1 2 3 4 5; do \
+        rm -rf /var/lib/apt/lists/* && \
+        apt-get clean && \
+        apt-get update --fix-missing && \
+        apt-get install -y --no-install-recommends \
+            python3.10 \
+            python3-setuptools \
+            ca-certificates \
+            libgl1-mesa-glx \
+            libglib2.0-0 \
+        && touch /tmp/apt-ok && break; \
+        echo "apt-get attempt $i failed, retrying..." && sleep 3; \
+    done && \
+    test -f /tmp/apt-ok && rm -f /tmp/apt-ok && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages from builder
 COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
