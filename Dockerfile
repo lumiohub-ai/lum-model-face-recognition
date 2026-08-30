@@ -59,14 +59,30 @@ RUN pip install --upgrade pip setuptools wheel
 # downloading ~770MB. Needed on hosts where pip's TLS dies mid-download on
 # wheels this large (BAD_RECORD_MAC); curl the wheels first, then build.
 # With the directory empty this is a normal download, so CI is unaffected.
+#
+# torch pulls a dozen nvidia-*-cu12 wheels plus triton as transitive deps
+# (cublas ~410MB, cudnn ~665MB, triton ~210MB) — any one of them can hit the
+# same BAD_RECORD_MAC mid-download on a host where this happens, even with
+# the torch/torchvision wheels themselves vendored, since pip still resolves
+# and fetches torch's own dependencies from the network. `--find-links`
+# alone does NOT fix this: pip's resolver does not prefer a local match over
+# an index candidate, so it still redownloaded cublas/curand/etc. from
+# pypi.nvidia.com/download.pytorch.org even with them sitting in /wheels
+# (verified directly — this is why the vendored branch below uses
+# --no-index, not just --find-links). That means the full dependency closure
+# must be vendored, not just the two largest files: every nvidia-*-cu12 pin
+# from torch's own METADATA, triton, and the small pure-Python deps
+# (sympy/jinja2/networkx/fsspec/filelock/typing-extensions/markupsafe/mpmath)
+# that transitively need somewhere to resolve from once the index is off.
 COPY vendor/wheels/ /wheels/
 # TORCH_INDEX_URL: same mirror workaround as APT_MIRROR/PIP_INDEX_URL above —
 # this line hits download.pytorch.org directly via --extra-index-url, which
 # PIP_INDEX_URL does not override. Empty = pytorch.org, unaffected for CI.
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
 RUN if ls /wheels/torch-*.whl >/dev/null 2>&1; then \
-        echo "installing torch from vendor/wheels" && \
-        pip install --no-cache-dir /wheels/torch-*.whl /wheels/torchvision-*.whl; \
+        echo "installing torch from vendor/wheels (no-index, full dep closure)" && \
+        pip install --no-cache-dir --no-index --find-links /wheels \
+            torch==2.4.0+cu121 torchvision==0.19.0+cu121; \
     else \
         pip install --no-cache-dir \
             torch==2.4.0+cu121 torchvision==0.19.0+cu121 \
@@ -94,8 +110,28 @@ RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true &&
 # torch 2.4 pins nvidia-cudnn-cu12 9.1.0.70 — too old, so ORT's cuDNN-frontend
 # Conv execute fails at runtime (CUDNN_BACKEND_API_FAILED). torch tolerates 9.8.
 # See lum-model-vision/requirements/requirements.gpu.txt.
+#
+# Same vendor/wheels fallback as the torch install above, for the same
+# BAD_RECORD_MAC reason — these are the next-largest downloads in this stage
+# (onnxruntime-gpu ~280MB, nvidia-cudnn-cu12 ~750MB). Pinned to exact versions
+# here (not the `~=`/`>=,<` ranges pip would otherwise resolve) so a vendored
+# build and a from-PyPI build can't silently diverge on which version lands.
+#
+# The cudnn wheel is named explicitly, not globbed (nvidia_cudnn_cu12-*.whl)
+# — the torch install step above also vendors nvidia-cudnn-cu12, pinned to
+# torch's OWN older 9.1.0.70 requirement, so /wheels holds two different
+# cudnn versions side by side. A glob here would hand pip both files at
+# once for one `pip install` invocation, which is not what "install this one
+# exact version" means.
 RUN pip uninstall -y onnxruntime 2>/dev/null || true && \
-    pip install --no-cache-dir onnxruntime-gpu~=1.21.0 "nvidia-cudnn-cu12>=9.8,<10"
+    if ls /wheels/onnxruntime_gpu-*.whl >/dev/null 2>&1; then \
+        echo "installing onnxruntime-gpu + nvidia-cudnn-cu12 from vendor/wheels" && \
+        pip install --no-cache-dir \
+            /wheels/onnxruntime_gpu-*.whl \
+            /wheels/nvidia_cudnn_cu12-9.25.1.1-*.whl; \
+    else \
+        pip install --no-cache-dir onnxruntime-gpu==1.21.1 "nvidia-cudnn-cu12==9.25.1.1"; \
+    fi
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
