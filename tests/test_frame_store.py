@@ -206,6 +206,47 @@ class RoiBatchSlotTests(unittest.TestCase):
         closed_checks = [r for r in results if r[0] == "closed_check"]
         self.assertEqual(len(closed_checks), 1)
 
+    def test_cross_process_reader_reattaches_when_a_recycled_segment_grows(self):
+        """Regression test for the actual bug behind 'ROI batch seq=N is
+        gone' firing on EVERY embed call in production (0 recognitions
+        despite tracking working correctly): the reader process's _ATTACHED
+        cache mapped a segment once, and a later write to that SAME ring
+        position with a LARGER payload (a bigger face-crop batch than ever
+        seen before) reallocates the underlying shared-memory block via
+        close()+unlink()+create() — but the reader's cached mapping still
+        pointed at the OLD, now-unlinked block. Every read of that ring
+        position then permanently failed the size check and returned None,
+        even though the segment was sitting there, correctly written, the
+        whole time. This only reproduces once the SAME ring position is
+        reused (writes _RING_SIZE apart) with a size increase — a same-size
+        or shrinking reuse, or writes that never wrap the ring, do not
+        trigger it, which is why the existing resize test above (3 writes,
+        no wraparound) passed even with the bug present."""
+        from workers import frame_store
+
+        ring_size = frame_store._RING_SIZE
+        # First batch: establishes the reader's cache for ring position 0
+        # with a SMALL mapping.
+        first = ([_random_frame(10, 10)], [1])
+        # Pad with same-size batches to advance the ring all the way back to
+        # position 0 without triggering a reallocation along the way.
+        padding = [([_random_frame(10, 10)], [1]) for _ in range(ring_size - 1)]
+        # This write lands back on position 0 (seq = ring_size + 1) with a
+        # payload far larger than the first — forces close()+unlink()+create()
+        # under the same segment name the reader already has cached.
+        bigger = ([_random_frame(300, 300), _random_frame(200, 200)], [2, 3])
+
+        results = self._run(155, [first, *padding, bigger])
+        matches = [r for r in results if r[0] != "closed_check"]
+        self.assertEqual(len(matches), ring_size + 1)
+        for seq, ok in matches:
+            self.assertTrue(
+                ok,
+                f"batch seq={seq} did not round-trip — if this is the final "
+                f"(largest) batch, the reader's cached mapping was not "
+                f"re-validated against the new size (the actual production bug)",
+            )
+
 
 class SameProcessReadTests(unittest.TestCase):
     """Reads in the PRODUCER'S OWN process - not a degenerate test setup but

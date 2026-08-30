@@ -416,6 +416,12 @@ class ReloadHandlerTests(unittest.TestCase):
         self.assertEqual(ctx.entry_logger.status_reloads, 1)
 
     def test_config_reload_updates_the_engines_application_list(self):
+        """recognition_interval reads from _load_yaml_config() (the static
+        YAML), not from the reloaded DB camera_config — camera_config never
+        has a "pipeline" key (load_cameras_from_db returns DB columns like
+        roi/cam_type/stream_url, see camera_loader.py), so a "pipeline" key
+        planted on the fake DB config here must NOT affect it; only YAML
+        drives this value, matching _CameraContext.__init__'s own read."""
         from workers import camera_tasks
 
         ctx = self._ctx({}, rows=[])
@@ -429,7 +435,17 @@ class ReloadHandlerTests(unittest.TestCase):
             ctx.on_camera_config_reload()
 
         self.assertEqual(ctx.camera_engine.application, ["attendance", "activity"])
-        self.assertEqual(ctx.recognition_interval, 7)
+        expected_interval = int(
+            camera_tasks._load_yaml_config()
+            .get("pipeline", {})
+            .get("recognition_interval", 5)
+        )
+        self.assertEqual(ctx.recognition_interval, expected_interval)
+        self.assertNotEqual(
+            ctx.recognition_interval, 7,
+            "recognition_interval must come from YAML config, not the DB "
+            "camera_config dict (which has no \"pipeline\" key in production)",
+        )
 
     def test_config_reload_for_a_removed_camera_is_logged_not_raised(self):
         from workers import camera_tasks

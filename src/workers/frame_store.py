@@ -276,11 +276,29 @@ def _attach_fresh(name: str) -> Optional[shared_memory.SharedMemory]:
     return shm
 
 
-def _attach_segment(name: str) -> Optional[shared_memory.SharedMemory]:
+def _attach_segment(name: str, needed: int = 0) -> Optional[shared_memory.SharedMemory]:
     """Worker-side: get a cached mapping for `name`, attaching fresh if
-    needed. Does NOT re-validate size — callers check the header seq instead,
-    which is the actual staleness signal now (see module docstring)."""
+    needed.
+
+    Re-validates size, not just presence: a ring segment's producer can
+    reallocate it larger at any write (e.g. a bigger face-crop batch than
+    ever seen before) via close()+unlink()+create() under the same name —
+    this process's cached mapping from before that reallocation still maps
+    the OLD, now-unlinked memory. Without this check, a caller whose handle
+    names a byte range past the cached mapping's old (smaller) size would
+    hit that boundary and bail out as "gone" forever, never re-attaching to
+    see the segment that has been sitting there, correctly written, the
+    whole time — this was the actual cause of every embed silently returning
+    blank results once any face-crop batch exceeded the first one this
+    process ever saw. The header (instance_id, seq) check callers do after
+    this call is a separate, correct staleness signal for "this generation
+    was recycled before I read it" — it cannot substitute for this, since it
+    only runs once the mapping is confirmed large enough to read at all.
+    """
     shm = _ATTACHED.get(name)
+    if shm is not None and shm.size < needed:
+        del _ATTACHED[name]
+        shm = None
     if shm is None:
         shm = _attach_fresh(name)
         if shm is None:
@@ -332,7 +350,7 @@ def attach_and_read(handle: FrameHandle) -> Optional[np.ndarray]:
                 shape, dtype=np.uint8, buffer=local_shm.buf, offset=_HEADER_SIZE
             ).copy()
 
-        shm = _attach_segment(name)
+        shm = _attach_segment(name, nbytes)
         if shm is None or shm.size < nbytes:
             return None
         if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
@@ -581,7 +599,7 @@ def attach_and_read_roi_batch(
                 for r in handle.rois
             ]
 
-        shm = _attach_segment(name)
+        shm = _attach_segment(name, needed)
         if shm is None or shm.size < needed:
             return None
         if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
@@ -834,7 +852,7 @@ def attach_and_read_frame_batch(
                 for f in handle.frames
             ]
 
-        shm = _attach_segment(name)
+        shm = _attach_segment(name, needed)
         if shm is None or shm.size < needed:
             return None
         if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
