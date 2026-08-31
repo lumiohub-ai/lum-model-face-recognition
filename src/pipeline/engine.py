@@ -272,10 +272,13 @@ class SmartOfficeEngine:
         )
         new_worker.start()
 
-        self.camera_workers = [
-            new_worker if w.camera_id == camera_id else w
-            for w in self.camera_workers
-        ]
+        if old_worker is not None:
+            self.camera_workers = [
+                new_worker if w.camera_id == camera_id else w
+                for w in self.camera_workers
+            ]
+        else:
+            self.camera_workers.append(new_worker)
         logger.info(f"Camera {camera_id}: stream restarted (stream_url changed)")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -386,8 +389,16 @@ class SmartOfficeEngine:
                         # itself isn't re-read per frame the way roi is.
                         old_url = old_config.get("stream_url")
                         new_url = new_config.get("stream_url")
-                        old_config.clear()
+                        # Update-then-remove, never clear()-then-update:
+                        # CeleryCameraProducer reads this dict (e.g. "roi")
+                        # concurrently with no lock, and clearing first opens
+                        # a window where a frame mid-reload sees an empty
+                        # config (processed unclipped). Growing then
+                        # shrinking never exposes an empty dict. Same
+                        # pattern as camera_tasks.py's on_embedding_reload.
                         old_config.update(new_config)
+                        for key in [k for k in old_config if k not in new_config]:
+                            old_config.pop(key, None)
                         if new_url != old_url:
                             self._restart_camera_stream(
                                 new_config.get("camera_id"), old_config

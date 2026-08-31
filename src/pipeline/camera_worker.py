@@ -75,7 +75,15 @@ class CeleryCameraProducer:
         self._running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
-        if self._frame_slot is not None:
+        # self.run() is the sole writer to _frame_slot — if the thread is
+        # still alive past the join timeout, skip the close rather than
+        # unlink shm out from under a live write (BufferError).
+        if self._thread and self._thread.is_alive():
+            logger.warning(
+                f"CeleryCameraProducer[cam={self.camera_id}] thread still "
+                f"running after {timeout:.1f}s timeout, skipping shm close"
+            )
+        elif self._frame_slot is not None:
             self._frame_slot.close()
         logger.info(f"CeleryCameraProducer[cam={self.camera_id}] stopped")
 

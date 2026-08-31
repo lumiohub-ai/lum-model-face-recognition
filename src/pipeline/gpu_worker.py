@@ -159,7 +159,21 @@ class GPUInferenceWorker:
         # Released only after both loops have stopped: the YOLO loop is the
         # sole writer to this slot, and unlinking it while that thread is
         # still mid-write would raise BufferError in the releasing thread.
-        self.close()
+        # If a thread is still alive past the join timeout, skip the close —
+        # the process is shutting down anyway, and the OS will reclaim the
+        # shm segment; unlinking under a live writer is worse than leaking it.
+        still_running = [
+            t.name for t in (self._yolo_thread, self._arcface_thread)
+            if t and t.is_alive()
+        ]
+        if still_running:
+            logger.warning(
+                "GPUInferenceWorker: %s still running after %.1fs timeout, "
+                "skipping shm close to avoid unlinking under a live writer",
+                still_running, timeout,
+            )
+        else:
+            self.close()
         logger.info("GPUInferenceWorker stopped")
 
     # ── Camera-thread API ─────────────────────────────────────────────────────

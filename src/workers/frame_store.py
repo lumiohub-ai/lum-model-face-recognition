@@ -346,9 +346,18 @@ def attach_and_read(handle: FrameHandle) -> Optional[np.ndarray]:
                 return None
             if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
                 return None
-            return np.ndarray(
+            frame = np.ndarray(
                 shape, dtype=np.uint8, buffer=local_shm.buf, offset=_HEADER_SIZE
             ).copy()
+            # Re-check after the copy, not just before: the producer can
+            # recycle this same segment (next write, _RING_SIZE cycles later)
+            # while the copy above is in flight. The pre-copy check alone
+            # can pass and still hand back a torn frame mixing two
+            # generations' pixels; a header mismatch now means exactly that
+            # happened, so discard it like any other stale read.
+            if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
+                return None
+            return frame
 
         shm = _attach_segment(name, nbytes)
         if shm is None or shm.size < nbytes:
@@ -358,6 +367,8 @@ def attach_and_read(handle: FrameHandle) -> Optional[np.ndarray]:
         frame = np.ndarray(
             shape, dtype=np.uint8, buffer=shm.buf, offset=_HEADER_SIZE
         ).copy()
+        if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
+            return None
 
     return frame
 
@@ -586,7 +597,7 @@ def attach_and_read_roi_batch(
                 return None
             if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
                 return None
-            return [
+            crops = [
                 (
                     r.track_id,
                     np.ndarray(
@@ -598,6 +609,12 @@ def attach_and_read_roi_batch(
                 )
                 for r in handle.rois
             ]
+            # Re-check after copying every crop: the producer can recycle
+            # this segment mid-copy (see attach_and_read's matching check),
+            # handing back a batch mixing two generations' pixels.
+            if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
+                return None
+            return crops
 
         shm = _attach_segment(name, needed)
         if shm is None or shm.size < needed:
@@ -612,6 +629,8 @@ def attach_and_read_roi_batch(
                 shape, dtype=np.uint8, buffer=shm.buf, offset=_HEADER_SIZE + r.offset
             )
             crops.append((r.track_id, view.copy()))
+        if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
+            return None
 
     return crops
 
@@ -838,7 +857,7 @@ def attach_and_read_frame_batch(
                 return None
             if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
                 return None
-            return [
+            out = [
                 (
                     f.camera_id,
                     f.frame_num,
@@ -851,6 +870,12 @@ def attach_and_read_frame_batch(
                 )
                 for f in handle.frames
             ]
+            # Re-check after copying every frame: the producer can recycle
+            # this segment mid-copy (see attach_and_read's matching check),
+            # handing back a batch mixing two generations' pixels.
+            if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
+                return None
+            return out
 
         shm = _attach_segment(name, needed)
         if shm is None or shm.size < needed:
@@ -867,5 +892,7 @@ def attach_and_read_frame_batch(
                 offset=_HEADER_SIZE + f.offset,
             )
             out.append((f.camera_id, f.frame_num, view.copy()))
+        if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
+            return None
 
     return out
