@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
 
 import numpy as np
 
-from pipeline.gpu_worker import GPUInferenceWorker  # noqa: E402
+from pipeline.gpu_batch_dispatcher import GPUInferenceWorker  # noqa: E402
 
 
 class TestCameraSetKeying(unittest.TestCase):

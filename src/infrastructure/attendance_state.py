@@ -31,7 +31,7 @@ class EntryLogger:
         self.person_last_camera: Dict[str, str] = {}
 
         # Initialize repository for database reads
-        from infrastructure.storage.repository import Repository
+        from infrastructure.storage.backend_reader import Repository
         self.repository = Repository(self.client_slug)
 
         # Get user information from database

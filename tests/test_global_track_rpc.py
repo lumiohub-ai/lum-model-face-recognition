@@ -1,4 +1,4 @@
-"""Unit tests for gpu_rpc + global_track_adapter.
+"""Unit tests for global_track_rpc + global_track_adapter.
 
 Covers the Unix-socket RPC bridge to GlobalTrackManager: correct dispatch
 across the blocking/one-way split, the local-ID fallback on every failure
@@ -8,7 +8,7 @@ CameraEngine/PersonTracker actually call on the real GlobalTrackManager -
 the kind of drift that breaks silently if lum_vision's signatures change
 without a corresponding update here.
 
-Run: PYTHONPATH=src python tests/test_gpu_rpc.py
+Run: PYTHONPATH=src python tests/test_global_track_rpc.py
 """
 
 import inspect
@@ -25,7 +25,7 @@ from workers.global_track_adapter import (  # noqa: E402
     GlobalTrackRef,
     RemoteGlobalTrackManager,
 )
-from workers.gpu_rpc import (  # noqa: E402
+from workers.global_track_rpc import (  # noqa: E402
     GpuRpcClient,
     GpuRpcServer,
     MethodCallRequest,
@@ -146,7 +146,7 @@ class GpuRpcDispatchTests(unittest.TestCase):
     def test_find_global_track_by_identity_projects_to_global_id(self):
         """The real method returns a GlobalTrack object; the server must
         project it down to .global_id before it crosses the wire (see
-        gpu_rpc.py's module docstring) - proven here by making the fake
+        global_track_rpc.py's module docstring) - proven here by making the fake
         return a GlobalTrack-shaped object and asserting the client gets
         back a bare int, not the object."""
         result = self.client.call("find_global_track_by_identity", "alice")

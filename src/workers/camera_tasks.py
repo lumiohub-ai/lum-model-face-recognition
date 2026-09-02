@@ -36,7 +36,7 @@ from loguru import logger
 
 from workers.celery_app import celery
 from workers.frame_store import FrameHandle, RoiBatchHandle, attach_and_read_roi_batch
-from workers.gpu_rpc import GpuRpcClient
+from workers.global_track_rpc import GpuRpcClient
 from workers.gpu_worker_rpc import GpuWorkerRpcClient
 from workers.global_track_adapter import RemoteGlobalTrackManager
 from workers.rpc_framing import recv_framed  # noqa: F401  (re-export sanity import)
@@ -62,8 +62,8 @@ class _CameraContext:
         from config.camera_loader import load_cameras_from_db
         from config.vision import build_vision_config
         from infrastructure.storage import PgVectorStore
-        from infrastructure.entry_logger import EntryLogger
-        from infrastructure.async_logger import AsyncLogger
+        from infrastructure.attendance_state import EntryLogger
+        from infrastructure.async_write_queue import AsyncLogger
         from domain.calibration.homography_registry import HomographyRegistry
         from lum_vision import ActionRecognizer, FaceMatcher
         from pipeline.action_worker import ActionRecognitionWorker

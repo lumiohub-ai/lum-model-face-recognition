@@ -30,8 +30,8 @@ from lum_vision import ModelFactory, VisionConfig
 from config import load_cameras_from_db, build_vision_config
 
 # Local
-from pipeline.gpu_worker import GPUInferenceWorker
-from pipeline.camera_worker import CeleryCameraProducer
+from pipeline.gpu_batch_dispatcher import GPUInferenceWorker
+from pipeline.frame_pump import CeleryCameraProducer
 from infrastructure.video.annotator import FrameAnnotator
 
 
@@ -165,7 +165,7 @@ class SmartOfficeEngine:
 
         # How the camera workers reach this process's GPUInferenceWorker and
         # GlobalTrackManager.
-        from workers.gpu_rpc import GpuRpcServer
+        from workers.global_track_rpc import GpuRpcServer
         from workers.gpu_worker_rpc import GpuWorkerRpcServer
 
         self._gpu_rpc_server = GpuRpcServer(self.models.global_track_manager)

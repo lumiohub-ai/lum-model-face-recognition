@@ -76,7 +76,7 @@ class _PatchedTask:
 
 
 def _make_producer(frames, detection_interval=1):
-    from pipeline.camera_worker import CeleryCameraProducer
+    from pipeline.frame_pump import CeleryCameraProducer
 
     producer = CeleryCameraProducer(
         camera_id=1,
@@ -93,7 +93,7 @@ class EnqueueTests(unittest.TestCase):
         """Without this the queue is unbounded: an overloaded worker grows
         latency silently instead of dropping frames the way the bounded
         in-process queues used to."""
-        from pipeline.camera_worker import _TASK_EXPIRES_S
+        from pipeline.frame_pump import _TASK_EXPIRES_S
 
         task = FakeTask()
         producer = _make_producer([_frame()])
@@ -141,7 +141,7 @@ class EnqueueTests(unittest.TestCase):
         cached self.roi captured once at construction would never see that
         update. The producer must read roi from camera_config on every
         frame instead."""
-        from pipeline.camera_worker import CeleryCameraProducer
+        from pipeline.frame_pump import CeleryCameraProducer
 
         camera_config = {"camera_id": 1}
         producer = CeleryCameraProducer(

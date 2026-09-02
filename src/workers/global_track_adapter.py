@@ -22,7 +22,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from workers.gpu_rpc import GpuRpcClient
+from workers.global_track_rpc import GpuRpcClient
 
 
 @dataclass(frozen=True)
