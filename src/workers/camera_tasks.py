@@ -1,18 +1,21 @@
 """Celery task for per-camera tracking, identity and logging.
 
-The main process (CeleryCameraProducer, camera_worker.py) reads each
+The main process (CeleryCameraProducer, pipeline/frame_pump.py) reads each
 camera's frames, applies ROI and frame-skip, then writes the frame into a
-`frame_store.CameraFrameSlot` and enqueues this task with the resulting
-handle — it still owns the StreamHandler's persistent RTSP connection, which
-a stateless-per-call task cannot hold open. Everything from "submit to GPU"
-onward happens here, in a separate OS process.
+`frame_store.CameraFrameSlot` and hands it to the `yolo` queue as a
+`yolo.detect` request. `yolo.detect` (a celery-batches Batches task,
+workers/yolo_tasks.py) runs the model over a cross-camera batch and forwards
+each request's detections here, as `camera.track`'s task payload — this
+process never calls a detection RPC or holds a GPU model itself.
 
 No torch/ultralytics/insightface/onnxruntime import at module scope, and no
 GPU model construction anywhere in this file — this process holds zero
-models. GPU inference is reached via gpu_worker_rpc (never local), and
-GlobalTrackManager via gpu_rpc/global_track_adapter (also never local): this
-process touches no main-process-owned object directly, only through an RPC
-client.
+models. Face embedding is reached via face_client.FaceEmbedClient (a direct,
+synchronous Celery call to face-worker — no RPC socket involved), and
+GlobalTrackManager via global_track_rpc/global_track_adapter (a Unix-socket
+RPC to the main process — unaffected by the per-camera-queue switch, see
+docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md): this process touches no main-process-
+owned object directly except through one of these clients.
 
 ## What this task does not handle
 
@@ -30,14 +33,15 @@ client.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from workers.celery_app import celery
+from workers.face_client import FaceEmbedClient
 from workers.frame_store import FrameHandle, RoiBatchHandle, attach_and_read_roi_batch
 from workers.global_track_rpc import GpuRpcClient
-from workers.gpu_worker_rpc import GpuWorkerRpcClient
 from workers.global_track_adapter import RemoteGlobalTrackManager
 from workers.rpc_framing import recv_framed  # noqa: F401  (re-export sanity import)
 
@@ -102,12 +106,12 @@ class _CameraContext:
         )
 
         self.rpc_client = GpuRpcClient()
-        self.gpu_worker_client = GpuWorkerRpcClient()
+        self.face_client = FaceEmbedClient()
         self.rpc_client.on_fallback = lambda: logger.warning(
             f"camera_tasks[cam={camera_id}]: GlobalTrackManager RPC fallback fired"
         )
-        self.gpu_worker_client.on_fallback = lambda: logger.warning(
-            f"camera_tasks[cam={camera_id}]: GPU worker RPC fallback fired"
+        self.face_client.on_fallback = lambda: logger.warning(
+            f"camera_tasks[cam={camera_id}]: face embed fallback fired"
         )
         self.global_track_manager = RemoteGlobalTrackManager(
             self.rpc_client, enabled=bool(_load_yaml_config().get("enable_global_tracking", False))
@@ -199,9 +203,16 @@ class _CameraContext:
         )
 
     def process_frame(
-        self, frame_handle: FrameHandle, frame_num: int
+        self, frame_handle: FrameHandle, frame_num: int, detections: List[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
-        """Steps 4-9 of the old CameraWorker._process_one_frame, ported.
+        """Steps 5-9 of the old CameraWorker._process_one_frame, ported.
+
+        `detections` is a call-site argument, not fetched here — the caller
+        (today: process_frame_task, via the GPU RPC; after the LSO-67
+        follow-up switch: yolo.detect's Batches task, via the task payload)
+        owns getting detections onto the frame before this runs. This method
+        no longer knows or cares which transport produced them.
+
         Returns a small summary dict for the task result (mainly for Stage
         1's measurement work), or None if the frame was dropped upstream.
         """
@@ -220,10 +231,6 @@ class _CameraContext:
         # to interval² and halve the detection rate.
         self._detection_frame_num += 1
 
-        detections = self.gpu_worker_client.detect(
-            camera_id=self.camera_id, frame_handle=frame_handle, frame_num=frame_num
-        )
-
         active_tracks, removed_tracks, person_rois = self.camera_engine.update_tracking(
             detections, frame, frame_num
         )
@@ -236,7 +243,7 @@ class _CameraContext:
             rois = [roi for _tid, roi, _off in person_rois]
             roi_slot = _roi_slot_for(self.camera_id)
             roi_handle = roi_slot.write(rois, track_ids)
-            embeddings_map = self.gpu_worker_client.embed(
+            embeddings_map = self.face_client.embed(
                 camera_id=self.camera_id, roi_batch_handle=roi_handle
             )
         else:
@@ -498,13 +505,23 @@ def _roi_slot_for(camera_id: int):
         return slot
 
 
-@celery.task(name="camera.process_frame", queue="camera_frames", ignore_result=True)
-def process_frame_task(
-    camera_id: int, frame_handle: Dict[str, int], frame_num: int
+@celery.task(name="camera.track", ignore_result=True)
+def track_task(
+    camera_id: int,
+    frame_handle: Dict[str, int],
+    frame_num: int,
+    detections: List[Dict[str, Any]],
+    deadline: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """Entry point. Deliberately thin — all real logic lives on
     _CameraContext so it can be unit-tested without going through Celery's
     task-dispatch machinery.
+
+    No static `queue=` on the decorator: `cam.<id>` is a different queue per
+    camera, statically assigned in compose.yml's camera-worker service
+    commands, not something one decorator value could express. Dispatched
+    exclusively via `yolo.detect`'s `send_task("camera.track", queue=...)` —
+    see workers/yolo_tasks.py.
 
     `frame_handle` arrives as a plain dict, not a FrameHandle instance:
     celery_app.py sets task_serializer='json' for every task in this app
@@ -512,8 +529,25 @@ def process_frame_task(
     dataclass — json.dumps has no idea how to encode it. Reconstructing it
     here, rather than widening the global serializer config, keeps
     FrameHandle a real dataclass everywhere else that matters (frame_store's
-    internal API, gpu_worker_rpc's pickled socket protocol) and confines the
-    JSON constraint to the one hop that actually has it.
+    internal API, global_track_rpc's pickled socket protocol) and confines
+    the JSON constraint to the one hop that actually has it.
+
+    `detections` arrives already computed — `yolo.detect`'s Batches task ran
+    the model and forwards its results here in the task payload; this
+    process never calls a detection RPC itself.
+
+    `deadline` is re-checked here, not just trusted from `yolo.detect`
+    having already checked it once: Celery's `expires` is evaluated on
+    delivery, so a message can be delivered in time and then sit behind this
+    worker's OWN prior task if one is still running `process_frame`'s
+    blocking `face.embed` call — by the time this message is actually
+    picked up, its deadline may have since passed. Also covers `acks_late`
+    zombies: a request redelivered after a worker crash (Redis
+    `visibility_timeout`) still carries its original, likely-long-expired
+    `deadline`.
     """
+    if deadline is not None and time.time() > deadline:
+        return None
     ctx = _context_for(camera_id)
-    return ctx.process_frame(FrameHandle(**frame_handle), frame_num)
+    handle = FrameHandle(**frame_handle)
+    return ctx.process_frame(handle, frame_num, detections)

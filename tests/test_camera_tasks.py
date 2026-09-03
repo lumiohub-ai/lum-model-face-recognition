@@ -48,15 +48,15 @@ class FakeCameraEngine:
         self.calls.append(("emit_positions", len(active_tracks)))
 
 
-class FakeGpuWorkerClient:
-    def __init__(self, detections=None, embeddings=None):
-        self.calls = []
-        self._detections = detections if detections is not None else []
-        self._embeddings = embeddings if embeddings is not None else {}
+class FakeFaceClient:
+    """Stands in for face_client.FaceEmbedClient — process_frame() calls
+    .embed() on this. Detections are never fetched via RPC by this class at
+    all: both process_frame() and track_task() take them as a call argument
+    (see camera_tasks.py's module docstring)."""
 
-    def detect(self, camera_id, frame_handle, frame_num):
-        self.calls.append(("detect", camera_id, frame_num))
-        return self._detections
+    def __init__(self, embeddings=None):
+        self.calls = []
+        self._embeddings = embeddings if embeddings is not None else {}
 
     def embed(self, camera_id, roi_batch_handle):
         self.calls.append(("embed", camera_id, roi_batch_handle.seq))
@@ -93,7 +93,7 @@ class FakeRoiSlot:
 
 def _make_context(
     camera_engine=None,
-    gpu_worker_client=None,
+    face_client=None,
     async_logger=None,
     roi_slot=None,
     recognition_interval=3,
@@ -109,9 +109,7 @@ def _make_context(
     ctx.camera_id = 1
     ctx.recognition_interval = recognition_interval
     ctx.camera_engine = camera_engine if camera_engine is not None else FakeCameraEngine()
-    ctx.gpu_worker_client = (
-        gpu_worker_client if gpu_worker_client is not None else FakeGpuWorkerClient()
-    )
+    ctx.face_client = face_client if face_client is not None else FakeFaceClient()
     ctx.async_logger = async_logger if async_logger is not None else FakeAsyncLogger()
     ctx._detection_frame_num = 0
 
@@ -125,7 +123,13 @@ class ProcessFrameSingleGateTests(unittest.TestCase):
     inverted form of the old ProcessFrameFrameSkipTests: the task once
     skipped again on its own counter, compounding detection_interval to
     interval² and silently halving the detection rate. Every task call must
-    now run detection — these assertions are the regression fence."""
+    now run detection — these assertions are the regression fence.
+
+    `detections` reaches process_frame() as a call argument (see
+    camera_tasks.py's process_frame docstring) — these tests assert it
+    reaches update_tracking() and that the detection counter advances on
+    every call, not that any RPC fires; that RPC now lives one layer up, in
+    process_frame_task, and is covered separately."""
 
     def setUp(self):
         from workers import frame_store
@@ -138,23 +142,26 @@ class ProcessFrameSingleGateTests(unittest.TestCase):
 
         _ROI_SLOTS.pop(1, None)
 
-    def test_the_very_first_task_call_runs_detection(self):
+    def test_the_very_first_call_passes_detections_through_to_update_tracking(self):
         """The producer already gated on detection_interval before enqueueing,
         so a second gate here would drop half the frames it forwards."""
-        ctx, _ = _make_context()
+        engine = FakeCameraEngine()
+        ctx, _ = _make_context(camera_engine=engine)
         handle = self.slot.write(_random_frame(64, 64))
-        result = ctx.process_frame(handle, frame_num=handle.seq)
+        detections = [{"bbox": [0, 0, 1, 1]}]
+        result = ctx.process_frame(handle, frame_num=handle.seq, detections=detections)
         self.assertIsNotNone(result)
-        self.assertEqual(ctx.gpu_worker_client.calls, [("detect", 1, handle.seq)])
+        update_calls = [c for c in engine.calls if c[0] == "update_tracking"]
+        self.assertEqual(update_calls, [("update_tracking", detections, (64, 64, 3), handle.seq)])
 
-    def test_every_consecutive_task_call_runs_detection(self):
-        ctx, _ = _make_context()
+    def test_every_consecutive_call_advances_the_detection_counter(self):
+        engine = FakeCameraEngine()
+        ctx, _ = _make_context(camera_engine=engine)
         for expected_calls in (1, 2, 3):
             handle = self.slot.write(_random_frame(64, 64))
-            result = ctx.process_frame(handle, frame_num=handle.seq)
+            result = ctx.process_frame(handle, frame_num=handle.seq, detections=[])
             self.assertIsNotNone(result)
-            detect_calls = [c for c in ctx.gpu_worker_client.calls if c[0] == "detect"]
-            self.assertEqual(len(detect_calls), expected_calls)
+            self.assertEqual(ctx._detection_frame_num, expected_calls)
 
     def test_missing_frame_slot_returns_none_without_advancing_detection_count(self):
         """attach_and_read returning None (camera removed, or this reply is
@@ -168,9 +175,129 @@ class ProcessFrameSingleGateTests(unittest.TestCase):
             camera_id=999, seq=1, segment=1, instance_id=1,
             height=64, width=64, channels=3,
         )
-        result = ctx.process_frame(phantom, frame_num=1)
+        result = ctx.process_frame(phantom, frame_num=1, detections=[])
         self.assertIsNone(result)
         self.assertEqual(ctx._detection_frame_num, 0)  # bailed before the increment
+
+
+class TrackTaskEntryPointTests(unittest.TestCase):
+    """track_task is the Celery entry point yolo.detect dispatches to
+    (send_task("camera.track", queue=camera_queue_name(camera_id), ...)) —
+    see workers/yolo_tasks.py. Detections arrive already computed in the
+    task payload; this task never calls a detection RPC itself. These tests
+    cover that call site directly."""
+
+    def setUp(self):
+        import time as time_module
+
+        from workers import frame_store
+        from workers.camera_tasks import _CONTEXTS
+
+        self.slot = frame_store.CameraFrameSlot(camera_id=1)
+        self._contexts = _CONTEXTS
+        self._time_module = time_module
+
+    def tearDown(self):
+        self.slot.close()
+        from workers.camera_tasks import _ROI_SLOTS
+
+        _ROI_SLOTS.pop(1, None)
+        self._contexts.pop(1, None)
+
+    def test_forwards_the_given_detections_to_update_tracking(self):
+        import dataclasses
+
+        from workers.camera_tasks import track_task
+
+        engine = FakeCameraEngine()
+        ctx, _ = _make_context(camera_engine=engine)
+        self._contexts[1] = ctx
+
+        handle = self.slot.write(_random_frame(64, 64))
+        track_task(
+            camera_id=1,
+            frame_handle=dataclasses.asdict(handle),
+            frame_num=handle.seq,
+            detections=[{"bbox": [1, 2, 3, 4]}],
+        )
+
+        update_calls = [c for c in engine.calls if c[0] == "update_tracking"]
+        self.assertEqual(
+            update_calls,
+            [("update_tracking", [{"bbox": [1, 2, 3, 4]}], (64, 64, 3), handle.seq)],
+        )
+
+    def test_a_past_deadline_returns_none_without_touching_the_context(self):
+        """Celery's own `expires` is evaluated on delivery, so a message can
+        be delivered in time and then sit behind this worker's own prior
+        task (a blocked face.embed call) until its deadline has since
+        passed — and acks_late zombies redelivered after a worker crash
+        carry their original, likely-expired deadline. Either way, this
+        must be a silent no-op, not a stale-frame processing attempt."""
+        import dataclasses
+
+        from workers.camera_tasks import track_task
+
+        engine = FakeCameraEngine()
+        ctx, _ = _make_context(camera_engine=engine)
+        self._contexts[1] = ctx
+
+        handle = self.slot.write(_random_frame(64, 64))
+        past_deadline = self._time_module.time() - 1.0
+        result = track_task(
+            camera_id=1,
+            frame_handle=dataclasses.asdict(handle),
+            frame_num=handle.seq,
+            detections=[{"bbox": [1, 2, 3, 4]}],
+            deadline=past_deadline,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(engine.calls, [])  # process_frame was never called
+
+    def test_a_future_deadline_processes_normally(self):
+        import dataclasses
+
+        from workers.camera_tasks import track_task
+
+        engine = FakeCameraEngine()
+        ctx, _ = _make_context(camera_engine=engine)
+        self._contexts[1] = ctx
+
+        handle = self.slot.write(_random_frame(64, 64))
+        future_deadline = self._time_module.time() + 60.0
+        result = track_task(
+            camera_id=1,
+            frame_handle=dataclasses.asdict(handle),
+            frame_num=handle.seq,
+            detections=[],
+            deadline=future_deadline,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len([c for c in engine.calls if c[0] == "update_tracking"]), 1)
+
+    def test_no_deadline_processes_normally(self):
+        """deadline is Optional — camera_tasks itself never omits it in
+        production, but the task signature must not require it (e.g. for a
+        caller that doesn't track one)."""
+        import dataclasses
+
+        from workers.camera_tasks import track_task
+
+        engine = FakeCameraEngine()
+        ctx, _ = _make_context(camera_engine=engine)
+        self._contexts[1] = ctx
+
+        handle = self.slot.write(_random_frame(64, 64))
+        result = track_task(
+            camera_id=1,
+            frame_handle=dataclasses.asdict(handle),
+            frame_num=handle.seq,
+            detections=[],
+        )
+
+        self.assertIsNotNone(result)
 
 
 class ProcessFrameRecognitionGatingTests(unittest.TestCase):
@@ -196,16 +323,17 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
             person_rois=[(5, roi_a, (0, 0)), (9, roi_b, (0, 0))],
             events=[{"kind": "attendance"}],
         )
-        gpu_client = FakeGpuWorkerClient(
-            detections=[{"bbox": [0, 0, 1, 1]}],
+        face_client = FakeFaceClient(
             embeddings={5: {"embedding": [0.1]}, 9: {"embedding": [0.2]}},
         )
         ctx, roi_slot = _make_context(
-            camera_engine=engine, gpu_worker_client=gpu_client,
+            camera_engine=engine, face_client=face_client,
             recognition_interval=1,
         )
         handle = self.slot.write(_random_frame(64, 64))
-        result = ctx.process_frame(handle, frame_num=handle.seq)
+        result = ctx.process_frame(
+            handle, frame_num=handle.seq, detections=[{"bbox": [0, 0, 1, 1]}]
+        )
 
         self.assertTrue(result["recognition_ran"])
         self.assertEqual(len(roi_slot.writes), 1)
@@ -213,38 +341,37 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
         self.assertEqual(written_track_ids, [5, 9])
         self.assertTrue(np.array_equal(written_rois[0], roi_a))
         self.assertTrue(np.array_equal(written_rois[1], roi_b))
-        self.assertEqual(("embed", 1, 1), gpu_client.calls[-1])
+        self.assertEqual(("embed", 1, 1), face_client.calls[-1])
 
     def test_recognition_skipped_interval_does_not_call_embed(self):
         """recognition_interval=3: only every 3rd detection-frame should
-        submit for embedding - the rest must skip the embed RPC entirely,
-        not send an empty batch. gpu_worker_rpc's detect/embed are
-        independent round-trips, not paired queue operations that need a
-        keepalive."""
+        submit for embedding - the rest must skip the embed call entirely,
+        not send an empty batch. FaceEmbedClient's embed() is called only
+        when there is something to embed, not on a fixed cadence."""
         engine = FakeCameraEngine(
             active_tracks=[{"track_id": 1}],
             person_rois=[(1, _random_frame(10, 10), (0, 0))],
         )
-        gpu_client = FakeGpuWorkerClient()
+        face_client = FakeFaceClient()
         ctx, roi_slot = _make_context(
-            camera_engine=engine, gpu_worker_client=gpu_client,
+            camera_engine=engine, face_client=face_client,
             recognition_interval=3,
         )
         for _ in range(2):
             handle = self.slot.write(_random_frame(64, 64))
-            result = ctx.process_frame(handle, frame_num=handle.seq)
+            result = ctx.process_frame(handle, frame_num=handle.seq, detections=[])
             self.assertFalse(result["recognition_ran"])
         self.assertEqual(roi_slot.writes, [])
-        self.assertNotIn("embed", [c[0] for c in gpu_client.calls])
+        self.assertNotIn("embed", [c[0] for c in face_client.calls])
 
         # The 3rd task call must embed. Since every task call is a detection
         # frame (the producer is the only frame-skip gate), 3 calls at
         # recognition_interval=3 → exactly 1 embed. A second task-side skip
         # would have made this the 9th call, not the 3rd.
         handle = self.slot.write(_random_frame(64, 64))
-        result = ctx.process_frame(handle, frame_num=handle.seq)
+        result = ctx.process_frame(handle, frame_num=handle.seq, detections=[])
         self.assertTrue(result["recognition_ran"])
-        self.assertEqual([c[0] for c in gpu_client.calls].count("embed"), 1)
+        self.assertEqual([c[0] for c in face_client.calls].count("embed"), 1)
 
     def test_recognition_due_but_no_person_rois_does_not_call_embed(self):
         """run_recognition=True with an empty person_rois list must still
@@ -253,15 +380,15 @@ class ProcessFrameRecognitionGatingTests(unittest.TestCase):
         RoiBatchSlot's empty-write path elsewhere, not needed when there
         are simply no active tracks this cycle."""
         engine = FakeCameraEngine(active_tracks=[], person_rois=[])
-        gpu_client = FakeGpuWorkerClient()
+        face_client = FakeFaceClient()
         ctx, roi_slot = _make_context(
-            camera_engine=engine, gpu_worker_client=gpu_client,
+            camera_engine=engine, face_client=face_client,
             recognition_interval=1,
         )
         handle = self.slot.write(_random_frame(64, 64))
-        ctx.process_frame(handle, frame_num=handle.seq)
+        ctx.process_frame(handle, frame_num=handle.seq, detections=[])
         self.assertEqual(roi_slot.writes, [])
-        self.assertNotIn("embed", [c[0] for c in gpu_client.calls])
+        self.assertNotIn("embed", [c[0] for c in face_client.calls])
 
 
 class ProcessFrameEventLoggingTests(unittest.TestCase):
@@ -289,14 +416,14 @@ class ProcessFrameEventLoggingTests(unittest.TestCase):
             recognition_interval=1,
         )
         handle = self.slot.write(_random_frame(64, 64))
-        ctx.process_frame(handle, frame_num=handle.seq)
+        ctx.process_frame(handle, frame_num=handle.seq, detections=[])
         self.assertEqual(async_logger.logged, events)
 
     def test_emit_positions_is_called_with_active_tracks(self):
         engine = FakeCameraEngine(active_tracks=[{"track_id": 1}, {"track_id": 2}])
         ctx, _ = _make_context(camera_engine=engine, recognition_interval=1)
         handle = self.slot.write(_random_frame(64, 64))
-        ctx.process_frame(handle, frame_num=handle.seq)
+        ctx.process_frame(handle, frame_num=handle.seq, detections=[])
         emit_call = next(c for c in engine.calls if c[0] == "emit_positions")
         self.assertEqual(emit_call[1], 2)
 

@@ -90,6 +90,44 @@ class TaskPayloadStaysJsonTests(unittest.TestCase):
         }
         self.assertEqual(_round_trip_task_payload(payload), payload)
 
+    def test_track_task_payload_round_trips(self):
+        """camera.track's payload — what yolo.detect forwards: detections
+        (plain float/int/str only, since _parse_yolo_result already strips
+        every numpy value before this point), next_queue, and deadline (a
+        plain float epoch timestamp). All of these must survive JSON, since
+        this hop crosses the broker exactly like the original FrameHandle
+        payload did."""
+        payload = {
+            "camera_id": 40,
+            "frame_handle": {
+                "camera_id": 40, "seq": 1,
+                "height": 720, "width": 1280, "channels": 3,
+            },
+            "frame_num": 12,
+            "detections": [
+                {"bbox": [1.0, 2.0, 3.0, 4.0], "confidence": 0.91,
+                 "keypoints": None, "person_id": 0},
+            ],
+            "deadline": 1234567890.123,
+        }
+        self.assertEqual(_round_trip_task_payload(payload), payload)
+
+    def test_yolo_detect_payload_round_trips(self):
+        """yolo.detect's own inbound payload: same FrameHandle shape as
+        camera.track's, plus next_queue and deadline — the two fields that
+        did not exist before the per-camera-queue switch."""
+        payload = {
+            "camera_id": 40,
+            "frame_handle": {
+                "camera_id": 40, "seq": 1,
+                "height": 720, "width": 1280, "channels": 3,
+            },
+            "frame_num": 12,
+            "next_queue": "cam.40",
+            "deadline": 1234567890.123,
+        }
+        self.assertEqual(_round_trip_task_payload(payload), payload)
+
     def test_a_dataclass_payload_is_still_rejected(self):
         """Guards the reason payloads stay JSON: had this silently started
         accepting arbitrary objects, the boundary conversion in

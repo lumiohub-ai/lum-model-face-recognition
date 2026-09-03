@@ -1,19 +1,40 @@
-"""YOLO person detection as a Celery task.
+"""YOLO person detection as a Celery Batches task.
 
-The `_run_yolo_batch` + `_parse_yolo_result` pair moved here from
-`pipeline/gpu_worker.py` essentially verbatim; `main.py` now dispatches to
-this task instead of calling the model in-process. What did *not* move is
-everything around them — the per-camera queues, the cross-camera batch
-collector, and the request/response correlation all stay in
-`GPUInferenceWorker`, which still owns the batching that makes a batched GPU
-call worth ~1.8x over per-frame calls.
+Batching moved here from `pipeline/gpu_batch_dispatcher.py`'s
+`GPUInferenceWorker` — that whole component (per-camera queues, cross-camera
+batch collection, request/response correlation over a Unix-socket RPC) is
+deleted by docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md's plan. `celery-batches`'
+`Batches` base class buffers requests arriving on this worker's own queue and
+flushes them together, replacing that whole in-process collector with a
+library primitive.
 
-Frames arrive as a `FrameBatchHandle` (shared memory), never as pixels: a
-720p frame costs ~15.6 ms through a broker versus ~0.3 ms as a handle, more
-than the inference itself. Results go back through the broker directly —
-they are already plain dicts of scalars and lists (`_parse_yolo_result`
-converts ultralytics `Results` before anything leaves the function), so
-unlike the face results they carry no numpy at all.
+Verified in the go/no-go spike (benchmarks/celery_batches_spike/README.md,
+"Step 0" in the design doc): batching here is a side effect of the worker
+being busy inside the real model call, not primarily of `flush_interval`'s
+timer — that timer only matters for topping up partial batches during
+genuinely idle gaps. No tuning was needed for 10 cameras / 7.5Hz / real YOLO
+latency; re-run the spike before assuming these numbers hold at a much
+higher camera count.
+
+Frames arrive as a `FrameHandle` (shared memory) per request, never as
+pixels: a 720p frame costs ~15.6 ms through a broker versus ~0.3 ms as a
+handle, more than the inference itself. Detections for each request are
+forwarded on to `camera.track` on that camera's own pinned queue — this task
+never returns a result to a caller (`ignore_result=True`); the next hop is
+itself a `send_task` call, not a return value.
+
+Two Celery/celery-batches behaviors this task's body works around, both
+confirmed against the installed celery_batches source and the spike:
+  - Batches tasks do NOT honour `expires` (no `revoked()` call anywhere in
+    celery_batches' Strategy). Every request therefore carries an explicit
+    `deadline` (epoch seconds) checked in this task's body — both on the way
+    in (drop stale detect requests before running the model) and re-applied
+    on the way out (forward `camera.track` with the REMAINING budget, not a
+    fresh window).
+  - Batch size is capped by the worker's prefetch count, since Batches only
+    acks after a flush completes. yolo-worker's compose command therefore
+    passes `--prefetch-multiplier=32` — this is load-bearing, not a
+    performance tweak; at the default multiplier=1 every batch is size 1.
 
 No torch/ultralytics import at module scope — the parent imports this module
 to register the task, and a CUDA touch there poisons `fork()`.
@@ -21,14 +42,22 @@ to register the task, and a CUDA touch there poisons `fork()`.
 
 from __future__ import annotations
 
+import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 from celery.signals import worker_process_init
+from celery_batches import Batches, SimpleRequest
 from loguru import logger
 
 from workers import model_holder
 from workers.celery_app import celery
+
+# Matches the values validated in the spike (benchmarks/celery_batches_spike/
+# bench_tasks.py) — see the module docstring's batching-mechanism note before
+# assuming a change here changes achieved batch size in isolation.
+FLUSH_EVERY = int(os.environ.get("SO_YOLO_FLUSH_EVERY", "8"))
+FLUSH_INTERVAL_S = float(os.environ.get("SO_YOLO_FLUSH_INTERVAL_S", "0.010"))
 
 
 @worker_process_init.connect
@@ -49,8 +78,6 @@ def _load_model_in_child(**_kwargs):
     lazily on first task instead — correct either way, just with a slower
     first task.
     """
-    import os
-
     if "yolo" in os.environ.get("SO_WORKER_PRELOAD", "").split(","):
         model_holder.ensure_person_detector_loaded()
 
@@ -58,9 +85,9 @@ def _load_model_in_child(**_kwargs):
 def _parse_yolo_result(result) -> List[Dict]:
     """Convert a YOLO result object to a list of detection dicts.
 
-    Moved verbatim from GPUInferenceWorker._parse_yolo_result. This is what
-    keeps ultralytics' `Results` object from ever crossing the broker — the
-    output is plain dicts/lists/floats.
+    Unchanged from the pre-Batches version. This is what keeps ultralytics'
+    `Results` object from ever crossing the broker — the output is plain
+    dicts/lists/floats.
     """
     detections = []
     boxes = result.boxes
@@ -83,70 +110,136 @@ def _parse_yolo_result(result) -> List[Dict]:
     return detections
 
 
-@celery.task(name="yolo.detect_batch", queue="yolo")
-def detect_batch_task(handle: Dict[str, Any]) -> List[List[Dict]]:
-    """Run YOLO over one cross-camera batch.
-
-    `handle` is a `FrameBatchHandle` flattened to a plain dict — task
-    payloads stay JSON-serialised (see celery_app.py), so the dataclass is
-    reconstructed here, the same boundary conversion used for `FrameHandle`.
-
-    Returns detections **positionally aligned to `handle.frames`**, which
-    `FrameBatchSlot.write` packs in sorted-camera-id order. That alignment is
-    the contract `GPUInferenceWorker._yolo_loop` relies on to route each
-    result back to the camera that submitted it — it must not be reordered.
-
-    On any failure this returns one empty detection list per frame rather
-    than raising: a camera missing detections for one cycle ages its tracks
-    by a frame, which the tracker already tolerates, whereas an exception
-    would surface as a task failure and leave the caller waiting out its
-    timeout for nothing.
+class _BatchStats:
+    """One INFO line per N batches — the e2e verification check
+    (docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md's "End-to-end verification" section)
+    greps for `avg_batch=` in the worker log. Deliberately not per-batch
+    (that stays at DEBUG): this runs on every flush, potentially every ~10ms
+    under load, so an INFO line per batch would itself become log-volume
+    noise on the exact path being measured for latency.
     """
-    from workers.frame_store import BatchedFrameHandle, FrameBatchHandle
 
-    batch_handle = FrameBatchHandle(
-        seq=handle["seq"],
-        segment=handle["segment"],
-        instance_id=handle["instance_id"],
-        frames=tuple(BatchedFrameHandle(**f) for f in handle["frames"]),
-    )
+    def __init__(self, log_every: int = 100):
+        self._log_every = log_every
+        self._n = 0
+        self._sum_batch = 0
+        self._sum_ms = 0.0
+        self._skipped_expired = 0
+        self._skipped_gone = 0
 
-    n_frames = len(batch_handle.frames)
-    if n_frames == 0:
-        return []
+    def record(self, batch_size: int, wall_ms: float, skipped_expired: int, skipped_gone: int) -> None:
+        self._n += 1
+        self._sum_batch += batch_size
+        self._sum_ms += wall_ms
+        self._skipped_expired += skipped_expired
+        self._skipped_gone += skipped_gone
+        if self._n % self._log_every == 0:
+            logger.info(
+                f"yolo.detect: batches={self._n} avg_batch={self._sum_batch / self._n:.2f} "
+                f"avg_ms={self._sum_ms / self._n:.1f} "
+                f"skipped_expired={self._skipped_expired} skipped_gone={self._skipped_gone}"
+            )
 
+
+_stats = _BatchStats()
+
+
+def _default_dispatch(kwargs: Dict[str, Any], queue: str, expires: float) -> None:
+    celery.send_task("camera.track", kwargs=kwargs, queue=queue, expires=expires)
+
+
+def run_detect_batch(
+    requests: List[SimpleRequest],
+    detector,
+    dispatch: Callable[..., None] = _default_dispatch,
+    now: Callable[[], float] = time.time,
+) -> None:
+    """The actual batching logic, factored out of `detect_task` so tests can
+    call it directly with a fake detector and a recording `dispatch`,
+    without going through Celery's Batches machinery at all.
+
+    Per request: reads a FrameHandle out of shared memory, runs ONE model
+    call over every surviving frame in the batch, then forwards each
+    request's detections on to `camera.track` on its own camera's queue.
+    Never raises: a model exception degrades every live request in the batch
+    to `[]` detections rather than losing the batch's frames entirely — the
+    tracker already tolerates one frame with no detections (it ages the
+    existing tracks), which is a better failure mode than a task exception
+    that would surface nowhere useful, since this task is ignore_result.
+    """
+    from workers.frame_store import FrameHandle, attach_and_read
+
+    t0 = time.monotonic()
+    t_now = now()
+
+    live_requests: List[SimpleRequest] = []
+    live_frames = []
+    n_skipped_expired = 0
+    n_skipped_gone = 0
+
+    for req in requests:
+        deadline = req.kwargs.get("deadline")
+        if deadline is not None and t_now > deadline:
+            n_skipped_expired += 1
+            continue
+        frame = attach_and_read(FrameHandle(**req.kwargs["frame_handle"]))
+        if frame is None:
+            # Same "nothing to do" case camera.track's own attach_and_read
+            # would hit if forwarded — no point paying that hop just to
+            # rediscover the frame is already gone.
+            n_skipped_gone += 1
+            continue
+        live_requests.append(req)
+        live_frames.append(frame)
+
+    if live_frames:
+        try:
+            results = detector.model(
+                live_frames,
+                conf=detector.confidence_threshold,
+                iou=detector.iou_threshold,
+                verbose=False,
+                device=detector.device,
+            )
+            detections_per_request = [_parse_yolo_result(r) for r in results]
+        except Exception as e:
+            logger.exception(f"yolo.detect: batch inference failed: {e}")
+            detections_per_request = [[] for _ in live_frames]
+    else:
+        detections_per_request = []
+
+    for req, detections in zip(live_requests, detections_per_request):
+        camera_id = req.kwargs["camera_id"]
+        deadline = req.kwargs.get("deadline")
+        remaining = (deadline - now()) if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            n_skipped_expired += 1
+            continue
+        next_queue = req.kwargs.get("next_queue") or f"cam.{camera_id}"
+        dispatch(
+            kwargs={
+                "camera_id": camera_id,
+                "frame_handle": req.kwargs["frame_handle"],
+                "frame_num": req.kwargs["frame_num"],
+                "detections": detections,
+                "deadline": deadline,
+            },
+            queue=next_queue,
+            expires=remaining,
+        )
+
+    wall_ms = (time.monotonic() - t0) * 1000.0
+    _stats.record(len(live_requests), wall_ms, n_skipped_expired, n_skipped_gone)
+
+
+@celery.task(
+    base=Batches,
+    name="yolo.detect",
+    queue="yolo",
+    ignore_result=True,
+    flush_every=FLUSH_EVERY,
+    flush_interval=FLUSH_INTERVAL_S,
+)
+def detect_task(requests: List[SimpleRequest]) -> None:
     detector = model_holder.ensure_person_detector_loaded()
-
-    from workers.frame_store import attach_and_read_frame_batch
-
-    packed = attach_and_read_frame_batch("yolo", batch_handle)
-    if packed is None:
-        # The producer's slot vanished (loop stopped, or reallocated
-        # mid-flight). Same "nothing to do" answer the in-process path gives
-        # when a camera is no longer registered.
-        logger.warning(
-            f"yolo.detect_batch: frame batch seq={batch_handle.seq} is gone "
-            f"— returning {n_frames} empty results"
-        )
-        return [[] for _ in range(n_frames)]
-
-    frames = [frame for _cam_id, _frame_num, frame in packed]
-
-    try:
-        t0 = time.time()
-        results = detector.model(
-            frames,
-            conf=detector.confidence_threshold,
-            iou=detector.iou_threshold,
-            verbose=False,
-            device=detector.device,
-        )
-        duration_ms = (time.time() - t0) * 1000
-        logger.debug(
-            f"yolo.detect_batch: seq={batch_handle.seq} batch={len(frames)} "
-            f"took {duration_ms:.1f}ms"
-        )
-        return [_parse_yolo_result(r) for r in results]
-    except Exception as e:
-        logger.exception(f"YOLO batch inference failed: {e}")
-        return [[] for _ in frames]
+    run_detect_batch(requests, detector)

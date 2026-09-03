@@ -1,9 +1,12 @@
 """Per-camera frame producer.
 
 One thread per camera: read a frame, apply its ROI, drop it unless it is a
-detection frame, then write it to shared memory and enqueue a Celery task.
-Tracking, identity and logging all happen in workers.camera_tasks, in a
-separate process.
+detection frame, then write it to shared memory and enqueue it on the
+`yolo` queue as a `yolo.detect` request. YOLO batches it with co-arriving
+requests from other cameras, forwards each frame's detections on to
+`camera.track` (see workers/yolo_tasks.py), which is where tracking,
+identity and logging all happen — statically pinned to one camera-worker per
+camera_id via compose.yml, not this process.
 """
 
 import dataclasses
@@ -99,7 +102,8 @@ class CeleryCameraProducer:
                 time.sleep(0.01)
 
     def _produce_one_frame(self) -> None:
-        from workers.camera_tasks import process_frame_task
+        from workers.celery_app import camera_queue_name
+        from workers.yolo_tasks import detect_task
 
         # ── Step 1: Read frame — identical to CameraWorker ─────────────────
         ret, frame = self.stream_handler.read()
@@ -135,20 +139,33 @@ class CeleryCameraProducer:
         handle = frame_slot.write(frame)
         # dataclasses.asdict, not the handle itself: celery_app.py's
         # task_serializer='json' can't encode a FrameHandle instance —
-        # see process_frame_task's docstring for why the fix lives at this
+        # see detect_task's docstring for why the fix lives at this
         # boundary rather than in the global Celery config.
-        # expires: the thread path's bounded queues dropped frames under load
-        # and stayed responsive; Celery queues are unbounded, so without this
-        # an overloaded worker accumulates silent lag instead. 1s rather than
-        # one frame interval (~130ms) because the goal is bounding a backlog,
-        # not enforcing cadence — a healthy queue never expires anything, and
-        # the frame's shared-memory slot is long overwritten by then anyway.
-        process_frame_task.apply_async(
+        # expires / deadline: the thread path's bounded queues dropped
+        # frames under load and stayed responsive; Celery queues are
+        # unbounded, so without an expiry an overloaded worker accumulates
+        # silent lag instead. 1s rather than one frame interval (~130ms)
+        # because the goal is bounding a backlog, not enforcing cadence — a
+        # healthy queue never expires anything, and the frame's
+        # shared-memory slot is long overwritten by then anyway.
+        #
+        # Both `expires` AND `deadline` carry this same budget, not just
+        # one: `expires` is Celery's own mechanism, evaluated on delivery to
+        # THIS hop (yolo.detect); `deadline` is a plain epoch-seconds kwarg
+        # that travels IN the payload to every later hop, because
+        # celery-batches' Batches base class does not honour `expires` at
+        # all (verified in the go/no-go spike — see
+        # docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md's "Verified constraints").
+        deadline = time.time() + _TASK_EXPIRES_S
+        detect_task.apply_async(
             kwargs={
                 "camera_id": self.camera_id,
                 "frame_handle": dataclasses.asdict(handle),
                 "frame_num": frame_num,
+                "next_queue": camera_queue_name(self.camera_id),
+                "deadline": deadline,
             },
+            queue="yolo",
             expires=_TASK_EXPIRES_S,
         )
         # Deliberately fire-and-forget: this producer does not wait for the

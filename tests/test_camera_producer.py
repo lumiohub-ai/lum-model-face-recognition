@@ -2,14 +2,15 @@
 
 Covers the two properties that are invisible until production load: the
 producer is the only frame-skip gate, and every enqueued frame carries an
-expiry so an overloaded worker sheds stale frames instead of accumulating
-silent lag.
+expiry/deadline so an overloaded worker sheds stale frames instead of
+accumulating silent lag.
 
 Run: PYTHONPATH=src python tests/test_camera_producer.py
 """
 
 import os
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
@@ -54,7 +55,7 @@ class FakeSlot:
 
 
 class _PatchedTask:
-    """CeleryCameraProducer imports process_frame_task inside the method, so
+    """CeleryCameraProducer imports detect_task inside the method, so
     swapping the module attribute is enough to intercept the enqueue."""
 
     def __init__(self, task):
@@ -62,16 +63,16 @@ class _PatchedTask:
         self._saved = None
 
     def __enter__(self):
-        from workers import camera_tasks
+        from workers import yolo_tasks
 
-        self._saved = camera_tasks.process_frame_task
-        camera_tasks.process_frame_task = self.task
+        self._saved = yolo_tasks.detect_task
+        yolo_tasks.detect_task = self.task
         return self.task
 
     def __exit__(self, *exc):
-        from workers import camera_tasks
+        from workers import yolo_tasks
 
-        camera_tasks.process_frame_task = self._saved
+        yolo_tasks.detect_task = self._saved
         return False
 
 
@@ -89,19 +90,43 @@ def _make_producer(frames, detection_interval=1):
 
 
 class EnqueueTests(unittest.TestCase):
-    def test_every_enqueued_frame_carries_an_expiry(self):
-        """Without this the queue is unbounded: an overloaded worker grows
+    def test_every_enqueued_frame_carries_an_expiry_and_deadline(self):
+        """Without these the queue is unbounded: an overloaded worker grows
         latency silently instead of dropping frames the way the bounded
-        in-process queues used to."""
+        in-process queues used to. Both are needed, not just `expires` —
+        celery-batches' Batches base class (yolo.detect) does not honour
+        `expires` at all, so `deadline` is what actually gets enforced once
+        the frame reaches that hop and beyond."""
         from pipeline.frame_pump import _TASK_EXPIRES_S
 
+        task = FakeTask()
+        t_before = time.time()
+        producer = _make_producer([_frame()])
+        with _PatchedTask(task):
+            producer._produce_one_frame()
+        t_after = time.time()
+
+        self.assertEqual(len(task.calls), 1)
+        call = task.calls[0]
+        self.assertEqual(call["options"]["expires"], _TASK_EXPIRES_S)
+        deadline = call["kwargs"]["deadline"]
+        self.assertGreaterEqual(deadline, t_before + _TASK_EXPIRES_S)
+        self.assertLessEqual(deadline, t_after + _TASK_EXPIRES_S)
+
+    def test_dispatched_to_the_yolo_queue_with_this_cameras_next_queue(self):
+        """The frame goes to the shared `yolo` queue, not a per-camera one —
+        batching needs a queue any yolo-worker consumes. `next_queue` is
+        what carries the per-camera routing forward: yolo.detect reads it
+        to know which cam.<id> queue to forward this camera's detections
+        to."""
         task = FakeTask()
         producer = _make_producer([_frame()])
         with _PatchedTask(task):
             producer._produce_one_frame()
 
-        self.assertEqual(len(task.calls), 1)
-        self.assertEqual(task.calls[0]["options"]["expires"], _TASK_EXPIRES_S)
+        call = task.calls[0]
+        self.assertEqual(call["options"]["queue"], "yolo")
+        self.assertEqual(call["kwargs"]["next_queue"], "cam.1")
 
     def test_payload_carries_the_handle_as_a_plain_dict(self):
         """task_serializer='json' cannot encode a FrameHandle dataclass."""

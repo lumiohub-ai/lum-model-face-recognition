@@ -38,6 +38,20 @@ celery = Celery(
 default_exchange = Exchange('default', type='direct')
 dlq_exchange = Exchange('dlq', type='direct')
 
+
+def camera_queue_name(camera_id: int) -> str:
+    """The pinned per-camera queue `yolo.detect` forwards a camera's
+    detections to, and that camera's camera-worker service statically
+    consumes via its compose.yml `-Q` list.
+
+    Not declared in `task_queues` below: `apply_async(queue="cam.22")` needs
+    no prior declaration (task_create_missing_queues defaults to True), and
+    there is one of these per camera — a fixed enumeration here would need
+    editing every time a camera is added or removed, duplicating what
+    compose.yml's `-Q` lists already say.
+    """
+    return f"cam.{camera_id}"
+
 # Celery configuration
 celery.conf.update(
     # Task settings
@@ -66,31 +80,42 @@ celery.conf.update(
     enable_utc=True,
 
     # Task routing
+    #
+    # 'camera.*' is deliberately absent: camera.track has no static queue at
+    # all (see its @celery.task decorator) — it's dispatched exclusively via
+    # yolo.detect's send_task(queue=camera_queue_name(camera_id)), one queue
+    # per camera, statically assigned to a camera-worker via compose.yml's
+    # -Q list. A route entry here could only name one fixed queue, which is
+    # exactly the thing per-camera queues need to NOT be.
     task_routes={
         'workers.embedding_tasks.*': {'queue': 'embeddings'},
         'workers.detection_tasks.*': {'queue': 'detections'},
-        'workers.camera_tasks.*': {'queue': 'camera_frames'},
         'workers.yolo_tasks.*': {'queue': 'yolo'},
         'workers.face_tasks.*': {'queue': 'face'},
         'detection.*': {'queue': 'detections'},
         'embedding.*': {'queue': 'embeddings'},
-        'camera.*': {'queue': 'camera_frames'},
         'yolo.*': {'queue': 'yolo'},
         'face.*': {'queue': 'face'},
     },
 
     # Queue definitions with DLQ support
     #
-    # `yolo` and `face` MUST stay separate queues with their own worker
-    # processes. `main.py`'s GPU loop threads block on
-    # these tasks' results, so if GPU inference shared a queue with the
-    # camera_frames work, a backlog of camera tasks could occupy the very
-    # workers those loops are waiting on. Keeping them separate is what makes
-    # the blocking call safe — do not consolidate these to "simplify".
+    # Three kinds of queue in this app:
+    #   - shared, stateless: embeddings/detections/yolo/face. Any worker
+    #     consuming that queue may process any task on it.
+    #   - pinned, one per camera: cam.<id> (see camera_queue_name above).
+    #     Not declared here — task_create_missing_queues handles them, and a
+    #     fixed list here would need editing on every camera add/remove.
+    #
+    # yolo and face MUST stay separate queues with their own worker
+    # processes: camera-worker's process_frame blocks on face.embed_batch's
+    # result, so if face inference shared a queue with yolo's batch work, a
+    # backlog on one could starve the worker the other is waiting on.
+    # Keeping them separate is what makes the blocking call safe — do not
+    # consolidate these to "simplify".
     task_queues=(
         Queue('embeddings', exchange=default_exchange, routing_key='embeddings'),
         Queue('detections', exchange=default_exchange, routing_key='detections'),
-        Queue('camera_frames', exchange=default_exchange, routing_key='camera_frames'),
         Queue('yolo', exchange=default_exchange, routing_key='yolo'),
         Queue('face', exchange=default_exchange, routing_key='face'),
         Queue('dlq.embeddings', exchange=dlq_exchange, routing_key='dlq.embeddings'),
