@@ -8,9 +8,11 @@ ORT's CUDA EP re-plans on every input-shape change (~80ms at a varying batch
 size versus ~2.6ms at a fixed one). The comment marking that is carried
 across with the code.
 
-What stays in `GPUInferenceWorker`: the per-camera queues, the cross-camera
-ROI collection, the request/response correlation, and the scatter of
-results back to the camera that submitted each crop.
+Called synchronously by camera_tasks.py's `_CameraContext` via
+`workers.face_client.FaceEmbedClient` — a direct `apply_async` + blocking
+`.get()`, not the GPU RPC socket. GPUInferenceWorker (deleted by
+docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md's plan) is no longer in this call's path
+at all; this task's shape is unchanged, only its caller is.
 
 Crops arrive as a `RoiBatchHandle` (shared memory) rather than pixels
 through the broker. Results come back through the broker as pickled dicts —
@@ -46,7 +48,7 @@ def _load_model_in_child(**_kwargs):
         model_holder.ensure_face_detector_loaded()
 
 
-@celery.task(name="face.embed_batch", queue="face")
+@celery.task(name="face.embed_batch", queue="face", track_started=False)
 def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
     """Detect + embed faces for one flat, cross-camera batch of person ROIs.
 
