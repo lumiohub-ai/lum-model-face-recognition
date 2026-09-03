@@ -1,10 +1,14 @@
 """SmartOfficeEngine - Unified person tracking and face recognition system.
 
 Each camera runs as a CeleryCameraProducer thread here (frame read, ROI,
-frame-skip) that hands off to a Celery task; tracking, identity and logging
-run in workers.camera_tasks, in a separate process. This process holds the
-GPU inference queues (GPUInferenceWorker) and the cross-camera identity state
-(GlobalTrackManager), both served to the workers over RPC.
+frame-skip) that hands frames off to the `yolo` queue; YOLO batching,
+tracking, identity and logging all run elsewhere, in separate processes —
+see docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md. This process holds only the
+cross-camera identity state (GlobalTrackManager), served to camera-worker
+over the one remaining RPC socket (workers/global_track_rpc.py). The GPU
+inference RPC middleman (GPUInferenceWorker + gpu_worker_rpc.py) that used
+to live here was deleted once YOLO/face batching moved into their own
+Celery workers directly.
 """
 
 import threading
@@ -30,7 +34,6 @@ from lum_vision import ModelFactory, VisionConfig
 from config import load_cameras_from_db, build_vision_config
 
 # Local
-from pipeline.gpu_batch_dispatcher import GPUInferenceWorker
 from pipeline.frame_pump import CeleryCameraProducer
 from infrastructure.video.annotator import FrameAnnotator
 
@@ -38,8 +41,10 @@ from infrastructure.video.annotator import FrameAnnotator
 class SmartOfficeEngine:
     """Unified engine for Smart Office person tracking and face recognition.
 
-    GPUInferenceWorker batches inference for every camera; each camera runs a
-    CeleryCameraProducer thread that reads frames and hands them to Celery.
+    Each camera runs a CeleryCameraProducer thread that reads frames and
+    hands them to the `yolo` queue for batched detection; this process no
+    longer runs a GPU batching/dispatch component of its own — see the
+    module docstring.
     """
 
     def __init__(
@@ -151,25 +156,15 @@ class SmartOfficeEngine:
             self._metrics_store = None
             self._metrics_dashboard = None
 
-        # Shared by every camera. Keyed by DB camera id so a camera can leave
-        # the set without re-pointing every other camera's queues (LSO-130).
-        # Holds no models: YOLO runs in the `yolo` Celery worker and
-        # SCRFD+ArcFace in the `face` worker, so this owns only queues,
-        # batching and correlation.
-        self.gpu_worker = GPUInferenceWorker(
-            camera_ids=self._camera_ids(),
-            metrics_collector=self.metrics,
-        )
-
         self.camera_workers = self._init_camera_workers()
 
-        # How the camera workers reach this process's GPUInferenceWorker and
-        # GlobalTrackManager.
+        # How camera-worker reaches this process's GlobalTrackManager. YOLO
+        # and face batching no longer route through this process at all —
+        # frame_pump hands frames straight to the `yolo` queue; see
+        # docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md.
         from workers.global_track_rpc import GpuRpcServer
-        from workers.gpu_worker_rpc import GpuWorkerRpcServer
 
         self._gpu_rpc_server = GpuRpcServer(self.models.global_track_manager)
-        self._gpu_worker_rpc_server = GpuWorkerRpcServer(self.gpu_worker)
 
         logger.debug(
             f"SmartOfficeEngine initialised: {len(self.camera_configs)} camera(s), "
@@ -295,12 +290,8 @@ class SmartOfficeEngine:
         # Start background streams
         self.stream_manager.start_streams()
 
-        # Start GPU worker thread
-        self.gpu_worker.start()
-
-        # Serve GPU inference and global-track state to the camera workers.
+        # Serve global-track state to camera-worker.
         self._gpu_rpc_server.start()
-        self._gpu_worker_rpc_server.start()
 
         # Start camera producer threads
         for worker in self.camera_workers:
@@ -898,11 +889,7 @@ class SmartOfficeEngine:
         for worker in self.camera_workers:
             worker.stop(timeout=3.0)
 
-        # Stop GPU worker
-        self.gpu_worker.stop(timeout=5.0)
-
         self._gpu_rpc_server.stop()
-        self._gpu_worker_rpc_server.stop()
 
         # Log final global tracking metrics
         if self.models.global_track_manager and self.models.global_track_manager.enabled:

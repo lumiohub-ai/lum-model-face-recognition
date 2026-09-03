@@ -249,13 +249,15 @@ class RoiBatchSlotTests(unittest.TestCase):
 
 
 class SameProcessReadTests(unittest.TestCase):
-    """Reads in the PRODUCER'S OWN process - not a degenerate test setup but
-    the real deployment path: GpuWorkerRpcServer runs in the main process,
-    the same process whose CeleryCameraProducer threads own the slots. These reads
-    must take the _LOCAL_SLOTS fast path (straight from the owning slot's
-    mapping) rather than _attach_fresh, whose resource_tracker.unregister
-    would delete the producer's own tracker entry - a KeyError at clean
-    shutdown and a /dev/shm leak if the process crashes."""
+    """Reads in the PRODUCER'S OWN process - not a degenerate test setup:
+    global_track_rpc.py's GpuRpcServer (the one RPC bridge left after the
+    per-camera-queue switch) runs in the main process, the same process
+    whose CeleryCameraProducer threads own the slots, so any same-process
+    reader hits this path. These reads must take the _LOCAL_SLOTS fast path
+    (straight from the owning slot's mapping) rather than _attach_fresh,
+    whose resource_tracker.unregister would delete the producer's own
+    tracker entry - a KeyError at clean shutdown and a /dev/shm leak if the
+    process crashes."""
 
     def test_frame_read_in_producer_process_matches(self):
         from workers import frame_store
@@ -402,84 +404,6 @@ class SameProcessReadTests(unittest.TestCase):
                 frame_store._segment_name(old_slot._base_name, stale_handle.segment),
                 None,
             )
-
-
-class FrameBatchSlotTests(unittest.TestCase):
-    """One batch spanning several cameras, for the GPU workers. Unlike
-    every other slot here it is keyed by GPU loop, not by camera, and each
-    packed frame carries its own camera_id/frame_num."""
-
-    def setUp(self):
-        from workers import frame_store
-
-        self.slot = frame_store.FrameBatchSlot("test-yolo")
-
-    def tearDown(self):
-        self.slot.close()
-
-    def test_multi_camera_batch_round_trips_with_frame_nums(self):
-        """frame_num must survive per frame: it is the correlation key the
-        GPU loop needs to route each result back to the right camera's
-        waiting request."""
-        from workers import frame_store
-
-        f29 = _random_frame(480, 640)
-        f40 = _random_frame(720, 1280)
-        handle = self.slot.write({40: (f40, 100), 29: (f29, 200)})
-
-        got = frame_store.attach_and_read_frame_batch("test-yolo", handle)
-        self.assertIsNotNone(got)
-        by_cam = {cid: (fn, arr) for cid, fn, arr in got}
-        self.assertEqual(by_cam[29][0], 200)
-        self.assertEqual(by_cam[40][0], 100)
-        self.assertTrue(np.array_equal(by_cam[29][1], f29))
-        self.assertTrue(np.array_equal(by_cam[40][1], f40))
-
-    def test_packed_in_sorted_camera_order(self):
-        """_yolo_loop distributes results positionally against
-        `sorted(batch.keys())` - the packed order must match, or every
-        camera gets another camera's detections."""
-        handle = self.slot.write({
-            40: (_random_frame(64, 64), 1),
-            29: (_random_frame(64, 64), 2),
-            38: (_random_frame(64, 64), 3),
-        })
-        self.assertEqual([f.camera_id for f in handle.frames], [29, 38, 40])
-
-    def test_frames_of_different_sizes_in_one_batch(self):
-        """Cameras genuinely differ in resolution (2560x1440 vs 640x480 in
-        the live set), so a batch is not uniformly shaped."""
-        from workers import frame_store
-
-        small, large = _random_frame(240, 320), _random_frame(1080, 1920)
-        handle = self.slot.write({1: (small, 10), 2: (large, 20)})
-        got = frame_store.attach_and_read_frame_batch("test-yolo", handle)
-        by_cam = {cid: arr for cid, _fn, arr in got}
-        self.assertTrue(np.array_equal(by_cam[1], small))
-        self.assertTrue(np.array_equal(by_cam[2], large))
-
-    def test_empty_batch_is_not_an_error(self):
-        """The GPU loop calls this whenever nothing was ready; it must be a
-        legitimate empty result, matching _run_yolo_batch([]) -> []."""
-        from workers import frame_store
-
-        handle = self.slot.write({})
-        self.assertEqual(
-            frame_store.attach_and_read_frame_batch("test-yolo", handle), []
-        )
-
-    def test_reallocation_between_batches(self):
-        from workers import frame_store
-
-        self.slot.write({1: (_random_frame(64, 64), 1)})
-        big = _random_frame(1080, 1920)
-        handle = self.slot.write({1: (big, 2)})
-        got = frame_store.attach_and_read_frame_batch("test-yolo", handle)
-        self.assertTrue(np.array_equal(got[0][2], big))
-
-    def test_non_hwc_frame_raises(self):
-        with self.assertRaises(ValueError):
-            self.slot.write({1: (np.zeros((10, 10), dtype=np.uint8), 1)})
 
 
 class RoiBatchSlotValidationTests(unittest.TestCase):

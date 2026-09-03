@@ -1,10 +1,13 @@
-"""Length-prefixed message framing over a stream socket, shared by every
-Unix-socket RPC bridge under `workers/` (gpu_rpc.py's GlobalTrackManager
-bridge, gpu_worker_rpc.py's GPUInferenceWorker bridge, and any future one).
+"""Length-prefixed message framing over a stream socket, used by the one
+remaining Unix-socket RPC bridge under `workers/` — global_track_rpc.py's
+GlobalTrackManager bridge — and any future one. A second such bridge
+(gpu_worker_rpc.py, for GPUInferenceWorker) existed during the Celery
+migration and was deleted once GPU inference moved into its own Celery
+workers directly (docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md).
 
-Extracted here rather than left in gpu_rpc.py so a second, unrelated bridge
-doesn't need to import a GlobalTrackManager-specific module's private names
-to get the wire format — this is the only part of that module with no
+Extracted here rather than left in global_track_rpc.py so a second, unrelated
+bridge doesn't need to import a GlobalTrackManager-specific module's private
+names to get the wire format — this is the only part of that module with no
 domain coupling.
 """
 

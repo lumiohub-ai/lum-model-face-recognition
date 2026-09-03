@@ -74,10 +74,9 @@ _ATTACHED_LOCK = threading.Lock()
 
 # Producer-side registry: producer key (not segment name) -> the live slot
 # object that owns it, for readers running IN THE PRODUCER'S OWN PROCESS.
-# This is not a hypothetical: the GpuWorkerRpcServer (gpu_worker_rpc.py) runs
-# in the main process — the same process whose CeleryCameraProducer threads
-# own the frame slots — so its reads would otherwise go through
-# _attach_fresh, whose resource_tracker.unregister would delete the
+# General-purpose, not tied to any specific caller: any code that reads a
+# slot from inside the same process that produced it would otherwise go
+# through _attach_fresh, whose resource_tracker.unregister would delete the
 # PRODUCER'S OWN tracker entry for the block (the tracker keys by name, one
 # entry per process): a spurious KeyError at clean shutdown, and worse, no
 # /dev/shm cleanup if this process crashes — the exact leak the tracker
@@ -427,20 +426,20 @@ class RoiBatchSlot:
     """Producer-side owner of one camera's ring of shared-memory ROI-batch
     segments.
 
-    One instance per camera, mirroring CameraFrameSlot but for `submit_faces`:
-    a single-writer ring, one batch in flight per segment, matching
-    GPUInferenceWorker.submit_faces' own one-batch-in-flight-per-camera
-    semantics (each call replaces whatever the segment's previous generation
-    held `_RING_SIZE` writes ago).
+    One instance per camera, mirroring CameraFrameSlot: a single-writer
+    ring, one batch in flight per segment (each `write()` call replaces
+    whatever the segment's previous generation held `_RING_SIZE` writes
+    ago). Owned by `_CameraContext.process_frame` (workers/camera_tasks.py),
+    which writes here on every recognition-due detection frame and hands the
+    resulting handle to `FaceEmbedClient.embed` (workers/face_client.py).
 
     All crops in one call are packed into a single contiguous payload —
     variable-size, so packed by running byte offset (after the header) rather
     than a fixed per-segment stride like CameraFrameSlot's single shape. An
-    empty batch (`write([], [])`, submit_faces' "keep synchronised" call when
-    recognition is skipped this cycle — see camera_worker.py) allocates a
-    header-only segment; the handle's empty `rois` tuple is what the reader
-    actually branches on, matching `_run_arcface_batch([])` returning `[]`
-    for an empty list without needing to inspect the block at all.
+    empty batch (`write([], [])`) is a legitimate call, not an error — the
+    handle's empty `rois` tuple is what the reader actually branches on,
+    matching `embed_batch_task([])` returning `[]` for an empty list without
+    needing to inspect the block at all.
     """
 
     def __init__(self, camera_id: int):
@@ -495,10 +494,8 @@ class RoiBatchSlot:
         self, person_rois: List[np.ndarray], track_ids: List[int]
     ) -> RoiBatchHandle:
         """Pack `person_rois` into the next ring segment and return a handle.
-        Mirrors GPUInferenceWorker.submit_faces' contract: an empty list is a
-        legitimate call (keeps the sequence counter — and, over RPC, the
-        round-trip — synchronised even when this cycle skips recognition),
-        not an error.
+        An empty list is a legitimate call, not an error — see the class
+        docstring's note on `write([], [])`.
         """
         if len(person_rois) != len(track_ids):
             raise ValueError(
@@ -634,265 +631,3 @@ def attach_and_read_roi_batch(
 
     return crops
 
-
-_FRAME_BATCH_SLOT_NAME_PREFIX = "framebatch"
-
-
-def _frame_batch_slot_name(loop_name: str) -> str:
-    return f"{_FRAME_BATCH_SLOT_NAME_PREFIX}_{loop_name}"
-
-
-@dataclass(frozen=True)
-class BatchedFrameHandle:
-    """One frame's location within a FrameBatchHandle's packed block.
-
-    Carries `camera_id` and `frame_num` per frame because — unlike every
-    other slot type here — a single batch spans multiple cameras, and the
-    consumer must be able to route each result back to the camera that
-    submitted it (GPUInferenceWorker._yolo_loop distributes by camera).
-    """
-
-    camera_id: int
-    frame_num: int
-    offset: int  # byte offset into the payload (after the header)
-    height: int
-    width: int
-    channels: int
-
-
-@dataclass(frozen=True)
-class FrameBatchHandle:
-    """What travels through the Celery broker for one cross-camera batch."""
-
-    seq: int
-    segment: int
-    instance_id: int
-    frames: Tuple[BatchedFrameHandle, ...]
-
-
-class FrameBatchSlot:
-    """Producer-side owner of one GPU loop's ring of cross-camera frame-batch
-    segments.
-
-    Keyed by GPU **loop** name (there is one YOLO loop and one ArcFace
-    loop), NOT by camera — the whole point is that one batch
-    holds frames from several cameras, which is what makes the batched GPU
-    call worth ~1.8x over per-frame calls.
-
-    Why CameraFrameSlot cannot be reused for this, despite also holding
-    frames: it is one continuously-cycled ring per camera, so by the time a
-    worker reads camera X's handle the producer may already have moved many
-    generations ahead — a batch assembled from those handles would silently
-    mix frames from different instants even with per-segment seq checks. The
-    batch that `_collect_frames` hands over holds arrays already copied *out*
-    of those per-camera slots, so there is nothing for a per-camera handle to
-    point at anyway. This slot takes its own copy of exactly the frames in
-    one batch, and that copy is stable for `_RING_SIZE` write-cycles before
-    being recycled.
-
-    Single writer (the GPU loop thread), one batch in flight per segment,
-    ring-cycled — same discipline as RoiBatchSlot, which this otherwise
-    mirrors (offset-packed, variable-size, capacity-reusing per segment).
-
-    Originally a single depth-1 slot (like RoiBatchSlot/CameraFrameSlot
-    started as); measured live to lose the write-to-execute race against a
-    Celery worker on essentially every batch (segment lifetime ~20ms vs.
-    broker round-trip latency), which is why this and its siblings above
-    became rings with an in-segment seq stamp instead.
-    """
-
-    def __init__(self, loop_name: str):
-        self.loop_name = loop_name
-        self._base_name = _frame_batch_slot_name(loop_name)
-        self._shms: Dict[int, shared_memory.SharedMemory] = {}
-        self._seq = 0
-        with _ATTACHED_LOCK:
-            _LOCAL_SLOTS[self._base_name] = self
-
-    def _segment_shm(self, segment: int) -> Optional[shared_memory.SharedMemory]:
-        return self._shms.get(segment)
-
-    def _ensure_segment(self, segment: int, nbytes: int) -> shared_memory.SharedMemory:
-        shm = self._shms.get(segment)
-        alloc = max(nbytes, _HEADER_SIZE)  # SharedMemory requires size > 0
-        if shm is not None and shm.size >= alloc:
-            return shm
-        name = _segment_name(self._base_name, segment)
-        with _ATTACHED_LOCK:
-            if shm is not None:
-                shm.close()
-                try:
-                    shm.unlink()
-                except FileNotFoundError:
-                    pass
-            try:
-                shm = shared_memory.SharedMemory(name=name, create=True, size=alloc)
-            except FileExistsError:
-                # See CameraFrameSlot._ensure_segment — same crashed-prior-run
-                # vs. second-live-replica ambiguity, same loud-warn-then-reclaim
-                # handling, same close()-before-unlink() requirement.
-                logger.warning(
-                    f"Shared-memory segment '{name}' already exists — "
-                    f"reclaiming it as leftover from a crashed prior run. If "
-                    f"another live process still owns it, this steals its "
-                    f"block and corrupts its reads."
-                )
-                stale = shared_memory.SharedMemory(name=name)
-                stale.close()
-                stale.unlink()
-                shm = shared_memory.SharedMemory(name=name, create=True, size=alloc)
-            self._shms[segment] = shm
-        logger.debug(
-            f"FrameBatchSlot[{self.loop_name}]: allocated segment {segment} "
-            f"{alloc / 1024:.0f} KiB as '{name}'"
-        )
-        return shm
-
-    def write(
-        self, batch: Dict[int, Tuple[np.ndarray, int]]
-    ) -> FrameBatchHandle:
-        """Pack one cross-camera batch into the next ring segment and return
-        its handle.
-
-        `batch` is exactly what `GPUInferenceWorker._collect_frames()`
-        returns: `{camera_id: (frame, frame_num)}`. Iterated in sorted
-        camera-id order so the packed order is deterministic and matches
-        `_yolo_loop`'s existing `cam_ids = sorted(batch.keys())` — the
-        results come back as a list positionally aligned to that order.
-
-        An empty batch is legitimate (the loop simply had nothing ready) and
-        produces an empty `frames` tuple; the reader branches on that
-        without touching the block, matching `_run_yolo_batch([])` → `[]`.
-        """
-        self._seq += 1
-        seq = self._seq
-        segment = seq % _RING_SIZE
-        cam_ids = sorted(batch.keys())
-        total_bytes = sum(int(np.prod(batch[cid][0].shape)) for cid in cam_ids)
-        shm = self._ensure_segment(segment, _HEADER_SIZE + total_bytes)
-
-        frames: List[BatchedFrameHandle] = []
-        offset = 0
-        for cam_id in cam_ids:
-            frame, frame_num = batch[cam_id]
-            shape = frame.shape
-            if len(shape) != 3:
-                raise ValueError(f"expected an HxWxC frame, got shape {shape}")
-            nbytes = int(np.prod(shape))
-            view = np.ndarray(
-                shape, dtype=np.uint8, buffer=shm.buf, offset=_HEADER_SIZE + offset
-            )
-            view[:] = frame
-            frames.append(
-                BatchedFrameHandle(
-                    camera_id=cam_id,
-                    frame_num=frame_num,
-                    offset=offset,
-                    height=shape[0],
-                    width=shape[1],
-                    channels=shape[2],
-                )
-            )
-            offset += nbytes
-
-        shm.buf[0:_HEADER_SIZE] = _pack_seq_header(seq)
-        return FrameBatchHandle(
-            seq=seq, segment=segment, instance_id=_INSTANCE_ID, frames=tuple(frames)
-        )
-
-    def _release(self) -> None:
-        # Same _ATTACHED_LOCK serialisation as the other slots, for the same
-        # BufferError-on-reshape/close reason.
-        with _ATTACHED_LOCK:
-            for shm in self._shms.values():
-                shm.close()
-                try:
-                    shm.unlink()
-                except FileNotFoundError:
-                    pass
-            self._shms.clear()
-
-    def close(self) -> None:
-        """Release every ring segment. Call when the GPU loop stops."""
-        with _ATTACHED_LOCK:
-            if _LOCAL_SLOTS.get(self._base_name) is self:
-                del _LOCAL_SLOTS[self._base_name]
-        self._release()
-
-
-def attach_and_read_frame_batch(
-    loop_name: str, handle: FrameBatchHandle
-) -> Optional[List[Tuple[int, int, np.ndarray]]]:
-    """Worker side: map the batch ring segment named by `handle.segment` and
-    copy out every frame it names, as `(camera_id, frame_num, frame)` triples
-    in packed order — but only if the segment's stamped header seq still
-    matches `handle.seq`.
-
-    Returns `[]` for a legitimately empty batch, and `None` if the segment
-    does not exist, is too small, or has already been recycled by a newer
-    write — same None-means-gone convention as the other readers here, so a
-    caller can treat any of these exactly like a vanished frame or ROI slot.
-
-    `loop_name` is a separate argument rather than a handle field because the
-    handle describes *what is in* the batch, while the slot name identifies
-    *which producer* owns it — the worker knows which queue it consumes and
-    therefore which loop's slot to read.
-    """
-    if not handle.frames:
-        return []
-
-    name = _segment_name(_frame_batch_slot_name(loop_name), handle.segment)
-    needed = _HEADER_SIZE + max(
-        f.offset + int(np.prod((f.height, f.width, f.channels)))
-        for f in handle.frames
-    )
-
-    with _ATTACHED_LOCK:
-        local_slot = _LOCAL_SLOTS.get(_frame_batch_slot_name(loop_name))
-        if local_slot is not None:
-            # Same-process fast path — see _LOCAL_SLOTS. Each copy is a
-            # single expression so no view outlives its statement.
-            local_shm = getattr(local_slot, "_segment_shm", lambda _s: None)(handle.segment)
-            if local_shm is None or local_shm.size < needed:
-                return None
-            if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
-                return None
-            out = [
-                (
-                    f.camera_id,
-                    f.frame_num,
-                    np.ndarray(
-                        (f.height, f.width, f.channels),
-                        dtype=np.uint8,
-                        buffer=local_shm.buf,
-                        offset=_HEADER_SIZE + f.offset,
-                    ).copy(),
-                )
-                for f in handle.frames
-            ]
-            # Re-check after copying every frame: the producer can recycle
-            # this segment mid-copy (see attach_and_read's matching check),
-            # handing back a batch mixing two generations' pixels.
-            if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
-                return None
-            return out
-
-        shm = _attach_segment(name, needed)
-        if shm is None or shm.size < needed:
-            return None
-        if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
-            return None
-
-        out: List[Tuple[int, int, np.ndarray]] = []
-        for f in handle.frames:
-            view = np.ndarray(
-                (f.height, f.width, f.channels),
-                dtype=np.uint8,
-                buffer=shm.buf,
-                offset=_HEADER_SIZE + f.offset,
-            )
-            out.append((f.camera_id, f.frame_num, view.copy()))
-        if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
-            return None
-
-    return out

@@ -75,7 +75,6 @@ class MetricsCollector:
 
         # Per-camera: cumulative frame-drop counter (GPU queue full)
         self._frame_drops: Dict[int, int] = {}
-        self._stale_responses: Dict[int, int] = {}
 
         # Inference latency buffers (milliseconds)
         self._yolo_ms: deque = deque(maxlen=self.LATENCY_BUFFER)
@@ -172,18 +171,6 @@ class MetricsCollector:
         """Return cumulative dropped frame count for this camera."""
         with self._lock:
             return self._frame_drops.get(camera_id, 0)
-
-    def record_stale_response(self, camera_id: int) -> None:
-        """Record a GPU reply discarded for answering an earlier request."""
-        with self._lock:
-            self._stale_responses[camera_id] = (
-                self._stale_responses.get(camera_id, 0) + 1
-            )
-
-    def get_stale_responses(self, camera_id: int) -> int:
-        """Return cumulative stale-response count for this camera."""
-        with self._lock:
-            return self._stale_responses.get(camera_id, 0)
 
     # ── Inference latency ─────────────────────────────────────────────────────
 
