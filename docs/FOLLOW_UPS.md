@@ -31,19 +31,32 @@ Last updated: 2026-09-05
 
 # Before this branch merges
 
-## 1. Two internal docs still describe the deleted architecture
+## 1. ~~Two internal docs describe the deleted architecture~~ — DONE (2026-09-05)
 
-**What:** `CELERY_MIGRATION.md` and `PIPELINE_OVERVIEW.md` still document
-`GPUInferenceWorker`, the `camera_frames` queue, two RPC sockets, and link to
-`gpu_batch_dispatcher.py` / `gpu_worker_rpc.py` — files this branch deletes.
+**Was:** `CELERY_MIGRATION.md` and `PIPELINE_OVERVIEW.md` documented `GPUInferenceWorker`,
+the `camera_frames` queue, two RPC sockets, and linked to `gpu_batch_dispatcher.py` /
+`gpu_worker_rpc.py` — files this branch deletes. Sequenced deliberately after
+end-to-end testing, since real results might change what the docs should say. They did.
 
-**Why it matters:** Anyone onboarding reads these and builds a wrong mental model, from
-links that 404.
+**Done:** both rewritten against the architecture that actually runs — six processes,
+`decode-worker` owning the cameras, one RPC socket, batching inside `yolo-worker`, the
+three shared-memory rings, and lease-based camera ownership. Every `../src/...` link
+verified to resolve.
 
-**Why not now:** Sequenced after end-to-end testing, on the reasoning that real results
-might change what the docs should say. That testing is done, so this is simply outstanding.
+Three things the rewrite corrected that were not merely stale but *wrong*:
 
-**Trigger:** Before merge. This is step 6 of the original plan.
+- `PIPELINE_OVERVIEW.md` §5 explained small batch sizes as camera threads drifting out of
+  sync, and predicted a self-reinforcing feedback loop. Live testing disproved it — the
+  real causes were `--prefetch-multiplier=1` capping batches at 1, decode starved of CPU,
+  and ~51% duplicate frames. That section now explains batch size as an *output* of
+  arrival rate vs. GPU speed, and says plainly that a small batch is not a problem when
+  nothing is being dropped.
+- Both docs asserted "do not scale these services" based on correlation logic in
+  `gpu_batch_dispatcher.py`, which no longer exists. The real remaining constraint is
+  narrower: `camera-worker` must stay one consumer per `cam.<id>` because tracker state
+  lives in its memory. `decode-worker` scales freely.
+- The shared-memory section listed four defences; there are now five. The added one
+  (re-attach when the producer restarted) came directly from a live incident.
 
 ---
 
