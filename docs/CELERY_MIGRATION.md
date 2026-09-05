@@ -54,9 +54,12 @@ Three independent shared-memory rings exist, one set per camera:
 | `camraw_<id>` | `decode-worker` | `person-tracking` | full pre-ROI frames, written every ~2s for calibration |
 | `camroi_<id>` | `camera-worker` | `face-worker` | person crops for face embedding |
 
-Each is a ring of 8 segments, not a single slot: a depth-1 slot lost the write-to-execute race on
-essentially every frame. Each segment's header stamps `(instance_id, seq)` so a reader can tell
-it actually landed on the generation it was told to read — see §7.
+Each is a ring of 24 segments, not a single slot: a depth-1 slot lost the write-to-execute race on
+essentially every frame. (Started at 8; raised to 24 after live testing at full frame rate — no
+sampling — showed the producer recycling segments faster than yolo-worker could read them,
+`skipped_gone` climbing ~2-3/s. 24 segments held zero drops sustained at full frame rate.) Each
+segment's header stamps `(instance_id, seq)` so a reader can tell it actually landed on the
+generation it was told to read — see §7.
 
 ## 4. The frame's journey
 

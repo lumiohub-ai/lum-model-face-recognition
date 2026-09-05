@@ -107,6 +107,19 @@ class DecodeWorker:
         # mid-startup and another worker legitimately takes the camera.
         self._starting: set = set()
         self._lock = threading.Lock()
+        # Separate from self._lock (which only ever guards a single dict
+        # read/write): serializes a full _reconcile() PASS. Two threads can
+        # each call _reconcile() — run_forever()'s loop, and the
+        # CAMERA_CONFIG_RELOAD pubsub listener (registered in start()),
+        # which fires on every reload, not just a stream_url change. Without
+        # this, both can observe the same stream_url change at once and
+        # both call _restart_camera -> _start_camera for the same
+        # camera_id: two live StreamHandler/CeleryCameraProducer instances
+        # writing into the same camframe_<id>/camraw_<id> shared-memory
+        # ring, with the first silently leaked (self._owned[camera_id] is a
+        # plain dict overwrite). A plain Lock, not RLock: nothing under
+        # _reconcile_locked re-enters _reconcile itself.
+        self._reconcile_lock = threading.Lock()
         self._running = False
         self._periodic_thread: Optional[threading.Thread] = None
         self._last_unclaimed_warn = 0.0
@@ -170,6 +183,10 @@ class DecodeWorker:
     # ── the claim/renew/reconcile loop ──────────────────────────────────
 
     def _reconcile(self) -> None:
+        with self._reconcile_lock:
+            self._reconcile_locked()
+
+    def _reconcile_locked(self) -> None:
         try:
             eligible = load_cameras_from_db(
                 client_slug=self.client_slug, applications=self.applications
@@ -308,9 +325,22 @@ class DecodeWorker:
     def _restart_camera(self, camera_id: int, config: dict) -> None:
         """Reconnect one camera's stream after its stream_url changed,
         without releasing the lease — this worker still owns the camera,
-        it just needs a fresh StreamHandler pointed at the new URL."""
+        it just needs a fresh StreamHandler pointed at the new URL.
+
+        Adds camera_id to _starting for the same reason the initial-claim
+        path does: _start_camera's RTSP connect can take seconds, and the
+        camera is in neither _owned nor _starting between the
+        _stop_camera_locally pop and _start_camera's re-add — _renew_held
+        would skip it during that window otherwise.
+        """
         self._stop_camera_locally(camera_id)
-        self._start_camera(camera_id, config)
+        with self._lock:
+            self._starting.add(camera_id)
+        try:
+            self._start_camera(camera_id, config)
+        finally:
+            with self._lock:
+                self._starting.discard(camera_id)
 
     def _stop_camera_locally(self, camera_id: int) -> None:
         """Stop decoding a camera WITHOUT releasing its lease — used when

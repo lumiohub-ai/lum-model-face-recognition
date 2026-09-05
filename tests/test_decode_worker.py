@@ -12,6 +12,8 @@ Run: PYTHONPATH=src python -m pytest tests/test_decode_worker.py
 
 import os
 import sys
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -393,6 +395,93 @@ class SyncConfigTests(unittest.TestCase):
         self.assertEqual(
             live_config["application"], ["attendance", "action_recognition"]
         )
+
+
+class ReconcileConcurrencyTests(unittest.TestCase):
+    """Round-7 PR review finding: run_forever()'s periodic loop and the
+    CAMERA_CONFIG_RELOAD pubsub listener (registered in start()) can both
+    call _reconcile() at once — the listener fires on every reload, not
+    just a stream_url change. Without something serializing a full
+    reconcile pass, two threads racing the same stream_url change could
+    both call _sync_config -> _restart_camera -> _start_camera for the
+    same camera_id: two live decoders writing into one shared-memory ring,
+    with the first leaked (self._owned[camera_id] is a plain dict
+    overwrite, so only the second stop is ever called)."""
+
+    def setUp(self):
+        FakeStreamHandler.instances = []
+        FakeProducer.instances = []
+        FakeRawFrameSlot.instances = []
+
+    def test_concurrent_reconcile_calls_never_overlap_and_do_not_leak(self):
+        cam1 = {"camera_id": 1, "stream_url": "rtsp://old-ip/1"}
+        worker = _worker()
+        patches = _apply(_patches([cam1]))
+        try:
+            with mock.patch("decode_main._CAPACITY", 6):
+                worker._reconcile()
+        finally:
+            _stop(patches)
+
+        new_cam1 = {"camera_id": 1, "stream_url": "rtsp://new-ip/1"}
+        state_lock = threading.Lock()
+        in_flight = {"count": 0, "max": 0}
+        start_barrier = threading.Barrier(2)
+
+        def slow_load(*args, **kwargs):
+            # Widens the race window and aligns both threads' DB reads —
+            # without _reconcile_lock, this is where they'd overlap.
+            with state_lock:
+                in_flight["count"] += 1
+                in_flight["max"] = max(in_flight["max"], in_flight["count"])
+            time.sleep(0.05)
+            with state_lock:
+                in_flight["count"] -= 1
+            return [new_cam1]
+
+        patches = [
+            mock.patch("decode_main.load_cameras_from_db", side_effect=slow_load),
+            mock.patch("decode_main.StreamHandler", FakeStreamHandler),
+            mock.patch("decode_main.CeleryCameraProducer", FakeProducer),
+            mock.patch("decode_main.RawFrameSlot", FakeRawFrameSlot),
+            mock.patch("decode_main._CAPACITY", 6),
+        ]
+        _apply(patches)
+
+        def run_reconcile():
+            start_barrier.wait(timeout=5)
+            worker._reconcile()
+
+        try:
+            t1 = threading.Thread(target=run_reconcile)
+            t2 = threading.Thread(target=run_reconcile)
+            t1.start()
+            t2.start()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+        finally:
+            _stop(patches)
+
+        self.assertFalse(t1.is_alive())
+        self.assertFalse(t2.is_alive())
+        self.assertEqual(
+            in_flight["max"],
+            1,
+            "two _reconcile() passes overlapped — _reconcile_lock isn't "
+            "serializing them",
+        )
+
+        live = [
+            p for p in FakeProducer.instances if p.camera_id == 1 and not p.stopped
+        ]
+        self.assertEqual(
+            len(live), 1, "expected exactly one live decoder for camera 1"
+        )
+        for p in FakeProducer.instances:
+            if p.camera_id == 1 and p is not live[0]:
+                self.assertTrue(
+                    p.stopped, "a stale decoder for camera 1 was never stopped"
+                )
 
 
 if __name__ == "__main__":

@@ -179,8 +179,14 @@ services:
     deploy:
       replicas: ${SO_DECODE_WORKER_REPLICAS:-1}
       resources:
+        # ~1 CPU core per 1440p camera decoded (measured: person-tracking's
+        # decode load was ~600% for 6 cameras before this split). Capped
+        # below SO_DECODE_WORKER_CAPACITY's default (6) would throttle
+        # decode inside its own new container — the exact starvation this
+        # split exists to fix, just moved, not removed. Raise both together
+        # if SO_DECODE_WORKER_CAPACITY is raised for the target host.
         limits:
-          cpus: '2.0'
+          cpus: '6.0'
           memory: 2G
         reservations:
           cpus: '1.0'

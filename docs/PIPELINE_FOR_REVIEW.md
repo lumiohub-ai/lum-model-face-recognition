@@ -597,10 +597,11 @@ one**. It would read perfectly valid pixels — of the wrong moment.
 
 Three defences, each added because the simpler version was measured failing:
 
-**A ring of 8 slots, not one.** With a single slot, the producer overwrote it before the worker
+**A ring of 24 slots, not one.** With a single slot, the producer overwrote it before the worker
 arrived on *essentially every frame* — a measured lifetime of ~20ms against a queue round-trip
-longer than that. Cycling through 8 slots gives each picture eight write-cycles to live instead of
-one.
+longer than that. Cycling through slots gives each picture several write-cycles to live instead of
+one. Started at 8; raised to 24 after live testing at full frame rate (no sampling) showed frames
+still being overwritten before being read — 24 held zero drops sustained at full frame rate.
 
 **A sequence number stamped inside the picture itself.** Not just on the note — *inside* the shared
 memory. The worker compares what the note claims with what the memory says. If they disagree, the
