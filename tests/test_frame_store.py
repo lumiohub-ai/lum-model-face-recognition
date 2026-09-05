@@ -406,6 +406,142 @@ class SameProcessReadTests(unittest.TestCase):
             )
 
 
+class RawFrameSlotTests(unittest.TestCase):
+    """RawFrameSlot reuses CameraFrameSlot's ring/header machinery under a
+    separate `camraw_<id>` name, for decode_main.py's periodic calibration
+    frame (see pipeline/decode_metrics.py). Same-process, same rationale as
+    SameProcessReadTests above."""
+
+    def test_round_trips_via_attach_and_read_raw(self):
+        from workers import frame_store
+
+        slot = frame_store.RawFrameSlot(camera_id=501)
+        try:
+            frame = _random_frame(64, 48)
+            handle = slot.write(frame)
+            got = frame_store.attach_and_read_raw(handle)
+            self.assertIsNotNone(got)
+            self.assertTrue(np.array_equal(frame, got))
+        finally:
+            slot.close()
+
+    def test_does_not_collide_with_a_camframe_slot_for_the_same_camera_id(self):
+        """The whole point of the separate prefix: a camera's detection
+        ring and its raw-frame ring must be two independent segments, not
+        one shared by name."""
+        from workers import frame_store
+
+        cam_slot = frame_store.CameraFrameSlot(camera_id=502)
+        raw_slot = frame_store.RawFrameSlot(camera_id=502)
+        try:
+            cam_frame = _random_frame(32, 32)
+            raw_frame = _random_frame(80, 60)
+            cam_handle = cam_slot.write(cam_frame)
+            raw_handle = raw_slot.write(raw_frame)
+
+            got_cam = frame_store.attach_and_read(cam_handle)
+            got_raw = frame_store.attach_and_read_raw(raw_handle)
+
+            self.assertTrue(np.array_equal(cam_frame, got_cam))
+            self.assertTrue(np.array_equal(raw_frame, got_raw))
+        finally:
+            cam_slot.close()
+            raw_slot.close()
+
+    def test_read_after_close_returns_none(self):
+        from workers import frame_store
+
+        slot = frame_store.RawFrameSlot(camera_id=503)
+        frame = _random_frame(32, 32)
+        handle = slot.write(frame)
+        slot.close()
+        self.assertIsNone(frame_store.attach_and_read_raw(handle))
+
+
+class ProducerRestartRecoveryTests(unittest.TestCase):
+    """A reader must recover on its own when the PRODUCER process restarts.
+
+    Regression for a bug observed live: decode-worker restarted while
+    yolo-worker kept running (they no longer share a restart now that
+    decoding is its own service). The producer unlinked its segments and
+    created new ones under the same names with a fresh instance id, but the
+    reader's cached mapping still pointed at the old, unlinked memory.
+    `_attach_segment` re-validates size, not identity, so a same-size
+    segment looked fine and the stale mapping was served forever — every
+    read failed the header check permanently. Measured: skipped_gone ~40/s
+    with essentially zero frames processed, only cleared by restarting the
+    consumer by hand.
+    """
+
+    def test_reader_recovers_after_the_producer_restarts(self):
+        """Must exercise the CROSS-PROCESS path (the `_ATTACHED` cache), not
+        the same-process `_LOCAL_SLOTS` fast path — the bug only exists in
+        the former, and a reader in the real deployment (yolo-worker) is a
+        different process with an empty `_LOCAL_SLOTS`. Dropping the local
+        registration below is what makes this test see what that reader
+        sees; without it the test passes even with the bug present."""
+        from workers import frame_store
+
+        camera_id = 601
+        shape = (48, 64)
+
+        slot = frame_store.CameraFrameSlot(camera_id=camera_id)
+        first = _random_frame(*shape)
+        first_handle = slot.write(first)
+        # Simulate a remote reader: no local slot registration, so the read
+        # goes through _attach_segment and caches in _ATTACHED.
+        frame_store._LOCAL_SLOTS.pop(slot._base_name, None)
+        self.assertTrue(
+            np.array_equal(first, frame_store.attach_and_read(first_handle))
+        )
+
+        # Producer "restarts": segments unlinked and recreated, same size,
+        # but stamped with a different instance id.
+        slot._release()
+        original_instance = frame_store._INSTANCE_ID
+        try:
+            frame_store._INSTANCE_ID = original_instance + 1
+            new_slot = frame_store.CameraFrameSlot(camera_id=camera_id)
+            frame_store._LOCAL_SLOTS.pop(new_slot._base_name, None)
+            try:
+                second = _random_frame(*shape)
+                second_handle = new_slot.write(second)
+                # The reader still holds its cached mapping of the OLD,
+                # now-unlinked block. It must notice the instance change,
+                # re-attach, and return the new frame — with no restart.
+                got = frame_store.attach_and_read(second_handle)
+                self.assertIsNotNone(
+                    got, "reader did not recover from a producer restart"
+                )
+                self.assertTrue(np.array_equal(second, got))
+            finally:
+                new_slot.close()
+        finally:
+            frame_store._INSTANCE_ID = original_instance
+            frame_store._ATTACHED.pop(
+                frame_store._segment_name(slot._base_name, first_handle.segment),
+                None,
+            )
+
+    def test_a_plain_recycled_generation_still_returns_none(self):
+        """The recovery path must not weaken the normal staleness check: a
+        SAME-instance seq mismatch (the generation was recycled before this
+        read) must still return None, not re-attach and hand back whatever
+        is in the slot now."""
+        from workers import frame_store
+
+        slot = frame_store.CameraFrameSlot(camera_id=602)
+        try:
+            stale_handle = slot.write(_random_frame(32, 32))
+            # Cycle the whole ring so that segment is overwritten by a newer
+            # generation from the SAME producer.
+            for _ in range(frame_store._RING_SIZE):
+                slot.write(_random_frame(32, 32))
+            self.assertIsNone(frame_store.attach_and_read(stale_handle))
+        finally:
+            slot.close()
+
+
 class RoiBatchSlotValidationTests(unittest.TestCase):
     """Same-process is fine here - these exercise argument validation, not
     the cross-process shared-memory path."""

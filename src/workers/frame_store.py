@@ -66,6 +66,15 @@ _HEADER_SIZE = _HEADER_STRUCT.size
 
 _SLOT_NAME_PREFIX = "camframe"
 
+# A second, independent ring per camera for calibration's "grab me a live
+# picture" commands (engine.py's capture_frame / test_calibration). The
+# camframe ring above holds post-ROI, post-frame-skip crops — wrong for
+# calibration, which needs the whole, unmodified frame. Written far less
+# often than the detection ring (RawFrameSlot, below) and read as tolerant
+# of staleness (a few seconds old is fine), so it costs nothing on the hot
+# path and never collides with camframe's name or generation counter.
+_RAW_SLOT_NAME_PREFIX = "camraw"
+
 # Worker-side cache: segment name -> attached SharedMemory. One entry per
 # ring segment this process has ever read from. Never closed proactively —
 # a worker process's segments live as long as the process does.
@@ -98,6 +107,10 @@ def _slot_name(camera_id: int) -> str:
     return f"{_SLOT_NAME_PREFIX}_{camera_id}"
 
 
+def _raw_slot_name(camera_id: int) -> str:
+    return f"{_RAW_SLOT_NAME_PREFIX}_{camera_id}"
+
+
 def _segment_name(base_name: str, segment: int) -> str:
     return f"{base_name}_{segment}"
 
@@ -125,9 +138,9 @@ class CameraFrameSlot:
     the ring cycles through them.
     """
 
-    def __init__(self, camera_id: int):
+    def __init__(self, camera_id: int, name_prefix: str = _SLOT_NAME_PREFIX):
         self.camera_id = camera_id
-        self._base_name = _slot_name(camera_id)
+        self._base_name = f"{name_prefix}_{camera_id}"
         self._shms: Dict[int, shared_memory.SharedMemory] = {}
         self._shape: Optional[Tuple[int, int, int]] = None
         self._seq = 0
@@ -244,6 +257,23 @@ class CameraFrameSlot:
         self._release()
 
 
+class RawFrameSlot(CameraFrameSlot):
+    """The full, pre-ROI frame — same ring/header machinery as
+    CameraFrameSlot, under a separate `camraw_<id>` name so it never
+    collides with the detection-frame ring.
+
+    Written by the decode worker on a slow, periodic cadence (not the
+    per-detection hot path), for the calibration commands
+    (`capture_frame`/`test_calibration`) that need a whole frame rather
+    than whatever ROI-cropped, frame-skipped picture the detection ring
+    happens to hold. Reuses `FrameHandle` as its transport type — the
+    fields are identical, only the ring the handle points at differs.
+    """
+
+    def __init__(self, camera_id: int):
+        super().__init__(camera_id, name_prefix=_RAW_SLOT_NAME_PREFIX)
+
+
 def _attach_fresh(name: str) -> Optional[shared_memory.SharedMemory]:
     """Map `name` and unregister it from this process's resource_tracker.
 
@@ -329,12 +359,23 @@ def attach_and_read(handle: FrameHandle) -> Optional[np.ndarray]:
     worker's stale cached mapping fails the seq check immediately instead of
     silently serving frozen pixels from before the restart.
     """
-    name = _segment_name(_slot_name(handle.camera_id), handle.segment)
+    return _attach_and_read_ring(handle, _slot_name(handle.camera_id))
+
+
+def attach_and_read_raw(handle: FrameHandle) -> Optional[np.ndarray]:
+    """Same as `attach_and_read`, but for a `RawFrameSlot` handle — the
+    `camraw_<id>` ring instead of `camframe_<id>`. See `RawFrameSlot`'s
+    docstring for what it's for."""
+    return _attach_and_read_ring(handle, _raw_slot_name(handle.camera_id))
+
+
+def _attach_and_read_ring(handle: FrameHandle, base_name: str) -> Optional[np.ndarray]:
+    name = _segment_name(base_name, handle.segment)
     shape = (handle.height, handle.width, handle.channels)
     nbytes = _HEADER_SIZE + int(np.prod(shape))
 
     with _ATTACHED_LOCK:
-        local_slot = _LOCAL_SLOTS.get(_slot_name(handle.camera_id))
+        local_slot = _LOCAL_SLOTS.get(base_name)
         if local_slot is not None:
             # Same-process fast path — see _LOCAL_SLOTS. The copy is a
             # single expression so its temporary view releases its buffer
@@ -362,7 +403,30 @@ def attach_and_read(handle: FrameHandle) -> Optional[np.ndarray]:
         if shm is None or shm.size < nbytes:
             return None
         if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
-            return None
+            # A seq mismatch alone is normal (the generation was recycled
+            # before this read). An INSTANCE mismatch is not: it means the
+            # producer process restarted, unlinked these segments and made
+            # new ones, while this process still holds a mapping of the old,
+            # now-unlinked memory. `_attach_segment` can't catch that on its
+            # own — it re-validates size, and a same-size segment looks
+            # identical — so the stale mapping would be served forever and
+            # every read would fail this check permanently.
+            #
+            # Not hypothetical: observed live when decode-worker restarted
+            # while yolo-worker kept running (they no longer share a restart
+            # now that decoding is its own service). skipped_gone went to
+            # ~40/s with essentially zero frames processed, and only a
+            # manual consumer restart cleared it. Drop the mapping and
+            # re-attach once, so the next read lands on the new segment.
+            if _unpack_seq_header(shm.buf)[0] != handle.instance_id:
+                del _ATTACHED[name]
+                shm = _attach_segment(name, nbytes)
+                if shm is None or shm.size < nbytes:
+                    return None
+                if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
+                    return None
+            else:
+                return None
         frame = np.ndarray(
             shape, dtype=np.uint8, buffer=shm.buf, offset=_HEADER_SIZE
         ).copy()
@@ -617,7 +681,21 @@ def attach_and_read_roi_batch(
         if shm is None or shm.size < needed:
             return None
         if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
-            return None
+            # Same producer-restart case attach_and_read handles — see its
+            # comment. Applies here too: camera-worker owns these segments
+            # and face-worker reads them, so a camera-worker restart while
+            # face-worker keeps running would otherwise leave face-worker
+            # permanently reading unlinked memory and returning no
+            # embeddings at all.
+            if _unpack_seq_header(shm.buf)[0] != handle.instance_id:
+                del _ATTACHED[name]
+                shm = _attach_segment(name, needed)
+                if shm is None or shm.size < needed:
+                    return None
+                if _unpack_seq_header(shm.buf) != (handle.instance_id, handle.seq):
+                    return None
+            else:
+                return None
 
         crops: List[Tuple[int, np.ndarray]] = []
         for r in handle.rois:

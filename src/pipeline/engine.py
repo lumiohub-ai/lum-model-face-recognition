@@ -1,19 +1,27 @@
 """SmartOfficeEngine - Unified person tracking and face recognition system.
 
-Each camera runs as a CeleryCameraProducer thread here (frame read, ROI,
-frame-skip) that hands frames off to the `yolo` queue; YOLO batching,
-tracking, identity and logging all run elsewhere, in separate processes —
-see docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md. This process holds only the
-cross-camera identity state (GlobalTrackManager), served to camera-worker
-over the one remaining RPC socket (workers/global_track_rpc.py). The GPU
-inference RPC middleman (GPUInferenceWorker + gpu_worker_rpc.py) that used
-to live here was deleted once YOLO/face batching moved into their own
-Celery workers directly.
+Camera decoding runs in its own process(es) now (decode_main.py,
+docs/FOLLOW_UPS.md item 5) — each claims a set of cameras via a Redis lease
+(pipeline/camera_lease.py) and hands frames to the `yolo` queue directly.
+This process no longer decodes anything or owns a StreamHandler; it holds
+only the cross-camera identity state (GlobalTrackManager), served to
+camera-worker over the one remaining RPC socket
+(workers/global_track_rpc.py). The GPU inference RPC middleman
+(GPUInferenceWorker + gpu_worker_rpc.py) that used to live here was deleted
+once YOLO/face batching moved into their own Celery workers directly (see
+docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md).
+
+Two things a decode process needs from this one, now bridged instead of
+called directly (see pipeline/decode_metrics.py and
+workers/frame_store.py's RawFrameSlot): the dashboard's stream-health
+gauges, and a live frame for calibration commands. Both used to be
+synchronous calls onto a StreamHandler this process owned; both are now
+reads of something the decode worker publishes.
 """
 
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from loguru import logger
 
@@ -21,7 +29,6 @@ from loguru import logger
 from config.settings import settings
 
 # Infrastructure
-from infrastructure.video import StreamManager
 from infrastructure import EntryLogger
 from messaging import RedisClient
 from messaging.channels import INTERNAL_CHANNELS
@@ -34,17 +41,16 @@ from lum_vision import ModelFactory, VisionConfig
 from config import load_cameras_from_db, build_vision_config
 
 # Local
-from pipeline.frame_pump import CeleryCameraProducer
-from infrastructure.video.annotator import FrameAnnotator
+from pipeline.decode_metrics import read_raw_frame, read_stream_health
 
 
 class SmartOfficeEngine:
     """Unified engine for Smart Office person tracking and face recognition.
 
-    Each camera runs a CeleryCameraProducer thread that reads frames and
-    hands them to the `yolo` queue for batched detection; this process no
-    longer runs a GPU batching/dispatch component of its own — see the
-    module docstring.
+    Decoding, YOLO batching and tracking all run in other processes now —
+    see the module docstring. This process holds the cross-camera identity
+    state and the dashboard/calibration bridges to what decode workers
+    publish.
     """
 
     def __init__(
@@ -106,17 +112,20 @@ class SmartOfficeEngine:
         # Build name → user_id mapping
         self.name_to_id_map = self._build_name_to_id_map()
 
-        # Initialize video streams
-        self.stream_manager = StreamManager(self.camera_configs)
-        self.stream_manager.init_streams()
-
-        self.save_video = kwargs.get("save_video", False)
-        if self.save_video:
-            output_dir = kwargs.get("output_dir", "volumes/storage/person-tracking")
-            self.stream_manager.init_video_writers(output_dir)
-            self._annotator = FrameAnnotator()
-        else:
-            self._annotator = None
+        # Decoding (and any recording built on it) now lives in
+        # decode_main.py's DecodeWorker processes, not here — see the
+        # module docstring. save_video was a StreamManager feature this
+        # process no longer has a StreamManager to drive; recording is not
+        # yet ported to the decode worker (see docs/FOLLOW_UPS.md), so this
+        # loudly refuses rather than silently doing nothing.
+        if kwargs.get("save_video", False):
+            logger.warning(
+                "save_video=True requested, but recording is not yet "
+                "supported from the decode-worker process — ignoring. "
+                "See docs/FOLLOW_UPS.md."
+            )
+        self.save_video = False
+        self._annotator = None
 
         # Entry logger (handles status tracking + Celery dispatch)
         self.entry_logger = self._init_entry_logger()
@@ -155,8 +164,6 @@ class SmartOfficeEngine:
             self.metrics = None
             self._metrics_store = None
             self._metrics_dashboard = None
-
-        self.camera_workers = self._init_camera_workers()
 
         # How camera-worker reaches this process's GlobalTrackManager. YOLO
         # and face batching no longer route through this process at all —
@@ -221,61 +228,6 @@ class SmartOfficeEngine:
         args.unrecognized_pitch_min = self.config.get("unrecognized_pitch_min", 0.4)
         return EntryLogger(args=args)
 
-    def _init_camera_workers(self) -> List[CeleryCameraProducer]:
-        """One producer per camera: read the frame, apply ROI, frame-skip,
-        hand off. Tracking and identity run in workers.camera_tasks."""
-        workers = []
-        for config in self.camera_configs:
-            camera_id = config.get("camera_id")
-            workers.append(
-                CeleryCameraProducer(
-                    camera_id=camera_id,
-                    camera_config=config,
-                    stream_handler=self.stream_manager.streams.get(camera_id),
-                    detection_interval=self._detection_interval,
-                    metrics_collector=self.metrics,
-                )
-            )
-        return workers
-
-    def _restart_camera_stream(self, camera_id: int, new_config: Dict[str, Any]) -> None:
-        """Reconnect one camera's video stream after its `stream_url` changed
-        (LSO-155), without touching any other camera.
-
-        StreamManager.add_stream is a no-op if `camera_id` is already in
-        `self.streams` (it exists for adding a NEW camera, LSO-130) — so
-        remove_stream must run first, or add_stream would just hand back the
-        stale StreamHandler. CeleryCameraProducer holds a direct StreamHandler
-        reference from construction (not re-read per frame), so the producer
-        itself must be recreated too, not just the stream underneath it.
-        """
-        old_worker = next(
-            (w for w in self.camera_workers if w.camera_id == camera_id), None
-        )
-        if old_worker is not None:
-            old_worker.stop()
-
-        self.stream_manager.remove_stream(camera_id)
-        self.stream_manager.add_stream(new_config)
-
-        new_worker = CeleryCameraProducer(
-            camera_id=camera_id,
-            camera_config=new_config,
-            stream_handler=self.stream_manager.streams.get(camera_id),
-            detection_interval=self._detection_interval,
-            metrics_collector=self.metrics,
-        )
-        new_worker.start()
-
-        if old_worker is not None:
-            self.camera_workers = [
-                new_worker if w.camera_id == camera_id else w
-                for w in self.camera_workers
-            ]
-        else:
-            self.camera_workers.append(new_worker)
-        logger.info(f"Camera {camera_id}: stream restarted (stream_url changed)")
-
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def stop(self) -> None:
@@ -287,15 +239,10 @@ class SmartOfficeEngine:
         self._running = True
         self._start_time = time.time()
 
-        # Start background streams
-        self.stream_manager.start_streams()
-
-        # Serve global-track state to camera-worker.
+        # Serve global-track state to camera-worker. Decoding runs
+        # elsewhere now — see decode_main.py — so there is nothing to start
+        # here for streams or camera producers.
         self._gpu_rpc_server.start()
-
-        # Start camera producer threads
-        for worker in self.camera_workers:
-            worker.start()
 
         # Start monitoring dashboard
         if self._metrics_enabled:
@@ -368,32 +315,26 @@ class SmartOfficeEngine:
                         # LSO-155: a rename/re-IP keeps the same camera_id but
                         # changes stream_url. The old code rebound this list
                         # slot to a brand-new dict (self.camera_configs[i] =
-                        # new_config) — CeleryCameraProducer/StreamManager
-                        # hold their own references from construction, so
-                        # that swap never reached them and the camera kept
-                        # streaming from the dead URL until a full service
-                        # restart (a real 19h attendance outage). Mutating in
-                        # place instead means every live reader that already
-                        # holds `old_config` (e.g. CeleryCameraProducer.roi
-                        # lookups) sees the update for free; stream_url still
-                        # needs an explicit restart since the RTSP connection
-                        # itself isn't re-read per frame the way roi is.
-                        old_url = old_config.get("stream_url")
-                        new_url = new_config.get("stream_url")
-                        # Update-then-remove, never clear()-then-update:
-                        # CeleryCameraProducer reads this dict (e.g. "roi")
-                        # concurrently with no lock, and clearing first opens
-                        # a window where a frame mid-reload sees an empty
-                        # config (processed unclipped). Growing then
-                        # shrinking never exposes an empty dict. Same
-                        # pattern as camera_tasks.py's on_embedding_reload.
+                        # new_config), which a long-lived reader holding
+                        # `old_config` would never see. Mutating in place
+                        # instead means anything holding this same dict
+                        # object sees the update for free — this process no
+                        # longer decodes, so the reader that matters now is
+                        # each decode-worker's CeleryCameraProducer, in a
+                        # different process. It cannot share this object; it
+                        # reaches the same in-place-mutation outcome itself,
+                        # via its own DecodeWorker._sync_config, triggered by
+                        # the CAMERA_CONFIG_RELOAD publish below.
+                        #
+                        # Update-then-remove, never clear()-then-update: a
+                        # concurrent reader (e.g. this process's own
+                        # `_camera_ids()`) could otherwise see an empty
+                        # config mid-reload. Growing then shrinking never
+                        # exposes an empty dict. Same pattern as
+                        # camera_tasks.py's on_embedding_reload.
                         old_config.update(new_config)
                         for key in [k for k in old_config if k not in new_config]:
                             old_config.pop(key, None)
-                        if new_url != old_url:
-                            self._restart_camera_stream(
-                                new_config.get("camera_id"), old_config
-                            )
                         break
                 logger.info(
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
@@ -489,9 +430,7 @@ class SmartOfficeEngine:
         max_frame_age_sec = 5.0
 
         try:
-            frame = self.stream_manager.get_fresh_frame(
-                camera_id, max_age_sec=max_frame_age_sec
-            )
+            frame = read_raw_frame(camera_id, max_age_sec=max_frame_age_sec)
             if frame is None:
                 error = (
                     f"No live frame within {max_frame_age_sec:.0f}s for camera {camera_id}"
@@ -703,7 +642,7 @@ class SmartOfficeEngine:
         publisher = MDAPublisher(self.client_slug)
 
         try:
-            frame = self.stream_manager.get_frame(camera_id)
+            frame = read_raw_frame(camera_id)
             if frame is None:
                 logger.warning(f"test_calibration: no frame for camera {camera_id}")
                 publisher.publish_calibration_failed(
@@ -809,41 +748,46 @@ class SmartOfficeEngine:
                 logger.warning("[metrics] gauge 'global_tracks': global_track_manager has no attribute 'global_tracks' - will always report 0")
             self.metrics.register_gauge("global_tracks", lambda: len(gtm.global_tracks))
 
-        # Split cap.read() into its two halves: grab() (read_ms) is time spent
+        # Split "read" into its two halves: grab() (read_ms) is time spent
         # BLOCKED waiting for the next frame off the network/demuxer - a
         # stalled camera shows up here. retrieve() (decode_ms) is the actual
         # CPU cost of decoding a frame that already arrived - the dominant CPU
         # consumer at high camera counts. Conflating them (as one cap.read()
         # timer previously did) hides which one is actually the problem.
-        streams = self.stream_manager.streams
+        #
+        # These no longer come from a StreamHandler this process owns —
+        # decoding runs in decode_main.py's DecodeWorker processes now, so
+        # each gauge reads what that worker last published to Redis
+        # (pipeline/decode_metrics.py). A camera with no decode worker
+        # currently holding it (starting up, or genuinely unclaimed) simply
+        # reads back {} — that's "no data", not an error.
+        camera_ids = self._camera_ids()
 
         def _read_ms(camera_id: int) -> float:
-            s = streams.get(camera_id)
-            return s.get_read_avg_ms() if s is not None else 0.0
+            return read_stream_health(camera_id).get("read_ms", 0.0)
 
         def _decode_ms(camera_id: int) -> float:
-            s = streams.get(camera_id)
-            return s.get_decode_avg_ms() if s is not None else 0.0
+            return read_stream_health(camera_id).get("decode_ms", 0.0)
 
         def _stream_state(camera_id: int):
-            s = streams.get(camera_id)
-            return s.get_health()["state"] if s is not None else None
+            return read_stream_health(camera_id).get("state")
 
         self.metrics.register_camera_gauge("read_ms", _read_ms)
         self.metrics.register_camera_gauge("decode_ms", _decode_ms)
         self.metrics.register_camera_gauge("stream_state", _stream_state)
-        self.metrics.register_gauge("read_ms_avg", lambda: round(
-            sum(s.get_read_avg_ms() for s in streams.values()) / len(streams), 1
-        ) if streams else 0.0)
-        self.metrics.register_gauge("decode_ms_avg", lambda: round(
-            sum(s.get_decode_avg_ms() for s in streams.values()) / len(streams), 1
-        ) if streams else 0.0)
+
+        def _avg(field: str) -> float:
+            values = [read_stream_health(cid).get(field, 0.0) for cid in camera_ids]
+            return round(sum(values) / len(values), 1) if values else 0.0
+
+        self.metrics.register_gauge("read_ms_avg", lambda: _avg("read_ms"))
+        self.metrics.register_gauge("decode_ms_avg", lambda: _avg("decode_ms"))
 
     def _report_metrics(self) -> None:
         """Log a metrics summary and publish alerts for critical conditions."""
         # Must match the keys the recording path uses (camera id, not
         # position) or every gauge lookup misses (LSO-130).
-        cam_indices = [w.camera_id for w in self.camera_workers]
+        cam_indices = self._camera_ids()
 
         # Log compact summary line
         self.metrics.log_summary(cam_indices)
@@ -885,10 +829,10 @@ class SmartOfficeEngine:
     def _cleanup(self) -> None:
         logger.info("Shutting down SmartOfficeEngine...")
 
-        # Stop camera workers
-        for worker in self.camera_workers:
-            worker.stop(timeout=3.0)
-
+        # No camera producers or streams to stop here — decoding runs in
+        # decode_main.py's DecodeWorker processes, which own their own
+        # shutdown (releasing their Redis leases so another worker can
+        # pick their cameras up immediately).
         self._gpu_rpc_server.stop()
 
         # Log final global tracking metrics
@@ -897,9 +841,6 @@ class SmartOfficeEngine:
 
         if self._owns_models:
             self.models.cleanup()
-
-        # Stop streams
-        self.stream_manager.cleanup()
 
         # Stop monitoring dashboard
         if self._metrics_enabled:

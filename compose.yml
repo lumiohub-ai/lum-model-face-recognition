@@ -106,16 +106,85 @@ services:
       start_period: 180s
     deploy:
       resources:
+        # Lowered from 4.0/2.0: this process no longer decodes any camera
+        # (see decode-worker, below) — decoding was the CPU cost this limit
+        # was originally sized for, and starving GlobalTrackManager's RPC
+        # socket under that decode load is exactly the bug this split
+        # fixes (docs/FOLLOW_UPS.md item 5). What remains here — the
+        # identity register, the dashboard, action-recognition
+        # orchestration — is comparatively light. Re-measure on the target
+        # host after rollout (`docker stats`) rather than trusting this
+        # number blindly; it has not been isolated and confirmed the way
+        # the pre-split 4.0 limit was.
         limits:
-          cpus: '4.0'
-          memory: 8G
-        reservations:
           cpus: '2.0'
-          memory: 4G
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
           devices:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  # decode-worker: every replica is identical and interchangeable — it
+  # claims cameras up to SO_DECODE_WORKER_CAPACITY via a short-lived Redis
+  # lease (pipeline/camera_lease.py), not a computed formula. See
+  # docs/FOLLOW_UPS.md item 5 and the LSO-179 design for why:
+  # `camera_id % N` reshuffles almost every camera whenever the replica
+  # count changes, which decoding doesn't need to tolerate — a lease
+  # scheme does, with no hysteresis state machine or control-plane polling.
+  #
+  # Replica count and per-worker capacity are config, sized by a human for
+  # the TARGET host — not auto-scaled (that layer was deliberately left
+  # out, see the design doc). Size N+1, not exact-fit: e.g. for 12 cameras
+  # at capacity 6, run 3 replicas (18 slots), not 2 (12 slots) — so losing
+  # any single replica still leaves enough capacity across the survivors.
+  # Measure `nproc` and real per-camera decode cost on the target host
+  # before picking numbers; do not assume this repo's dev-box figures
+  # apply. Deliberately ONE service definition, not `-a`/`-b` like
+  # camera-worker — that naming exists only because those replicas are
+  # NOT interchangeable (each owns a fixed queue list); these are.
+  decode-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    # No depends_on person-tracking: unlike camera-worker/yolo-worker/
+    # face-worker, this process never calls person-tracking's RPC socket —
+    # it only needs Redis and Postgres, which it degrades against on its
+    # own (CameraLeaseManager, load_cameras_from_db) rather than blocking
+    # startup on. Gating it on person-tracking's ~180s health start_period
+    # would only delay the very thing this split exists to speed up.
+    volumes:
+      - ./.env:/app/.env:ro
+      - frame-shm:/dev/shm
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SO_DECODE_WORKER_CAPACITY: ${SO_DECODE_WORKER_CAPACITY:-6}
+      # 60s, not a tighter number: must exceed the worst-case time one
+      # reconcile pass can take to claim+start every camera up to
+      # SO_DECODE_WORKER_CAPACITY (each RTSP connect is ~1.5-2s, not
+      # instant) — see decode_main.py's _LEASE_TTL_S comment for the
+      # live-observed race this margin exists to avoid.
+      SO_DECODE_LEASE_TTL_S: ${SO_DECODE_LEASE_TTL_S:-60}
+    command: python3 -m src.decode_main
+    deploy:
+      replicas: ${SO_DECODE_WORKER_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
     logging:
       driver: json-file
       options:
