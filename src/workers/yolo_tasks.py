@@ -117,28 +117,39 @@ class _BatchStats:
     (that stays at DEBUG): this runs on every flush, potentially every ~10ms
     under load, so an INFO line per batch would itself become log-volume
     noise on the exact path being measured for latency.
+
+    avg_batch/avg_ms cover only the last `log_every` flushes, not the
+    process's lifetime — a lifetime average dilutes any real change (a
+    fresh camera reconnecting, a stall starting) more and more the longer
+    the worker has been up, so it drifts slowly toward the truth instead of
+    showing it. skipped_expired/skipped_gone stay lifetime-cumulative on
+    purpose: those are meant to answer "is this still happening", and a
+    flat cumulative count across log lines is exactly what shows a problem
+    has stopped, not just gone quiet for one window.
     """
 
     def __init__(self, log_every: int = 100):
         self._log_every = log_every
         self._n = 0
-        self._sum_batch = 0
-        self._sum_ms = 0.0
+        self._window_batch = 0
+        self._window_ms = 0.0
         self._skipped_expired = 0
         self._skipped_gone = 0
 
     def record(self, batch_size: int, wall_ms: float, skipped_expired: int, skipped_gone: int) -> None:
         self._n += 1
-        self._sum_batch += batch_size
-        self._sum_ms += wall_ms
+        self._window_batch += batch_size
+        self._window_ms += wall_ms
         self._skipped_expired += skipped_expired
         self._skipped_gone += skipped_gone
         if self._n % self._log_every == 0:
             logger.info(
-                f"yolo.detect: batches={self._n} avg_batch={self._sum_batch / self._n:.2f} "
-                f"avg_ms={self._sum_ms / self._n:.1f} "
+                f"yolo.detect: batches={self._n} avg_batch={self._window_batch / self._log_every:.2f} "
+                f"avg_ms={self._window_ms / self._log_every:.1f} "
                 f"skipped_expired={self._skipped_expired} skipped_gone={self._skipped_gone}"
             )
+            self._window_batch = 0
+            self._window_ms = 0.0
 
 
 _stats = _BatchStats()
