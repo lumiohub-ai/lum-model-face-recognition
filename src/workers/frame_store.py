@@ -48,7 +48,7 @@ from loguru import logger
 # Celery broker round-trip latency (measured single-segment lifetime: ~20ms,
 # far below that latency, which is why every batch lost the race). Bump this
 # if warning logs still show a nonzero stale-segment rate under normal load.
-_RING_SIZE = 8
+_RING_SIZE = 24
 
 # Random per-process id, stamped into every segment's header alongside seq —
 # see module docstring for why seq alone can't distinguish generations across
