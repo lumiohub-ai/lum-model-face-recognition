@@ -75,7 +75,8 @@ capacity.
 
 **Why not now:** Needs exclusive use of the stack for a clean run.
 
-**Blocks:** items 5, 7, 8 — all of them are judged against this number.
+**Blocks:** item 8. (Items 5 and 7 were settled by direct measurement on 2026-09-05
+instead — see item 7 for the numbers.)
 
 **Trigger:** Next window where the stack is free. Roughly an afternoon.
 
@@ -121,10 +122,13 @@ fix.
 
 # Next, each as its own PR
 
-## 5. ~~Move video decoding into its own process~~ — IMPLEMENTED, pending real-infra test
+## 5. ~~Move video decoding into its own process~~ — DONE (2026-09-05)
 
-**Status (2026-09-05): code complete, 259 tests passing, not yet run against
-real cameras.** Implemented on `refactor/lso-67-camera-frame-store`:
+**Status: code complete, 259 tests passing, and verified against 6 real cameras on
+`so.stack`.** Four bugs were found and fixed during that run (lease churn at cold start,
+51% duplicate frames, renewal starved by the claim loop, consumers stuck on a dead shm
+segment). Measured results are in item 7. Implemented on
+`refactor/lso-67-camera-frame-store`:
 
 - `src/decode_main.py` — the decode-worker daemon (not a Celery worker).
 - `src/pipeline/camera_lease.py` — `CameraLeaseManager`, the claim/renew/
@@ -236,27 +240,43 @@ become an operational burden, or camera count growing past what one operator can
 
 ---
 
-# Decide once item 2 gives us a number
+# Answered by the live run on 2026-09-05
 
-## 7. GPU batching is not actually batching yet
+## 7. ~~GPU batching is not actually batching yet~~ — RESOLVED, nothing is wrong
 
-**What:** `yolo.detect` groups frames correctly (mechanism verified), but in production the
-observed batch size is ~1 — mostly one frame per pass.
+**Was:** `yolo.detect` grouped frames correctly (mechanism verified), but the observed
+batch size in production was ~1. Two explanations were open, with opposite responses:
+decode couldn't supply frames fast enough (→ fix item 5), or the GPU was genuinely fast
+enough that a queue never formed (→ nothing is wrong).
 
-**Why it matters:** Batching was one of the two goals of the LSO-67 follow-up. The
-structural wins landed; this one has not shown up.
+**The answer: both, in that order.** Decode was the constraint, and it was worse than
+suspected — `StreamHandler.read()` was returning the same frame twice on average (185
+reads/s, 90 distinct), so roughly half of all decode work and half of every batch slot was
+spent on duplicates. Fixing that (frame-sequence stamping, commit `5798371`) plus moving
+decode into its own process (item 5) changed the measured picture on `so.stack` with 6 real
+cameras:
 
-**Why not now — this is a decision, not a task.** Two explanations remain open, with
-opposite responses:
+| | Before | After |
+|---|---|---|
+| `yolo.detect` batch size | 0.42 | **2.15** |
+| Frames dropped | 84/s | **0** |
+| `person-tracking` CPU | 612% | 13.7% |
+| decode CPU | 547% | 122% |
+| Identity RPC fallbacks | present under load | **zero** |
+| `yolo` queue depth | — | 0–2 |
+| GPU utilisation | — | 31% |
 
-- Decode can't supply frames fast enough → fix item 5, **or**
-- At 10 cameras the GPU is genuinely fast enough that a queue never forms → **nothing is
-  wrong**; the machinery is idle headroom for scaling up.
+2.15 is inside the design's 2–4 target and matches the go/no-go spike's 2.17. With the
+queue empty, the GPU at 31%, and zero drops, **there is no backlog left to batch** — the
+remaining headroom is capacity for more cameras, not a defect.
 
-Tuning before knowing which would be guessing. Two untried levers exist (a second
-`yolo-worker` replica; raising `_RING_SIZE` in `frame_store.py`) — deliberately not pulled.
+**Consequence for the two untried levers** (a second `yolo-worker` replica; raising
+`_RING_SIZE`): still not pulled, and now for a positive reason rather than for lack of
+information. Neither helps a queue that is already empty. Revisit only if queue depth
+climbs with camera count.
 
-**Blocked by:** item 2.
+**Note on item 2:** this no longer blocks on Run 0. Run 0 still matters for the end-to-end
+before/after latency claim, but the batching question it was going to decide is decided.
 
 ---
 
