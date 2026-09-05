@@ -23,13 +23,38 @@ def _frame(h=32, w=32):
 
 
 class FakeStream:
+    """Each read() yields the next frame and bumps the seq, mimicking a
+    stream that always has a new frame ready."""
+
     def __init__(self, frames):
         self._frames = list(frames)
+        self.seq = 0
 
     def read(self):
         if not self._frames:
             return False, None
         return True, self._frames.pop(0)
+
+    def read_with_seq(self):
+        ret, frame = self.read()
+        if ret:
+            self.seq += 1
+        return ret, frame, self.seq
+
+
+class StuckStream:
+    """Returns the SAME frame with an unchanging seq — a camera polled
+    faster than it delivers, which is the normal case for a producer loop
+    that spins far faster than 20fps."""
+
+    def __init__(self, frame, seq=7):
+        self._frame = frame
+        self._seq = seq
+        self.read_calls = 0
+
+    def read_with_seq(self):
+        self.read_calls += 1
+        return True, self._frame, self._seq
 
 
 class FakeTask:
@@ -151,6 +176,55 @@ class EnqueueTests(unittest.TestCase):
 
         self.assertEqual(len(task.calls), 3)
         self.assertEqual([c["kwargs"]["frame_num"] for c in task.calls], [2, 4, 6])
+
+    def test_an_unchanged_frame_seq_enqueues_nothing(self):
+        """The producer loop polls far faster than any camera delivers, and
+        StreamHandler.read() returns the latest frame whether or not it's
+        new. Without a seq check, the same pixels get re-enqueued
+        repeatedly — measured live at ~51% duplicates, which doubled GPU
+        load and cycled the shm ring fast enough to drop real frames."""
+        from pipeline.frame_pump import CeleryCameraProducer
+
+        stream = StuckStream(_frame())
+        producer = CeleryCameraProducer(
+            camera_id=1,
+            camera_config={"camera_id": 1},
+            stream_handler=stream,
+            detection_interval=1,
+        )
+        producer._frame_slot = FakeSlot()
+        task = FakeTask()
+
+        with _PatchedTask(task):
+            for _ in range(10):
+                producer._produce_one_frame()
+
+        # Ten polls, one distinct frame: exactly one enqueue.
+        self.assertEqual(stream.read_calls, 10)
+        self.assertEqual(len(task.calls), 1)
+
+    def test_a_new_frame_seq_after_a_stuck_one_enqueues_again(self):
+        """The skip must be per-frame, not a latch — once the stream does
+        produce a new frame, it has to go through."""
+        from pipeline.frame_pump import CeleryCameraProducer
+
+        stream = StuckStream(_frame())
+        producer = CeleryCameraProducer(
+            camera_id=1,
+            camera_config={"camera_id": 1},
+            stream_handler=stream,
+            detection_interval=1,
+        )
+        producer._frame_slot = FakeSlot()
+        task = FakeTask()
+
+        with _PatchedTask(task):
+            producer._produce_one_frame()
+            producer._produce_one_frame()   # duplicate, skipped
+            stream._seq += 1                # stream delivers a new frame
+            producer._produce_one_frame()
+
+        self.assertEqual(len(task.calls), 2)
 
     def test_a_failed_read_enqueues_nothing(self):
         task = FakeTask()

@@ -46,6 +46,14 @@ class CeleryCameraProducer:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._frame_num: int = 0
+        # Last StreamHandler frame_seq this producer acted on. The loop below
+        # polls far faster than any camera delivers, and StreamHandler.read()
+        # hands back the latest frame whether or not it's new — so without
+        # this, the same pixels get counted, written to shared memory and
+        # enqueued repeatedly. Measured live at 6 cameras: ~51% of enqueued
+        # frames were duplicates, which doubled GPU work and cycled the
+        # shm ring fast enough to drop frames that were never processed.
+        self._last_frame_seq: int = 0
 
         self._frame_slot = None  # constructed in start(), not __init__ —
         # see start()'s comment on why shared-memory allocation waits until
@@ -105,11 +113,23 @@ class CeleryCameraProducer:
         from workers.celery_app import camera_queue_name
         from workers.yolo_tasks import detect_task
 
-        # ── Step 1: Read frame — identical to CameraWorker ─────────────────
-        ret, frame = self.stream_handler.read()
+        # ── Step 1: Read frame, but only act on a NEW one ──────────────────
+        # read_with_seq, not read(): this loop polls much faster than any
+        # camera delivers frames, and read() returns the latest frame
+        # regardless of whether this producer has already seen it. Acting on
+        # an unchanged seq would re-run the whole pipeline (shm write, YOLO,
+        # tracking) on pixels already processed.
+        ret, frame, frame_seq = self.stream_handler.read_with_seq()
         if not ret or frame is None:
             time.sleep(0.005)
             return
+        if frame_seq == self._last_frame_seq:
+            # Same frame as last time — the stream hasn't produced a new one
+            # yet. Sleep briefly rather than spinning hot on the CPU that
+            # decoding needs.
+            time.sleep(0.005)
+            return
+        self._last_frame_seq = frame_seq
 
         self._frame_num += 1
 
