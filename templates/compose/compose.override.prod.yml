@@ -1,3 +1,16 @@
+# Production override. Copy to the repo root to activate it:
+#
+#     cp templates/compose/compose.override.prod.yml compose.override.yml
+#
+# Deliberately thin: it sets restart policy and log level, nothing else. The
+# real production sizing lives in .env (SO_DECODE_WORKER_REPLICAS,
+# SO_DECODE_WORKER_CAPACITY, SO_CAMERA_WORKER_*_QUEUES) and in compose.yml's
+# resource limits — both of which must be measured against the target host
+# rather than inherited from a dev box.
+#
+# No ./src or ./configs bind-mounts here, unlike the dev override: production
+# runs the code baked into the image at SO_IMAGE_TAG, so that the running
+# container matches a known tag instead of whatever is on the host's disk.
 services:
   ollama:
     restart: unless-stopped
@@ -8,6 +21,31 @@ services:
       SO_LOG_LEVEL: INFO
 
   celery-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
+
+  camera-worker-a:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
+
+  camera-worker-b:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
+
+  yolo-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
+
+  face-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: INFO
+
+  decode-worker:
     restart: unless-stopped
     environment:
       SO_LOG_LEVEL: INFO

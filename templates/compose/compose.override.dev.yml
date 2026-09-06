@@ -1,8 +1,29 @@
+# Dev override used to run the LSO-67 worker split locally.
+# Copy it to the repo root to activate it (compose auto-loads that filename):
+#
+#     cp templates/compose/compose.override.dev.yml compose.override.yml
+#
+# compose.override.yml itself is gitignored — it's your personal file, so
+# local-only tweaks (a credentials path outside the repo, extra port offsets)
+# belong there and not here.
 services:
   ollama:
     restart: unless-stopped
 
   person-tracking:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # lum-model-vision is a private repo installed over git+ssh (see
+      # requirements.txt) — forward the host's SSH agent into the build.
+      # Without this, `docker compose up` pulls the published Hub image
+      # instead, which is stale relative to whatever's on your branch: ./src
+      # gets bind-mounted over an image built before the src/ refactor, and
+      # the mismatch surfaces as import errors rather than an obvious "wrong
+      # image". `docker compose build` picks the agent up automatically; a
+      # bare `docker build` needs `--ssh default` for the same effect.
+      ssh:
+        - default
     restart: "no"
     environment:
       PYTHONWARNINGS: "ignore::FutureWarning"
@@ -13,6 +34,10 @@ services:
     tty: true
     stdin_open: true
 
+  # celery-worker and the four split workers below all reuse the
+  # person-tracking image, so building that one service is enough for all of
+  # them. Each gets ./src and ./configs bind-mounted so a code change is a
+  # restart, not a rebuild.
   celery-worker:
     restart: "no"
     environment:
@@ -22,11 +47,61 @@ services:
       - ./src:/app/src
       - ./configs:/app/configs
 
+  camera-worker-a:
+    restart: "no"
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+
+  camera-worker-b:
+    restart: "no"
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+
+  yolo-worker:
+    restart: "no"
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+
+  face-worker:
+    restart: "no"
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+
+  decode-worker:
+    restart: "no"
+    environment:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      SO_LOG_LEVEL: DEBUG
+    # ./src only, deliberately: decode_main.py never imports config.vision
+    # (the only thing that reads configs/), so this worker has no reason to
+    # see that directory. The frame-shm mount it does need comes from the
+    # base compose.yml — compose merges volume lists, it doesn't replace them.
+    volumes:
+      - ./src:/app/src
+
   flower:
-    build:
-      context: .
-      dockerfile: Dockerfile.flower
-    image: humblebeeai/celery-flower-lumiohub
+    # Dockerfile.flower's minimal deps (celery/flower/redis only) can't satisfy
+    # `workers/__init__.py`, which eagerly imports the full app (embedding/
+    # detection tasks -> config.vision -> lum_vision, SQLAlchemy, GCS, etc.) just
+    # to load the Celery app object. Reuse the already-built full app image
+    # instead of maintaining a second, guaranteed-to-drift requirements list.
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
     restart: "no"
     depends_on:
@@ -36,5 +111,17 @@ services:
     environment:
       PYTHONPATH: /app/src:/app
       PYTHONUNBUFFERED: 1
+      # network_mode: host means this container shares the host's network
+      # namespace directly — host.docker.internal (the bridge-network-only
+      # DNS alias every other service uses) doesn't resolve here. Point
+      # straight at localhost instead, overriding the .env values.
+      SO_REDIS_HOST: localhost
+      SO_REDIS_URL: redis://localhost:${SO_REDIS_PORT:-6380}
+      SO_CELERY_BROKER_URL: redis://localhost:${SO_REDIS_PORT:-6380}/0
+      SO_CELERY_RESULT_BACKEND: redis://localhost:${SO_REDIS_PORT:-6380}/1
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
     network_mode: host
+    entrypoint: []
     command: celery -A workers.celery_app.celery flower --port=${SO_FLOWER_PORT:-5555}
