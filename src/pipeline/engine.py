@@ -651,7 +651,13 @@ class SmartOfficeEngine:
                 )
                 return
 
-            calibrator = CameraCalibrator(fisheye=True)
+            camera_configs = Repository(self.client_slug).get_cameras()
+            camera_config = next(
+                (camera for camera in camera_configs if camera.get('id') == camera_id),
+                None,
+            )
+            board_spec = camera_config.get('charuco_board_spec') if camera_config else None
+            calibrator = CameraCalibrator(fisheye=True, board_spec=board_spec)
             result = calibrator.calibrate(frames)
 
             if result.get('success'):

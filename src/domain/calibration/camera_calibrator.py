@@ -5,32 +5,38 @@ import numpy as np
 import cv2
 from loguru import logger
 
+from .charuco_board import normalize_charuco_board_spec
+
 
 class CameraCalibrator:
-    """Calibrates cameras using a Charuco board (fisheye or standard model).
+    """Calibrates cameras using a configurable ChArUco board."""
 
-    Board spec: 5 cols × 7 rows, square=0.04 m, marker=0.02 m, DICT_4X4_50.
-    Supports both old OpenCV API (< 4.7) and new API (>= 4.7).
-    """
-
-    COLS = 5
-    ROWS = 7
-    SQUARE_LENGTH = 0.04  # metres
-    MARKER_LENGTH = 0.02  # metres
-
-    def __init__(self, fisheye: bool = True):
+    def __init__(self, fisheye: bool = True, board_spec: Optional[Dict[str, Any]] = None):
         self.fisheye = fisheye
+        self.board_spec = normalize_charuco_board_spec(board_spec)
 
         cv_ver = tuple(int(x) for x in cv2.__version__.split(".")[:2])
         self._new_api = cv_ver >= (4, 7)
 
-        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        try:
+            dictionary_constant = getattr(cv2.aruco, self.board_spec["dictionary"])
+        except AttributeError as exc:
+            raise ValueError(
+                f"OpenCV does not provide ChArUco dictionary "
+                f"{self.board_spec['dictionary']!r}"
+            ) from exc
+        aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_constant)
+
+        cols = self.board_spec["squares_x"]
+        rows = self.board_spec["squares_y"]
+        square_length = self.board_spec["square_length_m"]
+        marker_length = self.board_spec["marker_length_m"]
 
         if self._new_api:
             self._board = cv2.aruco.CharucoBoard(
-                (self.COLS, self.ROWS),
-                self.SQUARE_LENGTH,
-                self.MARKER_LENGTH,
+                (cols, rows),
+                square_length,
+                marker_length,
                 aruco_dict,
             )
             self._detector = cv2.aruco.CharucoDetector(self._board)
@@ -46,7 +52,9 @@ class CameraCalibrator:
             self._aruco_dict = aruco_dict
 
         logger.info(
-            f"CameraCalibrator ready: {self.COLS}x{self.ROWS} Charuco, "
+            f"CameraCalibrator ready: {cols}x{rows} Charuco, "
+            f"square={square_length}m, marker={marker_length}m, "
+            f"dictionary={self.board_spec['dictionary']}, "
             f"fisheye={fisheye}, new_api={self._new_api}"
         )
 

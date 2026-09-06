@@ -173,8 +173,8 @@ class Repository:
                 # site, so a site-scoped AI must not claim them.
                 query = f"""
                     SELECT c.id, c.name, c.stream_url, c.camera_type, c.application,
-                           c.matching_threshold, c.virtual_line_points, c.roi_points,
-                           c.status
+                                    c.matching_threshold, c.virtual_line_points, c.roi_points,
+                                    c.status, c.charuco_board_spec
                     FROM {self.schema}.cameras c
                     LEFT JOIN {self.schema}.branches b ON b.id = c.branch_id
                 """
@@ -197,6 +197,13 @@ class Repository:
                         except (json.JSONDecodeError, ValueError):
                             pass
 
+                    charuco_board_spec = row[9]
+                    if isinstance(charuco_board_spec, str):
+                        try:
+                            charuco_board_spec = json.loads(charuco_board_spec)
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+
                     camera = {
                         'id': row[0],
                         'name': row[1],
@@ -207,6 +214,7 @@ class Repository:
                         'virtual_line_points': row[6],
                         'roi_points': row[7],
                         'status': row[8],
+                        'charuco_board_spec': charuco_board_spec,
                     }
 
                     # Filter by application if specified

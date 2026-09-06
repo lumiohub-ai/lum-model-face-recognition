@@ -109,7 +109,8 @@ def load_cameras_from_db(
                 'application': cam.get('application', application),
                 'match_threshold': float(cam.get('matching_threshold') or 0.3),
                 'roi': _parse_roi(cam.get('roi_points')),
-                'line_points': _parse_line_points(cam.get('virtual_line_points'))
+                'line_points': _parse_line_points(cam.get('virtual_line_points')),
+                'charuco_board_spec': cam.get('charuco_board_spec'),
             }
             all_configs.append(config)
 
