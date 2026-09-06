@@ -465,11 +465,17 @@ class AdapterBehaviorTests(unittest.TestCase):
             self._down_adapter("find_down").find_global_track_by_identity("alice")
         )
 
-    def test_get_global_id_on_rpc_failure_returns_none_not_a_fabricated_id(self):
-        """The result flows into the recognized_persons payload toward the
-        backend; None ('unknown') is what the caller already handles, a
-        fabricated negative ID is not."""
-        self.assertIsNone(self._down_adapter("get_down").get_global_id(1, 1))
+    def test_get_global_id_is_a_pure_cache_read_no_rpc_call(self):
+        """get_global_id no longer calls the RPC client at all - it only
+        reads _assigned, populated separately by assign_global_id. Proven
+        two ways: (1) it returns None against a dead socket instead of
+        raising/timing out, and (2) reading it doesn't touch call counts on
+        a live manager - see the AsyncAssignTests version of this check for
+        the live-manager half."""
+        down_adapter = self._down_adapter("get_down")
+        self.assertIsNone(down_adapter.get_global_id(1, 1))
+        down_adapter._assigned[(1, 1)] = 42
+        self.assertEqual(down_adapter.get_global_id(1, 1), 42)
 
     def test_assign_on_rpc_failure_still_returns_a_negative_local_id(self):
         """assign_global_id is the one method where the negative fallback IS
@@ -488,7 +494,8 @@ class AsyncAssignTests(unittest.TestCase):
     matching camera_tasks.py's wiring): assign_global_id must never block
     the caller, must return None until the first reply lands, must send at
     most one request at a time per (camera_id, local_track_id), and must
-    forget cached state once told a track is gone."""
+    NOT forget cached state on on_track_removed - that's the caller's job,
+    via forget_track(), after it reads get_global_id()."""
 
     def setUp(self):
         self.socket_path = _free_socket_path(self._testMethodName)
@@ -604,14 +611,21 @@ class AsyncAssignTests(unittest.TestCase):
         )
         self.assertEqual(len(self.manager.calls), calls_before)
 
-    def test_on_track_removed_forgets_the_track(self):
+    def test_on_track_removed_does_not_forget_the_track(self):
+        """on_track_removed deliberately leaves _assigned alone now - the
+        vendored PersonTracker calls it internally before CameraEngine's
+        removed-tracks loop gets a chance to read the cached id via
+        get_global_id(). Forgetting here would clear the note before anyone
+        reads it. camera_engine.py calls forget_track() itself, right after
+        that read - see test_forget_track_clears_the_cached_id for that
+        half of the contract."""
         self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
         self.release.set()
         self.assertTrue(
             self._poll_until(lambda: (1, 1) in self.adapter._assigned)
         )
         self.adapter.on_track_removed(camera_id=1, local_track_id=1)
-        self.assertNotIn((1, 1), self.adapter._assigned)
+        self.assertEqual(self.adapter._assigned.get((1, 1)), 1101)
 
     def test_rpc_failure_in_the_background_still_clears_in_flight(self):
         """A failed background call must not leave the track permanently

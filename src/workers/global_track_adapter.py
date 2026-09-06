@@ -219,18 +219,21 @@ class RemoteGlobalTrackManager:
             self._assigned.pop(key, None)
 
     def get_global_id(self, camera_id: int, local_track_id: int) -> Optional[int]:
-        """On RPC failure this returns None ("unknown"), NOT the client's
-        negative-ID fallback. The negative fallback is only meaningful for
-        assign_global_id, whose contract is "give me an ID to use"; this
-        method's contract is "tell me what exists," and its caller
-        (camera_engine.py, building the recognized_persons payload) already
-        treats None as a legitimate answer — a fabricated negative ID would
-        instead flow to the backend as if it were a real assignment.
+        """Pure local cache read — no RPC call, no failure mode to degrade.
+
+        assign_global_id() already runs every frame for every active track,
+        identity-locked or not (camera_engine.py's active-tracks loop is
+        unconditional on that), so by the time a track shows up in
+        removed_tracks its id is already sitting in _assigned. Returns None
+        if it never was — e.g. global tracking only just got enabled, or the
+        one call this frame raced the very first assign for this track.
+
+        The caller is expected to call forget_track() right after reading,
+        once it no longer needs the value — see on_track_removed's docstring
+        for why that can't happen automatically in here.
         """
-        result = self._client.call(
-            "get_global_id", camera_id=camera_id, local_track_id=local_track_id
-        )
-        return result.value if result.ok else None
+        with self._assign_lock:
+            return self._assigned.get((camera_id, local_track_id))
 
     def find_global_track_by_identity(self, identity: str) -> Optional[GlobalTrackRef]:
         """Returns a GlobalTrackRef (or None), matching how CameraEngine uses
@@ -322,12 +325,13 @@ class RemoteGlobalTrackManager:
         track_history: Optional[List[dict]] = None,
         total_frames: int = 0,
     ) -> None:
-        # Drop cached assign_global_id state first: this is the one call
-        # site PersonTracker.update() (the vendored lum_vision package)
-        # guarantees fires whenever a local_track_id stops being valid, so
-        # it is the only reliable place to forget it before the tracker
-        # potentially reuses that same integer for someone new.
-        self.forget_track(camera_id, local_track_id)
+        # Does NOT call forget_track(). PersonTracker.update() (the vendored
+        # lum_vision package) calls this internally, before returning
+        # removed_tracks to CameraEngine — so forgetting here would clear
+        # the cache before CameraEngine's removed-tracks loop gets a chance
+        # to read it via get_global_id(). That loop calls forget_track()
+        # itself, right after reading, once the tracker's own integer is
+        # actually free to be reused for someone new.
         # Real method returns int | None; PersonTracker never checks it. One-way.
         self._client.call_one_way(
             "on_track_removed",

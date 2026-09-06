@@ -491,6 +491,15 @@ class CameraEngine:
 
             # on_track_removed is already called internally by PersonTracker.update()
             # so we do NOT call it here to avoid double-logging TRACK_INACTIVE.
+            # It also, deliberately, does not forget this track's cached
+            # global id — that happens here instead, now that get_global_id()
+            # above (if this track hit that branch) has had its chance to
+            # read it. assign_global_id populates the cache every frame for
+            # every active track regardless of identity-lock status, so this
+            # runs unconditionally per removed track, not just inside the
+            # branch above, or an identity-locked track's entry would leak.
+            if self.global_track_manager and self.global_track_manager.enabled:
+                self.global_track_manager.forget_track(self.camera_id, track_id)
 
             self.track_manager.remove_track(track_id)
             self.state_manager.remove_person(track_id)
