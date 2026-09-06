@@ -114,7 +114,15 @@ class _CameraContext:
             f"camera_tasks[cam={camera_id}]: face embed fallback fired"
         )
         self.global_track_manager = RemoteGlobalTrackManager(
-            self.rpc_client, enabled=bool(_load_yaml_config().get("enable_global_tracking", False))
+            self.rpc_client,
+            enabled=bool(_load_yaml_config().get("enable_global_tracking", False)),
+            # assign_global_id runs per active track per frame and used to
+            # block this task on the RPC's reply; async_assign moves that
+            # wait off the frame path (see global_track_adapter.py's
+            # docstring). Explicit here, not left to the adapter's default,
+            # since this is the one path that must never regress to
+            # blocking silently if that default ever changes.
+            async_assign=True,
         )
 
         # Shared across every context in this process so the single

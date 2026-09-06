@@ -17,10 +17,13 @@ would conflate two unrelated fixes under one adapter.
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from loguru import logger
 
 from workers.global_track_rpc import GpuRpcClient
 
@@ -53,9 +56,49 @@ class RemoteGlobalTrackManager:
     answer identically from the same file.
     """
 
-    def __init__(self, client: GpuRpcClient, enabled: bool):
+    def __init__(
+        self,
+        client: GpuRpcClient,
+        enabled: bool,
+        async_assign: bool = True,
+    ):
         self._client = client
         self.enabled = enabled
+
+        # assign_global_id runs ReID similarity matching over the whole
+        # gallery, and camera_engine.py calls it once per active track per
+        # frame. Waiting for that reply inline is what let a busy main
+        # process stall tracking: every call carries a timeout, and a
+        # timeout drops the track to a local-only negative ID, so the person
+        # is never recognised (the failure observed live before decode moved
+        # to its own process). Nothing about local tracking needs the
+        # answer — person_tracker.update() has already finished by the time
+        # this is called, and the result is only written onto the track dict
+        # as a label. So it is dispatched to a background thread and the
+        # caller is handed whatever answer arrived from an earlier frame.
+        self._async_assign = async_assign
+        self._assign_pool: Optional[ThreadPoolExecutor] = None
+        if async_assign:
+            # One worker, not several: the client below serialises every
+            # call on a single persistent socket behind one lock anyway
+            # (see GpuRpcClient._send_and_maybe_recv), so extra threads
+            # would only queue against that lock. The point of the thread
+            # is to move the wait off the camera's frame path, not to run
+            # several lookups at once.
+            self._assign_pool = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="global-assign"
+            )
+        # Last known global id per (camera_id, local_track_id), written by
+        # the background thread, read by the frame path.
+        self._assigned: Dict[Tuple[int, int], int] = {}
+        # Tracks with a request already in flight. One at a time per track:
+        # consecutive frames of the same person ask an identical question,
+        # so sending each one would multiply ReID work on the main process
+        # for no new information, and out-of-order replies could overwrite a
+        # newer answer with an older one.
+        self._in_flight: set = set()
+        self._assign_lock = threading.Lock()
+        self._submitted_count = 0
 
     # ── Called from CameraEngine ────────────────────────────────────────────
 
@@ -69,19 +112,111 @@ class RemoteGlobalTrackManager:
         frame_num: int = 0,
         identity: Optional[str] = None,
         identity_locked: bool = False,
-    ) -> int:
-        result = self._client.call(
-            "assign_global_id",
-            camera_id=camera_id,
-            local_track_id=local_track_id,
-            person_crop=person_crop,
-            face_embedding=face_embedding,
-            detection_confidence=detection_confidence,
-            frame_num=frame_num,
-            identity=identity,
-            identity_locked=identity_locked,
-        )
-        return result.value
+    ) -> Optional[int]:
+        """Returns the most recent global id known for this track, or None
+        if no reply has arrived yet (the first one or two frames of a new
+        track, typically). CameraEngine already treats a falsy/negative
+        global_track_id as "not yet identified" — see camera_engine.py's
+        `current_global_id >= 0` guard before publishing identity — so a
+        transient None here degrades exactly the same way a slow RPC call
+        already did, without ever blocking this frame on it.
+
+        Synchronous fallback (async_assign=False) kept for tests and for
+        anyone who needs the old blocking contract; not used by
+        camera_tasks.py.
+        """
+        if not self._async_assign:
+            result = self._client.call(
+                "assign_global_id",
+                camera_id=camera_id,
+                local_track_id=local_track_id,
+                person_crop=person_crop,
+                face_embedding=face_embedding,
+                detection_confidence=detection_confidence,
+                frame_num=frame_num,
+                identity=identity,
+                identity_locked=identity_locked,
+            )
+            return result.value
+
+        key = (camera_id, local_track_id)
+        with self._assign_lock:
+            already_running = key in self._in_flight
+            if not already_running:
+                self._in_flight.add(key)
+
+        if not already_running:
+            assert self._assign_pool is not None
+            self._submitted_count += 1  # test-visible: proves suppression, not just serialization
+            self._assign_pool.submit(
+                self._run_assign,
+                key,
+                person_crop,
+                face_embedding,
+                detection_confidence,
+                frame_num,
+                identity,
+                identity_locked,
+            )
+
+        with self._assign_lock:
+            return self._assigned.get(key)
+
+    def _run_assign(
+        self,
+        key: Tuple[int, int],
+        person_crop: Optional[np.ndarray],
+        face_embedding: Optional[np.ndarray],
+        detection_confidence: float,
+        frame_num: int,
+        identity: Optional[str],
+        identity_locked: bool,
+    ) -> None:
+        """Runs on the background pool. Owns clearing key from _in_flight —
+        every exit path (success, RPC failure, unexpected exception) must
+        clear it, or that track's global id freezes forever on whatever
+        _assigned already holds.
+        """
+        camera_id, local_track_id = key
+        try:
+            result = self._client.call(
+                "assign_global_id",
+                camera_id=camera_id,
+                local_track_id=local_track_id,
+                person_crop=person_crop,
+                face_embedding=face_embedding,
+                detection_confidence=detection_confidence,
+                frame_num=frame_num,
+                identity=identity,
+                identity_locked=identity_locked,
+            )
+            # result.ok=False means the client already fell back to a
+            # negative local-only id (GpuRpcClient.call's own contract).
+            # Recording it anyway keeps this path's degraded behaviour
+            # identical to the previous synchronous one: camera_engine.py's
+            # `current_global_id >= 0` guard already treats negative the
+            # same as "not yet identified" wherever it matters.
+            with self._assign_lock:
+                self._assigned[key] = result.value
+        except Exception:
+            logger.exception(
+                f"global_track_adapter: background assign_global_id failed "
+                f"for camera={camera_id} track={local_track_id}"
+            )
+        finally:
+            with self._assign_lock:
+                self._in_flight.discard(key)
+
+    def forget_track(self, camera_id: int, local_track_id: int) -> None:
+        """Drop cached state for a track that no longer exists, so a reused
+        local_track_id on this camera doesn't inherit a stale global id.
+        Safe to call even if a request for this key is still in flight —
+        _run_assign re-checks nothing about liveness, so a late reply just
+        repopulates _assigned under the same key; call this again after the
+        id is no longer wanted if that matters for a given caller."""
+        key = (camera_id, local_track_id)
+        with self._assign_lock:
+            self._assigned.pop(key, None)
 
     def get_global_id(self, camera_id: int, local_track_id: int) -> Optional[int]:
         """On RPC failure this returns None ("unknown"), NOT the client's
@@ -187,6 +322,12 @@ class RemoteGlobalTrackManager:
         track_history: Optional[List[dict]] = None,
         total_frames: int = 0,
     ) -> None:
+        # Drop cached assign_global_id state first: this is the one call
+        # site PersonTracker.update() (the vendored lum_vision package)
+        # guarantees fires whenever a local_track_id stops being valid, so
+        # it is the only reliable place to forget it before the tracker
+        # potentially reuses that same integer for someone new.
+        self.forget_track(camera_id, local_track_id)
         # Real method returns int | None; PersonTracker never checks it. One-way.
         self._client.call_one_way(
             "on_track_removed",

@@ -105,6 +105,31 @@ class FakeGlobalTrackManager:
         return 1
 
 
+class SlowGlobalTrackManager(FakeGlobalTrackManager):
+    """assign_global_id blocks on an Event until the test releases it - lets
+    a test observe state WHILE a background call is still in flight, which
+    a fast fake can't reliably do (the real thread could finish before the
+    test gets to assert anything).
+
+    `received` counts requests as they ARRIVE, before the wait - `calls`
+    (from FakeGlobalTrackManager) only records them once the wait releases
+    and the call actually returns, so `calls` cannot be polled to detect
+    "in flight"; `received` is what a test polls for that instead.
+    """
+
+    def __init__(self, release: threading.Event):
+        super().__init__()
+        self._release = release
+        self.received = 0
+        self._received_lock = threading.Lock()
+
+    def assign_global_id(self, camera_id, local_track_id, **kw):
+        with self._received_lock:
+            self.received += 1
+        self._release.wait(timeout=5.0)
+        return super().assign_global_id(camera_id, local_track_id, **kw)
+
+
 class BrokenGlobalTrackManager:
     """A manager whose calls always raise - proves a bug inside the real
     GlobalTrackManager degrades a blocking caller to a local ID rather than
@@ -407,11 +432,15 @@ class AdapterBehaviorTests(unittest.TestCase):
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
 
-    def _down_adapter(self, tag):
-        """An adapter whose socket points at nothing - the degraded path."""
+    def _down_adapter(self, tag, async_assign=False):
+        """An adapter whose socket points at nothing - the degraded path.
+        async_assign defaults to False here so tests can assert on the
+        return value immediately without a wait/poll loop; the async path
+        has its own dedicated test class below."""
         return RemoteGlobalTrackManager(
             GpuRpcClient(socket_path=_free_socket_path(tag), timeout_s=0.2),
             enabled=True,
+            async_assign=async_assign,
         )
 
     def test_find_result_supports_the_attribute_access_camera_engine_does(self):
@@ -444,11 +473,163 @@ class AdapterBehaviorTests(unittest.TestCase):
 
     def test_assign_on_rpc_failure_still_returns_a_negative_local_id(self):
         """assign_global_id is the one method where the negative fallback IS
-        the contract - the camera needs *an* ID to keep tracking with."""
-        gid = self._down_adapter("assign_down").assign_global_id(
+        the contract - the camera needs *an* ID to keep tracking with. Uses
+        the synchronous fallback (async_assign=False): this test is about
+        the fallback value itself, not the async dispatch mechanism, which
+        AsyncAssignTests below covers on its own."""
+        gid = self._down_adapter("assign_down", async_assign=False).assign_global_id(
             camera_id=1, local_track_id=1, person_crop=None
         )
         self.assertLess(gid, 0)
+
+
+class AsyncAssignTests(unittest.TestCase):
+    """RemoteGlobalTrackManager's async_assign=True path (the default,
+    matching camera_tasks.py's wiring): assign_global_id must never block
+    the caller, must return None until the first reply lands, must send at
+    most one request at a time per (camera_id, local_track_id), and must
+    forget cached state once told a track is gone."""
+
+    def setUp(self):
+        self.socket_path = _free_socket_path(self._testMethodName)
+        self.release = threading.Event()
+        self.manager = SlowGlobalTrackManager(self.release)
+        self.server = GpuRpcServer(self.manager, socket_path=self.socket_path)
+        self.server.start()
+        self.adapter = RemoteGlobalTrackManager(
+            GpuRpcClient(socket_path=self.socket_path, timeout_s=5.0),
+            enabled=True,
+            async_assign=True,
+        )
+
+    def tearDown(self):
+        self.release.set()  # unblock anything still in flight before teardown
+        self.server.stop()
+        if os.path.exists(self.socket_path):
+            os.unlink(self.socket_path)
+
+    def _poll_until(self, predicate, timeout=2.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        return False
+
+    def test_first_call_returns_none_and_does_not_block(self):
+        start = time.monotonic()
+        result = self.adapter.assign_global_id(
+            camera_id=1, local_track_id=1, person_crop=None
+        )
+        elapsed = time.monotonic() - start
+        self.assertIsNone(result)
+        self.assertLess(
+            elapsed, 0.5, "assign_global_id blocked the caller on the RPC reply"
+        )
+        self.release.set()  # let the background call finish before teardown
+
+    def test_reply_populates_the_cache_for_the_next_call(self):
+        self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
+        self.release.set()
+        self.assertTrue(
+            self._poll_until(
+                lambda: self.adapter.assign_global_id(
+                    camera_id=1, local_track_id=1, person_crop=None
+                )
+                == 1101  # FakeGlobalTrackManager's deterministic formula
+            ),
+            "cached global id never appeared after the background call finished",
+        )
+
+    def test_second_call_while_first_still_in_flight_does_not_send_another_request(self):
+        self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
+        # Manager is still blocked on self.release - the request has been
+        # sent but not yet answered, i.e. genuinely in flight.
+        self.assertTrue(
+            self._poll_until(lambda: self.manager.received == 1),
+            "first request never reached the manager",
+        )
+        self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
+        self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
+        time.sleep(0.05)  # give a wrongly-submitted second request time to land
+        self.assertEqual(
+            self.manager.received,
+            1,
+            "a second request for the same track was sent while one was already in flight",
+        )
+        # Direct check on submission count, not just on the manager having
+        # received it: with a single-worker pool, a wrongly-submitted extra
+        # task would simply queue behind the first rather than run
+        # concurrently, so `received` alone can pass by accident of pool
+        # size rather than because the in-flight guard actually worked.
+        self.assertEqual(
+            self.adapter._submitted_count,
+            1,
+            "a second background task was submitted for a track already in flight",
+        )
+        self.release.set()
+
+    def test_different_tracks_do_not_block_each_other(self):
+        self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
+        self.assertTrue(self._poll_until(lambda: self.manager.received == 1))
+        # Track 2's request must still be accepted (returns None immediately,
+        # queued behind the single-worker pool) rather than being suppressed
+        # by track 1's in-flight request - the in-flight guard is keyed per
+        # track, not global.
+        result = self.adapter.assign_global_id(
+            camera_id=1, local_track_id=2, person_crop=None
+        )
+        self.assertIsNone(result)
+        self.release.set()
+        self.assertTrue(self._poll_until(lambda: len(self.manager.calls) == 2))
+
+    def test_forget_track_clears_the_cached_id(self):
+        self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
+        self.release.set()
+        self.assertTrue(
+            self._poll_until(
+                lambda: self.adapter.assign_global_id(
+                    camera_id=1, local_track_id=1, person_crop=None
+                )
+                is not None
+            )
+        )
+        self.adapter.forget_track(camera_id=1, local_track_id=1)
+        # forget_track must not itself trigger a new RPC call - it only
+        # clears local cache state.
+        calls_before = len(self.manager.calls)
+        self.assertIsNone(
+            self.adapter._assigned.get((1, 1)),
+            "forget_track did not clear the cached id",
+        )
+        self.assertEqual(len(self.manager.calls), calls_before)
+
+    def test_on_track_removed_forgets_the_track(self):
+        self.adapter.assign_global_id(camera_id=1, local_track_id=1, person_crop=None)
+        self.release.set()
+        self.assertTrue(
+            self._poll_until(lambda: (1, 1) in self.adapter._assigned)
+        )
+        self.adapter.on_track_removed(camera_id=1, local_track_id=1)
+        self.assertNotIn((1, 1), self.adapter._assigned)
+
+    def test_rpc_failure_in_the_background_still_clears_in_flight(self):
+        """A failed background call must not leave the track permanently
+        stuck 'in flight' - that would silently freeze its global id at
+        whatever _assigned already held, forever."""
+        down_adapter = RemoteGlobalTrackManager(
+            GpuRpcClient(socket_path=_free_socket_path("async_down"), timeout_s=0.2),
+            enabled=True,
+            async_assign=True,
+        )
+        down_adapter.assign_global_id(camera_id=9, local_track_id=9, person_crop=None)
+        self.assertTrue(
+            self._poll_until(lambda: (9, 9) not in down_adapter._in_flight, timeout=2.0),
+            "in_flight was never cleared after the background RPC call failed",
+        )
+        # Confirms the guard is actually released, not just coincidentally
+        # empty: a fresh call must be allowed to try again.
+        down_adapter.assign_global_id(camera_id=9, local_track_id=9, person_crop=None)
 
 
 @unittest.skipUnless(
