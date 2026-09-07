@@ -55,6 +55,16 @@ class CeleryCameraProducer:
         # shm ring fast enough to drop frames that were never processed.
         self._last_frame_seq: int = 0
 
+        # Detection frames emitted since construction, for consumers that
+        # can't reach a MetricsCollector. In the decode worker `_metrics` is
+        # None (that collector lives in another process now), so this counter
+        # is what the fps gauge is ultimately derived from — decode_main
+        # samples it per publish tick and turns the delta into a rate. Plain
+        # int, no lock: single writer (the producer thread), and readers only
+        # ever difference successive samples, so a torn read isn't possible
+        # for a value written by one thread on CPython.
+        self._frames_emitted: int = 0
+
         self._frame_slot = None  # constructed in start(), not __init__ —
         # see start()'s comment on why shared-memory allocation waits until
         # the producer thread is actually about to run.
@@ -150,6 +160,7 @@ class CeleryCameraProducer:
             return
 
         frame_num = self._frame_num
+        self._frames_emitted += 1
         if self._metrics is not None:
             self._metrics.record_frame(self.camera_id)
 

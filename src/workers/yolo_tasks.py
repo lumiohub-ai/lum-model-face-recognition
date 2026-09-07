@@ -135,6 +135,10 @@ class _BatchStats:
         self._window_ms = 0.0
         self._skipped_expired = 0
         self._skipped_gone = 0
+        # Constructed lazily on first record(), not here: this class is
+        # instantiated at module scope, which runs in the PARENT before fork.
+        # Touching Redis there would share one connection across every child.
+        self._reporter = None
 
     def record(self, batch_size: int, wall_ms: float, skipped_expired: int, skipped_gone: int) -> None:
         self._n += 1
@@ -142,6 +146,7 @@ class _BatchStats:
         self._window_ms += wall_ms
         self._skipped_expired += skipped_expired
         self._skipped_gone += skipped_gone
+        self._publish(batch_size, wall_ms)
         if self._n % self._log_every == 0:
             logger.info(
                 f"yolo.detect: batches={self._n} avg_batch={self._window_batch / self._log_every:.2f} "
@@ -150,6 +155,34 @@ class _BatchStats:
             )
             self._window_batch = 0
             self._window_ms = 0.0
+
+    def _publish(self, batch_size: int, wall_ms: float) -> None:
+        """Feed the dashboard's yolo latency gauge (pipeline/infer_metrics.py).
+
+        `wall_ms` is the whole `run_detect_batch` call — shm attach and the
+        forwarding dispatch included, not just `detector.model(...)`. That is
+        the number worth watching from outside (it is what the frame actually
+        waits through) but it is NOT comparable to the old in-process
+        `record_yolo_ms`, which timed the model call alone; the gauge is named
+        for the batch, not the model, to keep that honest.
+
+        Both per-batch and per-frame are published because they answer
+        different questions: per-batch tracks whether the GPU call is slowing
+        down, per-frame tracks what each frame costs once batching has
+        amortised it.
+        """
+        if batch_size <= 0:
+            return  # an all-skipped flush times the skipping, not inference
+        if self._reporter is None:
+            from pipeline.infer_metrics import InferLatencyReporter
+
+            self._reporter = InferLatencyReporter("yolo")
+        self._reporter.record(
+            batch_ms=wall_ms,
+            batch_count=1,
+            frame_ms=wall_ms,
+            frame_count=batch_size,
+        )
 
 
 _stats = _BatchStats()

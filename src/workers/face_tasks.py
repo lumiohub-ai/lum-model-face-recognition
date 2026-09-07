@@ -48,6 +48,47 @@ def _load_model_in_child(**_kwargs):
         model_holder.ensure_face_detector_loaded()
 
 
+# Lazily constructed inside _publish_latency rather than here: module scope
+# runs in the PARENT before fork, and a Redis client made there would be
+# shared across every child. Same reasoning as yolo_tasks._BatchStats.
+_reporter = None
+
+
+def _publish_latency(
+    n_rois: int, n_crops: int, det_ms: float, embed_ms: float
+) -> None:
+    """Feed the dashboard's face latency gauges (pipeline/infer_metrics.py).
+
+    Detection and embedding stay separate, as they were when
+    `record_arcface_det_ms`/`record_arcface_embed_ms` existed in-process:
+    detection is N per-ROI SCRFD calls and scales with ROI count, embedding is
+    one call per crop at a deliberately fixed shape (see the loop above). One
+    combined number would hide which of the two moved.
+
+    Normalised per-ROI and per-face respectively, so the gauge does not simply
+    track how busy the batch happened to be.
+    """
+    global _reporter
+    if n_rois <= 0:
+        return
+    try:
+        if _reporter is None:
+            from pipeline.infer_metrics import InferLatencyReporter
+
+            _reporter = InferLatencyReporter("face")
+        fields = {"det_ms": det_ms, "det_count": n_rois}
+        if n_crops > 0:
+            # Only when faces were actually embedded: counting a zero-crop
+            # batch would average in a 0ms "embed" that never happened.
+            fields["embed_ms"] = embed_ms
+            fields["embed_count"] = n_crops
+        _reporter.record(**fields)
+    except Exception as e:
+        # This runs in a finally on the inference path — a metrics failure
+        # must not replace the batch's real result (or its real exception).
+        logger.debug(f"face.embed_batch: latency publish failed: {e}")
+
+
 @celery.task(name="face.embed_batch", queue="face", track_started=False)
 def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
     """Detect + embed faces for one flat, cross-camera batch of person ROIs.
@@ -108,6 +149,13 @@ def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
 
     person_rois = [crop for _tid, crop in packed]
     face_detector = model_holder.ensure_face_detector_loaded()
+
+    # Bound before the try so the except path below can still publish what it
+    # got through: a batch that failed halfway still spent real GPU time, and
+    # dropping it would make the dashboard read *faster* during an incident.
+    det_ms_total = 0.0
+    embed_ms_total = 0.0
+    n_crops = 0
 
     try:
         t0 = time.time()
@@ -170,6 +218,7 @@ def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
                     f"this cycle: {reason}"
                 )
             embed_ms_total = (time.time() - embed_t0) * 1000
+            n_crops = len(crops)
 
             for (i, face), embedding in zip(faces_to_embed, embeddings):
                 if embedding is None:
@@ -214,3 +263,5 @@ def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
     except Exception as e:
         logger.exception(f"ArcFace batch inference failed: {e}")
         return _blank_results()
+    finally:
+        _publish_latency(n_rois, n_crops, det_ms_total, embed_ms_total)

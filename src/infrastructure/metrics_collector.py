@@ -155,6 +155,24 @@ class MetricsCollector:
         with self._lock:
             self._frame_drops[camera_id] = self._frame_drops.get(camera_id, 0) + 1
 
+    def _camera_fps(self, camera_id: int) -> float:
+        """This camera's fps, from a registered gauge if one exists.
+
+        Split from `get_fps` rather than folded into it: `check_alerts` and
+        `log_summary` call `get_fps` too, and both should see the same number
+        the dashboard does — but `get_fps` is also the public accessor for the
+        in-process deque, which tests populate directly via `record_frame`.
+        Preferring the gauge here and falling back keeps both callers correct
+        without either having to know which producer is running.
+        """
+        with self._lock:
+            has_gauge = "fps" in self._camera_gauges
+        if has_gauge:
+            value = self._read_camera_gauge(camera_id, "fps")
+            if isinstance(value, (int, float)):
+                return float(value)
+        return self.get_fps(camera_id)
+
     def get_fps(self, camera_id: int) -> float:
         """Return per-camera FPS over the rolling FPS_WINDOW_SEC window."""
         with self._lock:
@@ -348,7 +366,14 @@ class MetricsCollector:
             "gpu": self.gpu(),
             "cameras": {
                 str(idx): {
-                    "fps": round(self.get_fps(idx), 2),
+                    # Prefer a registered gauge over the local deque: with
+                    # decoding in its own process, record_frame is never
+                    # called here, so get_fps would report a flat 0.0 for
+                    # every camera. The gauge reads the rate the decode
+                    # worker publishes (pipeline/decode_metrics.py). Falls
+                    # back to the deque so an in-process producer — tests,
+                    # and any single-process path — still works unchanged.
+                    "fps": round(self._camera_fps(idx), 2),
                     "frame_drops": self.get_drops(idx),
                     # read_ms = blocked waiting for the next frame (network/
                     # demux stall). decode_ms = actual CPU cost of decoding a

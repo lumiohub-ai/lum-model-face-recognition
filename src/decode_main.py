@@ -101,6 +101,11 @@ class DecodeWorker:
         self.lease = CameraLeaseManager(ttl_seconds=_LEASE_TTL_S)
         self.health = StreamHealthReporter()
         self._owned: Dict[int, _OwnedCamera] = {}
+        # camera_id -> (cumulative frames emitted, time.monotonic() at read),
+        # for differencing into an fps in _sample_fps. Only ever touched from
+        # the health-publish thread. Entries for departed cameras are dropped
+        # in _stop_camera_locally so this can't grow across reclaims.
+        self._fps_samples: Dict[int, tuple] = {}
         # Cameras claimed but not yet fully started. Held separately from
         # _owned because _start_camera's RTSP connect can take ~20s, and the
         # lease needs renewing throughout that window — otherwise it lapses
@@ -348,6 +353,10 @@ class DecodeWorker:
         nothing left to release, and as the first half of a restart."""
         with self._lock:
             owned = self._owned.pop(camera_id, None)
+        # Dropped unconditionally: a restart builds a fresh producer whose
+        # counter starts at 0, and a stale baseline would make the first
+        # sample after it look like a negative delta.
+        self._fps_samples.pop(camera_id, None)
         if owned is None:
             return
         owned.producer.stop()
@@ -407,6 +416,36 @@ class DecodeWorker:
                 )
                 self._stop_camera_locally(camera_id)
 
+    def _sample_fps(self, camera_id: int, owned: _OwnedCamera) -> Optional[float]:
+        """Detection-frame rate since this camera's previous publish.
+
+        Derived by differencing the producer's own cumulative counter rather
+        than by timestamping frames: the engine's MetricsCollector (which does
+        keep per-frame timestamps) is in another process now, and shipping a
+        deque of timestamps across Redis every tick to re-derive a number the
+        producer can compute from two ints would be a poor trade.
+
+        Returns None — "no data", not 0.0 — for the first sample after a
+        camera starts or is reclaimed. A camera that is genuinely stalled
+        reports a real 0.0, and the dashboard must be able to tell those
+        apart.
+        """
+        total = getattr(owned.producer, "_frames_emitted", None)
+        if total is None:
+            return None
+        now = time.monotonic()
+        prev = self._fps_samples.get(camera_id)
+        self._fps_samples[camera_id] = (total, now)
+        if prev is None:
+            return None
+        prev_total, prev_at = prev
+        elapsed = now - prev_at
+        # A restarted producer resets the counter, so a negative delta means
+        # "different producer", not negative work — skip one interval.
+        if elapsed <= 0 or total < prev_total:
+            return None
+        return round((total - prev_total) / elapsed, 2)
+
     def _publish_camera_state(self, camera_id: int, owned: _OwnedCamera) -> None:
         """One publish per tick, carrying both the health snapshot and the
         latest raw-frame handle — the frame is written to shared memory
@@ -430,6 +469,7 @@ class DecodeWorker:
                 decode_ms=owned.stream.get_decode_avg_ms(),
                 state=health.get("state"),
                 frame_handle=handle,
+                fps=self._sample_fps(camera_id, owned),
             )
         except Exception as e:
             logger.debug(f"periodic publish failed for camera {camera_id}: {e}")

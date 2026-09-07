@@ -42,6 +42,7 @@ from config import load_cameras_from_db, build_vision_config
 
 # Local
 from pipeline.decode_metrics import read_raw_frame, read_stream_health
+from pipeline.infer_metrics import read_infer_latency
 
 
 class SmartOfficeEngine:
@@ -782,6 +783,32 @@ class SmartOfficeEngine:
 
         self.metrics.register_gauge("read_ms_avg", lambda: _avg("read_ms"))
         self.metrics.register_gauge("decode_ms_avg", lambda: _avg("decode_ms"))
+
+        # fps is published by the decode worker alongside read_ms/decode_ms
+        # (it samples CeleryCameraProducer's frame counter per tick), rather
+        # than coming from MetricsCollector.record_frame — that path only
+        # fires for an in-process producer, which no longer exists.
+        def _fps(camera_id: int) -> float:
+            return read_stream_health(camera_id).get("fps", 0.0)
+
+        self.metrics.register_camera_gauge("fps", _fps)
+        self.metrics.register_gauge("fps_avg", lambda: _avg("fps"))
+
+        # GPU-stage latency, published per worker PROCESS rather than per
+        # camera (these queues are cross-camera and horizontally scaled), so
+        # these are fleet-wide averages over the interval between polls — not
+        # attributable to any one camera. Blank rather than 0 when no worker
+        # of that stage is up: see infer_metrics.read_infer_latency.
+        def _infer(stage: str, field: str):
+            def _read():
+                return read_infer_latency(stage).get(field)
+
+            return _read
+
+        self.metrics.register_gauge("yolo_batch_avg_ms", _infer("yolo", "batch_avg_ms"))
+        self.metrics.register_gauge("yolo_frame_avg_ms", _infer("yolo", "frame_avg_ms"))
+        self.metrics.register_gauge("face_det_avg_ms", _infer("face", "det_avg_ms"))
+        self.metrics.register_gauge("face_embed_avg_ms", _infer("face", "embed_avg_ms"))
 
     def _report_metrics(self) -> None:
         """Log a metrics summary and publish alerts for critical conditions."""
