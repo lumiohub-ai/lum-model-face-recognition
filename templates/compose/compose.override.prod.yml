@@ -2,12 +2,11 @@
 #
 #     cp templates/compose/compose.override.prod.yml compose.override.yml
 #
-# Sets restart policy, log level, and worker replica counts. Replica sizing is
-# kept here — tracked in git and reviewable per deployment — rather than in the
-# box's .env, so the running shape of a site is visible from the repo. (Decode
-# capacity/queues still read from .env for now; fold them in here over time.)
-# Resource limits stay in compose.yml. All of these must be measured against the
-# target host rather than inherited from a dev box.
+# Deliberately thin: it sets restart policy and log level, nothing else. The
+# real production sizing lives in .env (SO_DECODE_WORKER_REPLICAS,
+# SO_DECODE_WORKER_CAPACITY, SO_CAMERA_WORKER_*_QUEUES) and in compose.yml's
+# resource limits — both of which must be measured against the target host
+# rather than inherited from a dev box.
 #
 # No ./src or ./configs bind-mounts here, unlike the dev override: production
 # runs the code baked into the image at SO_IMAGE_TAG, so that the running
@@ -38,13 +37,6 @@ services:
 
   yolo-worker:
     restart: unless-stopped
-    # yolo is shared/stateless, so its load tracks total frame rate, not camera
-    # count. Measured on the ~14-camera incheon site: a single worker saturates
-    # (1 CPU core, GIL-bound) and ~25% of frames expire past the 1s deadline at
-    # peak; a second worker halves batch latency and drops expiry to ~0. Set the
-    # count here (tracked in git, per-deployment) rather than in the box's .env.
-    deploy:
-      replicas: 2
     environment:
       SO_LOG_LEVEL: INFO
 
