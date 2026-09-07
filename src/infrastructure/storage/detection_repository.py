@@ -89,7 +89,16 @@ class DetectionRepository:
                 SELECT status
                 FROM {self.schema}.attendance_records
                 WHERE user_id = :user_id
-                ORDER BY timestamp DESC
+                -- Order by id, NOT timestamp. `timestamp` is the caller's
+                -- detection time (per camera-worker process) and is subject to
+                -- clock drift and Celery queue delay, so it does not reflect
+                -- true transition order across processes. `id` is server-
+                -- assigned and, under the FOR UPDATE lock above, is the only
+                -- value guaranteed monotonic with commit order per user -- so
+                -- MAX(id) is the genuinely-latest status. Ordering by timestamp
+                -- could return an out-of-commit-order row and wrongly suppress
+                -- a real transition.
+                ORDER BY id DESC
                 LIMIT 1
             """), {'user_id': user_id}).fetchone()
 
