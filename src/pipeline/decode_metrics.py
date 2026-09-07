@@ -18,11 +18,12 @@ never goes through Redis — only the `FrameHandle` needed to find it in the
 through the broker, pixels through shared memory" split used everywhere
 else in this pipeline.
 
-Frame-count-based metrics (`MetricsCollector.record_frame`'s fps series)
-are not carried across this boundary — no gauge depended on decode-side
-frame timestamps specifically, so `CeleryCameraProducer` is simply given
-`metrics_collector=None` from the decode worker. Accepted gap, tracked in
-`docs/FOLLOW_UPS.md`.
+`CeleryCameraProducer` is still given `metrics_collector=None` from the
+decode worker — that collector lives in the engine's process and cannot be
+reached from here. Per-camera fps rides this same blob instead: the worker
+samples the producer's own frame counter each tick and publishes a rate,
+rather than shipping `record_frame`'s individual timestamps across a
+process boundary to be re-derived on the other side.
 """
 
 from __future__ import annotations
@@ -78,6 +79,7 @@ class StreamHealthReporter:
         decode_ms: float,
         state: Optional[str],
         frame_handle: Optional[FrameHandle] = None,
+        fps: Optional[float] = None,
     ) -> None:
         payload = {
             "read_ms": read_ms,
@@ -85,6 +87,8 @@ class StreamHealthReporter:
             "state": state,
             "published_at": time.time(),
         }
+        if fps is not None:
+            payload["fps"] = fps
         if frame_handle is not None:
             payload["frame_handle"] = dataclasses.asdict(frame_handle)
         try:

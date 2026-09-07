@@ -331,17 +331,35 @@ same default GPU, leaving the second idle.
 
 ---
 
-## 10. GPU latency metrics have no publisher
+## 10. GPU latency metrics have no publisher — DONE
 
 **What:** `MetricsCollector.record_yolo_ms` / `record_arcface_ms` are kept as API but have
 no callers — the timings now happen worker-side, in a different process.
 
 **Why it matters:** Dashboard gauges that read these are blank.
 
-**Why not now:** Deliberate. Deleting the API alongside its old call sites would have
-silently removed the metric; keeping it marks the gap.
+**Resolved by** `pipeline/infer_metrics.py`, following the same publish-to-Redis bridge
+`decode_metrics.py` already used for `read_ms`/`decode_ms`. The yolo and face workers
+publish cumulative timing counters; `engine.py`'s `_register_pipeline_gauges` differences
+successive reads into `yolo_batch_avg_ms`, `yolo_frame_avg_ms`, `face_det_avg_ms` and
+`face_embed_avg_ms`. Per-camera `fps` was restored the same way, riding the existing
+`decode:health:cam:*` blob.
 
-**Fix:** Publish worker-side timings via a Redis hash the collector reads.
+Two departures from the fix sketched here originally, both deliberate:
+
+  - **Per-process keys, not one hash.** A hash has no per-field TTL, so a dead worker's
+    fields would be averaged in forever. `infer:latency:<stage>:<host>:<pid>` expires
+    itself.
+  - **The `record_*_ms` API stays uncalled.** Its deques assume a live in-process sample
+    stream; the workers can only supply pre-aggregated averages, so these arrive as gauges
+    and surface under `pipeline` rather than `inference` in `snapshot()`. Deleting that API
+    is its own cleanup — see below.
+
+**Still open:** `record_yolo_ms` / `record_arcface_ms` / `record_arcface_det_ms` /
+`record_arcface_embed_ms` and the `inference` block of `snapshot()` are now dead code, as
+are the history page's `yolo_ms`/`arcface_ms` SQL columns (which `MetricsStore` still
+writes from those empty deques, so they persist zeros). Removing them means a schema
+migration, so it was left out of the change that reconnected the gauges.
 
 ---
 

@@ -189,7 +189,11 @@ const sysChart = new Chart(document.getElementById('chart-sys'), {
 
 const latChart = new Chart(document.getElementById('chart-lat'), {
   type:'line', data:{labels:Array(WINDOW).fill(''),
-    datasets:[mkDataset('YOLO ms','#f78166'),mkDataset('ArcFace ms','#ffa657')]},
+    // "YOLO ms/frame" not "YOLO ms": this is now the worker's whole batch
+    // wall time amortised per frame (shm attach and dispatch included), not
+    // the bare model call the old in-process gauge timed. Not comparable to
+    // historical values on the history page below.
+    datasets:[mkDataset('YOLO ms/frame','#f78166'),mkDataset('ArcFace embed ms','#ffa657')]},
   options:baseOpts(null,'ms')});
 
 // read = blocked waiting for the next frame off the network/demuxer (camera
@@ -290,16 +294,23 @@ async function fetchLive() {
     push(pipeChart,3,pipe.global_tracks!==undefined?pipe.global_tracks:null);
     pipeChart.update();
 
-    const inf = d.inference||{};
-    push(latChart,0,inf.yolo_avg_ms||0); push(latChart,1,inf.arcface_avg_ms||0);
+    // Read from `pipeline`, not `inference`: the record_yolo_ms/record_arcface_ms
+    // deques behind d.inference only ever fill for an in-process caller, and
+    // detection/embedding run in the yolo/face Celery workers now. These come
+    // from those workers via Redis (pipeline/infer_metrics.py) as gauges, so
+    // they land in the pipeline blob. null (not 0) when no worker of that
+    // stage is publishing — a gap in the line reads as "no data", where a 0
+    // would read as "instant inference".
+    push(latChart,0,pipe.yolo_frame_avg_ms??null);
+    push(latChart,1,pipe.face_embed_avg_ms??null);
     latChart.update();
 
     push(ioChart,0,pipe.read_ms_avg!==undefined?pipe.read_ms_avg:null);
     push(ioChart,1,pipe.decode_ms_avg!==undefined?pipe.decode_ms_avg:null);
     ioChart.update();
 
-    push(arcChart,0,inf.arcface_det_avg_ms!==undefined?inf.arcface_det_avg_ms:null);
-    push(arcChart,1,inf.arcface_embed_avg_ms!==undefined?inf.arcface_embed_avg_ms:null);
+    push(arcChart,0,pipe.face_det_avg_ms??null);
+    push(arcChart,1,pipe.face_embed_avg_ms??null);
     arcChart.update();
 
     const cameras = d.cameras||{};
