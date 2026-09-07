@@ -89,7 +89,10 @@ class DetectionRepository:
                 SELECT status
                 FROM {self.schema}.attendance_records
                 WHERE user_id = :user_id
-                ORDER BY timestamp DESC
+                -- id DESC breaks ties: `timestamp` is the caller's detection
+                -- time and two rows can share it, so order by insertion id too
+                -- to deterministically pick the genuinely-latest status.
+                ORDER BY timestamp DESC, id DESC
                 LIMIT 1
             """), {'user_id': user_id}).fetchone()
 
