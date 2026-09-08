@@ -4,7 +4,7 @@
 #
 # Deliberately thin: it sets restart policy and log level, nothing else. The
 # real production sizing lives in .env (SO_DECODE_WORKER_REPLICAS,
-# SO_DECODE_WORKER_CAPACITY, SO_CAMERA_WORKER_*_QUEUES) and in compose.yml's
+# SO_DECODE_WORKER_CAPACITY) and in compose.yml's
 # resource limits — both of which must be measured against the target host
 # rather than inherited from a dev box.
 #

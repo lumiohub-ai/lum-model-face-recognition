@@ -147,9 +147,9 @@ services:
   # any single replica still leaves enough capacity across the survivors.
   # Measure `nproc` and real per-camera decode cost on the target host
   # before picking numbers; do not assume this repo's dev-box figures
-  # apply. Deliberately ONE service definition, not `-a`/`-b` like
-  # camera-worker — that naming exists only because those replicas are
-  # NOT interchangeable (each owns a fixed queue list); these are.
+  # apply. Like camera-worker (post-LSO-186), this is one service with
+  # interchangeable, self-assigning replicas — decode claims cameras via a
+  # Redis lease, camera-worker leases a slot.
   decode-worker:
     image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
