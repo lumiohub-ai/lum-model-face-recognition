@@ -112,7 +112,11 @@ docker rm -f xportbench-redis
 ```
 
 Reuses the 200-frame corpus at `../celery_worker/output/frames/` (verified `(720, 1280, 3)`)
-rather than re-extracting, so results stay comparable with the run next door.
+rather than re-extracting, so results stay comparable with the run next door. That directory is
+gitignored (only `results.json` is tracked, same convention as `celery_face/`), so on a fresh
+clone it won't exist yet — run `benchmarks/celery_worker/run_bench.py` once first to build it
+from `cam1.mp4`. That video is itself gitignored and not provided by this repo; supply any real
+1280x720 clip at the repo root under that name before either benchmark can run.
 
 Results land in `output/results.json` with full provenance: repo revision, host, CPU, library
 versions, load average at start, and the tasks/warmup counts.

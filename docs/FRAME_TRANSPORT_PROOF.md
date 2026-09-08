@@ -45,18 +45,6 @@ flowchart TB
 Option 2 is what this app actually does. This document is about proving that choice was right —
 not by assertion, but by measuring both options and comparing.
 
-## Why this needed proving at all
-
-The code and docs already claimed shared memory was faster, with a specific number: "~15.6 ms
-for a picture through Redis vs ~0.3 ms for a note." That number turned out to have a problem —
-**nobody could find where it came from.** It first appeared in a commit message, three days
-*before* any benchmark existed in this repo that could have measured it. Searching the entire
-project history — every commit, every deleted branch, everything — turned up only copies of the
-sentence, never a measurement.
-
-Worse, the benchmark that *did* exist compared shared memory against the wrong opponent: reading
-JPEG files off a hard disk. Nobody ever proposed reading frames off disk — the real alternative
-being weighed was Redis. So the existing proof didn't actually prove the thing it claimed to.
 
 ## What was measured, and where
 
@@ -70,8 +58,12 @@ A new, self-contained benchmark: **[`benchmarks/transport/`](../benchmarks/trans
 | [`README.md`](../benchmarks/transport/README.md) | the full method and reasoning, for anyone who wants to re-run it |
 | [`output/results.json`](../benchmarks/transport/output/results.json) | the actual numbers from the last run, with a timestamp and machine details |
 
-It used 200 real video frames already sitting in this repo (`benchmarks/celery_worker/output/frames/`)
-— the same frames a real camera would produce, not synthetic test data.
+It used 200 real video frames extracted from an actual camera recording — the same frames a real
+camera would produce, not synthetic test data. Those frames aren't committed to the repo (image
+and video files are gitignored to keep the repo small); they're generated on demand from
+`cam1.mp4`, a recorded clip also excluded from git, by the neighboring benchmark's own corpus
+step. See "How to check this yourself" below for what re-running this from a fresh clone
+actually requires.
 
 ## The comparison it ran
 
@@ -154,9 +146,14 @@ flowchart TD
     end
 ```
 
-Shared memory only ever copies raw bytes twice. Sending a picture through Redis has to first
-translate it into a text-safe format (because that's how these messages are normally encoded),
-which is the expensive step — and that step doesn't exist at all on the shared-memory side.
+Shared memory only ever copies raw bytes twice. Sending a picture through Redis has to move a
+multi-megabyte message through the queue's own machinery — packing it into an envelope, handing
+it to Redis, Redis relaying it, the receiving side noticing a reply exists — and that cost scales
+with how big the message is. Translating the picture to text-safe form (base64) doesn't disappear
+either: measured separately, it's a small piece of the total (~8 ms out of 175 ms), but it makes
+the message itself 33% bigger, which makes everything downstream of it — the part that actually
+dominates the cost — slower too. Shared memory sidesteps both: no size inflation, and nothing
+resembling that message ever travels through the queue at all.
 
 ## One thing this does *not* claim
 
@@ -167,11 +164,27 @@ deliberately out of scope for this benchmark.
 
 ## How to check this yourself
 
+On a machine that already has the 200-frame corpus (built from an earlier benchmark run), it's
+just:
+
 ```bash
 docker run --rm -d --name xportbench-redis -p 127.0.0.1:6401:6379 redis:7-alpine
 PYTHONPATH=benchmarks .venv/bin/python benchmarks/transport/run_bench.py
 docker rm -f xportbench-redis
 ```
+
+**On a fresh clone, the corpus needs to be built first** — image and video files aren't
+committed to the repo, so `cam1.mp4` and the extracted frames won't be there yet. The corpus
+step needs *some* source recording at `cam1.mp4` in the repo root (any real 1280x720 clip works;
+this isn't provided by the repo and has to be supplied separately). With that in place, run the
+neighboring benchmark once to extract the 200 frames:
+
+```bash
+PYTHONPATH=benchmarks .venv/bin/python benchmarks/celery_worker/run_bench.py --cells 1
+```
+
+Without a source video, neither benchmark can run — this is a real gap for anyone starting from
+a truly clean checkout, not just a missing instruction.
 
 Full method, including how the timing was kept honest (checksums, shuffled test order, two full
 runs compared against each other for consistency) is in
