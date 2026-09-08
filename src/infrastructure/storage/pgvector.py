@@ -5,6 +5,7 @@ import json
 import numpy as np
 from sqlalchemy import text
 from loguru import logger
+from config.settings import settings
 from .db_config import DatabaseConfig
 from .validators import validate_client_slug, schema_name_for
 from .url_utils import normalize_image_url
@@ -175,14 +176,39 @@ class PgVectorStore:
                 # users are ignored by recognition. Join users (face_embeddings.user_id
                 # is varchar → cast users.id to text). Orphan embeddings whose user_id
                 # has no matching users row are also excluded.
-                result = conn.execute(text(f"""
-                    SELECT fe.user_name, fe.embedding
-                    FROM {self.schema_name}.face_embeddings AS fe
-                    JOIN {self.schema_name}.users AS u
-                      ON fe.user_id = u.id::text
-                    WHERE u.employment_status = 'active'
-                    ORDER BY fe.id
-                """))
+                #
+                # Branch scoping (mirrors camera_loader / get_cameras): when
+                # SO_EDGE_BRANCH_CODE is set, only load THIS branch's users, so a
+                # branch AI recognises its own employees instead of the whole org —
+                # a smaller, relevant register that also stops cross-branch false
+                # matches (an Incheon employee weakly matched at a Tashkent camera).
+                # Unset = single-site org, load everyone (unchanged).
+                branch_code = settings.edge_branch_code
+                if branch_code:
+                    # LEFT JOIN + `OR branch_id IS NULL`: load this branch's users
+                    # AND any unassigned (org-wide) user, but NOT other branches'
+                    # users. Dropping null-branch users would silently stop
+                    # recognising anyone not yet assigned to a branch.
+                    result = conn.execute(text(f"""
+                        SELECT fe.user_name, fe.embedding
+                        FROM {self.schema_name}.face_embeddings AS fe
+                        JOIN {self.schema_name}.users AS u
+                          ON fe.user_id = u.id::text
+                        LEFT JOIN {self.schema_name}.branches AS b
+                          ON b.id = u.branch_id
+                        WHERE u.employment_status = 'active'
+                          AND (LOWER(b.code) = :branch_code OR u.branch_id IS NULL)
+                        ORDER BY fe.id
+                    """), {"branch_code": branch_code})
+                else:
+                    result = conn.execute(text(f"""
+                        SELECT fe.user_name, fe.embedding
+                        FROM {self.schema_name}.face_embeddings AS fe
+                        JOIN {self.schema_name}.users AS u
+                          ON fe.user_id = u.id::text
+                        WHERE u.employment_status = 'active'
+                        ORDER BY fe.id
+                    """))
 
                 rows = result.fetchall()
 
