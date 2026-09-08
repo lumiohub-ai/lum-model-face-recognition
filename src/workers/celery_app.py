@@ -71,7 +71,7 @@ def camera_queue_name(camera_id: int) -> str:
     Not declared in `task_queues` below: `apply_async(queue="cam-slot-0")`
     needs no prior declaration (task_create_missing_queues defaults to True).
     """
-    return f"cam-slot-{camera_slot(camera_id, settings.camera_slot_count)}"
+    return slot_queue_name(camera_slot(camera_id, settings.camera_slot_count))
 
 
 def slot_queue_name(slot: int) -> str:
@@ -110,10 +110,10 @@ celery.conf.update(
     #
     # 'camera.*' is deliberately absent: camera.track has no static queue at
     # all (see its @celery.task decorator) — it's dispatched exclusively via
-    # yolo.detect's send_task(queue=camera_queue_name(camera_id)), one queue
-    # per camera, statically assigned to a camera-worker via compose.yml's
-    # -Q list. A route entry here could only name one fixed queue, which is
-    # exactly the thing per-camera queues need to NOT be.
+    # yolo.detect's send_task(queue=camera_queue_name(camera_id)), which hashes
+    # the camera to one of N slot queues (cam-slot-<n>, LSO-186). A route entry
+    # here could only name one fixed queue, which is exactly what slot routing
+    # needs to NOT be.
     task_routes={
         'workers.embedding_tasks.*': {'queue': 'embeddings'},
         'workers.detection_tasks.*': {'queue': 'detections'},
@@ -130,9 +130,9 @@ celery.conf.update(
     # Three kinds of queue in this app:
     #   - shared, stateless: embeddings/detections/yolo/face. Any worker
     #     consuming that queue may process any task on it.
-    #   - pinned, one per camera: cam.<id> (see camera_queue_name above).
-    #     Not declared here — task_create_missing_queues handles them, and a
-    #     fixed list here would need editing on every camera add/remove.
+    #   - slot-routed, one per camera-worker: cam-slot-<n> (see
+    #     camera_queue_name above). Not declared here — task_create_missing_queues
+    #     handles them, and the count is fixed (N slots), not per-camera.
     #
     # yolo and face MUST stay separate queues with their own worker
     # processes: camera-worker's process_frame blocks on face.embed_batch's

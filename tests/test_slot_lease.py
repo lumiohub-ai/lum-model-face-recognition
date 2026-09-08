@@ -141,8 +141,18 @@ class RenewTests(unittest.TestCase):
         b.claim_free_slot()
         self.assertFalse(a.renew(0))
 
-    def test_renew_returns_false_on_redis_failure(self):
-        self.assertFalse(_mgr("a", redis=FakeRedis(fail=True)).renew(0))
+    def test_renew_returns_none_on_redis_failure(self):
+        # None (not False) so the caller can tell a transient blip apart from
+        # a real ownership loss and not restart on the former.
+        self.assertIsNone(_mgr("a", redis=FakeRedis(fail=True)).renew(0))
+
+    def test_renew_returns_false_when_slot_reassigned(self):
+        redis = FakeRedis()
+        a = _mgr("a", n=1, ttl=10, redis=redis)
+        a.claim_free_slot()
+        redis.now += 11
+        _mgr("b", n=1, redis=redis).claim_free_slot()
+        self.assertIs(a.renew(0), False)
 
 
 class ReleaseTests(unittest.TestCase):

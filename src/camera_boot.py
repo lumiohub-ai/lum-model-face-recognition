@@ -35,6 +35,10 @@ _TTL = int(os.getenv("SO_SLOT_LEASE_TTL", "30"))
 # past it means a real misconfig (replicas > N), which should crash-loop
 # visibly rather than spin forever.
 _CLAIM_TIMEOUT = int(os.getenv("SO_SLOT_CLAIM_TIMEOUT", "60"))
+# Consecutive failed renew CALLS (Redis unreachable, not ownership loss) to
+# tolerate before exiting. TTL/interval ≈ 3 renews per lease lifetime, so 2
+# rides out a brief blip while still bailing before the lease truly expires.
+_RENEW_MAX_TRANSIENT_FAILS = 2
 
 
 def _claim_with_retry(mgr: SlotLeaseManager) -> int | None:
@@ -50,15 +54,35 @@ def _claim_with_retry(mgr: SlotLeaseManager) -> int | None:
 
 def _renew_loop(mgr: SlotLeaseManager, slot: int, stop: threading.Event) -> None:
     interval = max(1, _TTL // 3)
+    transient_fails = 0
     while not stop.wait(interval):
-        if not mgr.renew(slot):
-            # Another worker owns this slot now (our TTL lapsed) — continuing
-            # would run two trackers over the same cameras. Exit hard so the
-            # container restarts and re-claims a slot cleanly.
+        result = mgr.renew(slot)
+        if result is True:
+            transient_fails = 0
+            continue
+        if result is False:
+            # DEFINITIVELY lost the slot (another worker owns it) — continuing
+            # would run two trackers over the same cameras. Exit hard now so
+            # the container restarts and re-claims a slot cleanly.
             logger.critical(
-                f"camera_boot: lost slot {slot} lease — exiting to reclaim"
+                f"camera_boot: lost slot {slot} lease (reassigned) — exiting to reclaim"
             )
             os._exit(1)
+        # result is None: the renew CALL failed (Redis blip), not proof we lost
+        # ownership. With TTL/interval buffer we can ride out a couple before
+        # the lease would actually expire — restarting on every blip would drop
+        # tracker state for no reason.
+        transient_fails += 1
+        if transient_fails >= _RENEW_MAX_TRANSIENT_FAILS:
+            logger.critical(
+                f"camera_boot: {transient_fails} consecutive renew failures on "
+                f"slot {slot} (Redis unreachable) — exiting to reclaim"
+            )
+            os._exit(1)
+        logger.warning(
+            f"camera_boot: renew of slot {slot} failed transiently "
+            f"({transient_fails}/{_RENEW_MAX_TRANSIENT_FAILS}) — retrying"
+        )
 
 
 def main() -> None:
@@ -68,10 +92,10 @@ def main() -> None:
     slot = _claim_with_retry(mgr)
     if slot is None:
         logger.critical(
-            f"camera_boot: could not lease any of {n} slots within "
-            f"{_CLAIM_TIMEOUT}s — replicas exceed SO_CAMERA_SLOT_COUNT, or "
-            f"Redis is unreachable. A camera-worker with no slot tracks "
-            f"nothing; exiting so this is visible."
+            f"camera_boot: could not lease any of {n} slots "
+            f"(settings.camera_slot_count) within {_CLAIM_TIMEOUT}s — replicas "
+            f"exceed the slot count, or Redis is unreachable. A camera-worker "
+            f"with no slot tracks nothing; exiting so this is visible."
         )
         sys.exit(1)
 

@@ -138,21 +138,24 @@ class SlotLeaseManager:
                 return slot
         return None
 
-    def renew(self, slot: int) -> bool:
-        """Extend a slot lease this worker still owns.
+    def renew(self, slot: int) -> Optional[bool]:
+        """Extend a slot lease this worker still owns. Tri-state on purpose:
 
-        False means either Redis failed or — the case that matters — another
-        worker now owns this slot because this worker's TTL lapsed before it
-        renewed. Either way the caller must stop consuming that slot's queue
-        immediately (restart to re-claim), so two workers don't track the same
-        cameras against divergent state.
+        - True  — renewed; we still own the slot.
+        - False — we DEFINITIVELY lost it: another worker owns the key because
+          our TTL lapsed. The caller must stop consuming immediately (restart
+          to re-claim) so two workers don't track the same cameras.
+        - None  — the renew CALL failed (Redis unreachable), which is NOT proof
+          we lost ownership. The caller should tolerate a couple of these
+          (TTL/interval leaves buffer) before treating it as fatal, rather than
+          restarting — and dropping tracker state — on a transient blip.
         """
         try:
             return bool(self._eval(self._renew_sha_ref(), slot, with_ttl=True))
         except Exception as e:
             logger.warning(f"SlotLeaseManager: renew of slot {slot} failed: {e}")
             self._drop_client()
-            return False
+            return None
 
     def release(self, slot: int) -> None:
         """Give up a slot immediately on shutdown, rather than waiting out the
