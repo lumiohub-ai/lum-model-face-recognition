@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 from loguru import logger
 
+from config.settings import settings
 from .db_config import DatabaseConfig
 from .validators import validate_client_slug, schema_name_for
 
@@ -103,10 +104,23 @@ class Repository:
         """
         try:
             with self.db.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    SELECT id, full_name
-                    FROM {self.schema}.users
-                """))
+                # Branch scoping: match get_all_embeddings — when SO_EDGE_BRANCH_CODE
+                # is set, only this branch's users, so the name→id map stays in step
+                # with the branch-scoped register (a name absent from the register
+                # must not resolve to a user_id here either).
+                branch_code = settings.edge_branch_code
+                if branch_code:
+                    result = conn.execute(text(f"""
+                        SELECT u.id, u.full_name
+                        FROM {self.schema}.users AS u
+                        LEFT JOIN {self.schema}.branches AS b ON b.id = u.branch_id
+                        WHERE LOWER(b.code) = :branch_code OR u.branch_id IS NULL
+                    """), {"branch_code": branch_code})
+                else:
+                    result = conn.execute(text(f"""
+                        SELECT id, full_name
+                        FROM {self.schema}.users
+                    """))
                 return [
                     {'id': row[0], 'name': row[1]}
                     for row in result.fetchall()
