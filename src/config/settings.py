@@ -46,13 +46,14 @@ class Settings:
     # Camera-worker slot routing (LSO-186). yolo routes each camera's
     # `camera.track` to `cam-slot-{crc32(id) % N}` instead of a per-camera
     # `cam.<id>` queue, and each camera-worker replica leases exactly one slot
-    # (see pipeline/slot_lease.py). N (this value) MUST equal the camera-worker
-    # replica count and be identical on decode + yolo + camera-worker (all read
-    # it) — compose sets SO_CAMERA_SLOT_COUNT per site and compose-validate
-    # checks it against `replicas`. Default 2 = the base compose replica count.
-    # Changing N remaps every camera to a different slot (a deliberate rebalance;
-    # tracker state re-inits), so it's a per-site override, not a hot knob.
-    camera_slot_count = int(os.getenv("SO_CAMERA_SLOT_COUNT", 2))
+    # (see pipeline/slot_lease.py). Hardcoded, NOT an env var: decode, yolo and
+    # camera-worker all run this one image, so a single constant keeps them in
+    # lockstep with zero chance of a per-service env drifting out of agreement.
+    # N MUST equal the camera-worker `replicas` in compose — a replica that
+    # can't lease a slot exits loudly. Changing N remaps every camera to a
+    # different slot (a deliberate rebalance + image rebuild; tracker state
+    # re-inits), so it lives here in code, not in a hot config knob.
+    camera_slot_count = 2
 
     # Google Cloud Storage
     gcs_credentials_path = os.getenv("SO_GCS_CREDENTIALS_PATH", "")
