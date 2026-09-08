@@ -20,12 +20,7 @@ services:
     environment:
       SO_LOG_LEVEL: DEBUG
 
-  camera-worker-a:
-    restart: unless-stopped
-    environment:
-      SO_LOG_LEVEL: DEBUG
-
-  camera-worker-b:
+  camera-worker:
     restart: unless-stopped
     environment:
       SO_LOG_LEVEL: DEBUG

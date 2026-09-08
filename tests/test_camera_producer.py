@@ -141,9 +141,11 @@ class EnqueueTests(unittest.TestCase):
     def test_dispatched_to_the_yolo_queue_with_this_cameras_next_queue(self):
         """The frame goes to the shared `yolo` queue, not a per-camera one —
         batching needs a queue any yolo-worker consumes. `next_queue` is
-        what carries the per-camera routing forward: yolo.detect reads it
-        to know which cam.<id> queue to forward this camera's detections
+        what carries the routing forward: yolo.detect reads it to know which
+        slot queue (cam-slot-<n>, LSO-186) to forward this camera's detections
         to."""
+        from workers.celery_app import camera_queue_name
+
         task = FakeTask()
         producer = _make_producer([_frame()])
         with _PatchedTask(task):
@@ -151,7 +153,7 @@ class EnqueueTests(unittest.TestCase):
 
         call = task.calls[0]
         self.assertEqual(call["options"]["queue"], "yolo")
-        self.assertEqual(call["kwargs"]["next_queue"], "cam.1")
+        self.assertEqual(call["kwargs"]["next_queue"], camera_queue_name(1))
 
     def test_payload_carries_the_handle_as_a_plain_dict(self):
         """task_serializer='json' cannot encode a FrameHandle dataclass."""

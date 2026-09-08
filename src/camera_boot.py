@@ -15,6 +15,16 @@ queue and tracks nothing, which is the exact silent under-coverage this ticket
 removes. If it can't claim a slot (replicas > N, or Redis down past the
 timeout) it exits non-zero so the failure is visible, not a quietly useless
 container.
+
+NOT guarded here: the opposite misconfig, replicas < N. Each replica only
+knows its own slot, not the fleet size, so a boot-time worker can't tell that
+some other slot went unclaimed. Those slots' `cam-slot-<n>` queues then
+accumulate unconsumed tasks — the same silent under-coverage, in the other
+direction. The invariant replicas == N (settings.camera_slot_count) is the
+deploy's responsibility; keep them equal in compose. (A fleet-level check —
+e.g. asserting all N slot keys are held shortly after boot — is a possible
+follow-up but needs a coordinator this per-replica entrypoint deliberately
+avoids.)
 """
 
 import os
