@@ -14,11 +14,28 @@ NOTE: Exception classes and BaseTaskWithRetry are in task_base.py
 to avoid circular imports. Import from there in task modules.
 """
 
+import zlib
+
 from celery import Celery
 from kombu import Queue, Exchange
 from loguru import logger
 
 from config.settings import settings
+
+
+def camera_slot(camera_id: int, n_slots: int) -> int:
+    """Stable slot number for a camera id, 0 <= slot < n_slots (LSO-186).
+
+    crc32, not the builtin `hash()`: `hash()` on strings is randomized per
+    process (PYTHONHASHSEED), so the decode-worker and the yolo-worker — two
+    separate processes that BOTH compute this to agree on a queue — could hash
+    the same camera to different slots and split its frames across two
+    camera-workers, fragmenting tracker state. crc32 is a fixed checksum: same
+    input -> same number in every process, on every host, across restarts.
+    `str(camera_id)` so ids that differ only in type (5 vs "5") still collide
+    to one slot, and so the spread doesn't degenerate for small sequential ids.
+    """
+    return zlib.crc32(str(camera_id).encode()) % n_slots
 
 # Create Celery app
 celery = Celery(
@@ -40,17 +57,27 @@ dlq_exchange = Exchange('dlq', type='direct')
 
 
 def camera_queue_name(camera_id: int) -> str:
-    """The pinned per-camera queue `yolo.detect` forwards a camera's
-    detections to, and that camera's camera-worker service statically
-    consumes via its compose.yml `-Q` list.
+    """The queue `yolo.detect` forwards a camera's detections to, and which a
+    camera-worker consumes.
 
-    Not declared in `task_queues` below: `apply_async(queue="cam.22")` needs
-    no prior declaration (task_create_missing_queues defaults to True), and
-    there is one of these per camera — a fixed enumeration here would need
-    editing every time a camera is added or removed, duplicating what
-    compose.yml's `-Q` lists already say.
+    Hash-to-slot (LSO-186): a camera routes to one of `camera_slot_count`
+    fixed slot queues (`cam-slot-0`, `cam-slot-1`, …) by a stable hash of its
+    id, NOT a per-camera `cam.<id>` queue. This decouples the queue set from
+    the live camera set: a camera added in the app hashes to an existing slot
+    that a worker is already consuming — no `-Q` edit, no restart. Sticky by
+    construction: same id -> same slot -> same worker, so per-camera tracker
+    state stays put (as long as N is unchanged and that slot's worker lives).
+
+    Not declared in `task_queues` below: `apply_async(queue="cam-slot-0")`
+    needs no prior declaration (task_create_missing_queues defaults to True).
     """
-    return f"cam.{camera_id}"
+    return f"cam-slot-{camera_slot(camera_id, settings.camera_slot_count)}"
+
+
+def slot_queue_name(slot: int) -> str:
+    """The queue a camera-worker consumes once it has leased `slot`
+    (pipeline/slot_lease.py). The consumer side of `camera_queue_name`."""
+    return f"cam-slot-{slot}"
 
 # Celery configuration
 celery.conf.update(

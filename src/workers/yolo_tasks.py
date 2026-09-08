@@ -51,7 +51,7 @@ from celery_batches import Batches, SimpleRequest
 from loguru import logger
 
 from workers import model_holder
-from workers.celery_app import celery
+from workers.celery_app import celery, camera_queue_name
 
 # Matches the values validated in the spike (benchmarks/celery_batches_spike/
 # bench_tasks.py) — see the module docstring's batching-mechanism note before
@@ -259,7 +259,10 @@ def run_detect_batch(
         if remaining is not None and remaining <= 0:
             n_skipped_expired += 1
             continue
-        next_queue = req.kwargs.get("next_queue") or f"cam.{camera_id}"
+        # Producer always sets next_queue (frame_pump), but fall back to the
+        # same slot routing rather than a literal cam.<id> so a payload without
+        # it still lands on a queue a worker actually consumes (LSO-186).
+        next_queue = req.kwargs.get("next_queue") or camera_queue_name(camera_id)
         dispatch(
             kwargs={
                 "camera_id": camera_id,
