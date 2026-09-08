@@ -4,8 +4,8 @@
 #
 # Identical to the prod override except SO_LOG_LEVEL: DEBUG throughout — same
 # image, same no-bind-mount policy, so staging exercises the artifact that
-# ships. Sizing (SO_DECODE_WORKER_REPLICAS, SO_DECODE_WORKER_CAPACITY,
-# SO_CAMERA_WORKER_*_QUEUES) lives in .env, measured on the target host.
+# ships. Sizing (SO_DECODE_WORKER_REPLICAS, SO_DECODE_WORKER_CAPACITY) lives
+# in .env, measured on the target host.
 services:
   ollama:
     restart: unless-stopped
@@ -20,12 +20,7 @@ services:
     environment:
       SO_LOG_LEVEL: DEBUG
 
-  camera-worker-a:
-    restart: unless-stopped
-    environment:
-      SO_LOG_LEVEL: DEBUG
-
-  camera-worker-b:
+  camera-worker:
     restart: unless-stopped
     environment:
       SO_LOG_LEVEL: DEBUG

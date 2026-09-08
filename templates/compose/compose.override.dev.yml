@@ -47,16 +47,7 @@ services:
       - ./src:/app/src
       - ./configs:/app/configs
 
-  camera-worker-a:
-    restart: "no"
-    environment:
-      PYTHONWARNINGS: "ignore::FutureWarning"
-      SO_LOG_LEVEL: DEBUG
-    volumes:
-      - ./src:/app/src
-      - ./configs:/app/configs
-
-  camera-worker-b:
+  camera-worker:
     restart: "no"
     environment:
       PYTHONWARNINGS: "ignore::FutureWarning"

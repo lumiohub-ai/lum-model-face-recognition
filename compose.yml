@@ -147,9 +147,9 @@ services:
   # any single replica still leaves enough capacity across the survivors.
   # Measure `nproc` and real per-camera decode cost on the target host
   # before picking numbers; do not assume this repo's dev-box figures
-  # apply. Deliberately ONE service definition, not `-a`/`-b` like
-  # camera-worker — that naming exists only because those replicas are
-  # NOT interchangeable (each owns a fixed queue list); these are.
+  # apply. Like camera-worker (post-LSO-186), this is one service with
+  # interchangeable, self-assigning replicas — decode claims cameras via a
+  # Redis lease, camera-worker leases a slot.
   decode-worker:
     image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
@@ -246,33 +246,19 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # camera-worker-a / -b: each `cam.<id>` queue is STATICALLY assigned to
-  # exactly one of these services below, via its own -Q list — not a live
-  # reconciler. See docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md's "Revision: static
-  # assignment, not a live reconciler" for why: the dynamic alternative
-  # (control.inspect + add_consumer/cancel_consumer, a hysteresis state
-  # machine to survive missed control-plane broadcasts) was the single
-  # highest-risk, highest-complexity part of that design, built to solve one
-  # problem — automatic failover in ~15-30s if a camera-worker dies. At the
-  # camera counts this stack runs, an operator restarting a dead container
-  # closes that same window by hand. That auto-failover design is kept in
-  # full in the doc above, to build later only if operational reality (actual
-  # observed crash frequency) shows static assignment isn't enough.
+  # camera-worker: identical replicas that self-assign a slot (LSO-186).
+  # Each replica leases one of N slots from Redis at boot (src/camera_boot.py)
+  # and consumes only cam-slot-<n>; yolo routes each camera to
+  # cam-slot-{crc32(id) % N}. No hand-maintained -Q list — a camera added in
+  # the app hashes to a slot a worker already consumes, no restart. N is
+  # hardcoded in settings.camera_slot_count (2); replicas MUST equal it (a
+  # replica that can't lease a slot exits loudly). This is dev/local compose;
+  # the deployed stack lives in the lum-stack repo.
   #
-  # To move a camera to a different worker: edit its SO_CAMERA_WORKER_*_QUEUES
-  # value in .env and restart BOTH the losing and gaining service. Never let
-  # the same cam.<id> appear in two services' queue lists at once — that
-  # reintroduces exactly the double-tracker corruption this design avoids
-  # (see the doc's run C: one camera split across trackers, global_tracks
-  # growing unbounded).
-  #
-  # --pool=solo on every camera-worker: one process, one task at a time. The
-  # threads pool collapses ~330x under this app's worker_prefetch_multiplier=1
-  # + task_acks_late settings (measured, benchmarks/celery_worker/README.md).
-  # This is what makes each worker's per-camera tracker state safe without
-  # a lock: exactly one task runs at a time, so process_frame's tracker
-  # mutations for a given camera never interleave with themselves.
-  camera-worker-a:
+  # --pool=solo (set inside camera_boot): one process, one task at a time —
+  # what makes each worker's per-camera tracker state safe without a lock, so
+  # process_frame's tracker mutations for a camera never interleave.
+  camera-worker:
     image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
     attach: false
     restart: unless-stopped
@@ -295,11 +281,7 @@ services:
       # enabled (accept_content includes 'pickle', needed for the numpy
       # in face results). The image has no USER, so it runs as root.
       C_FORCE_ROOT: "1"
-    # Comma-separated cam.<id> queues this replica owns — set the real
-    # camera ids for your deployment in .env. The placeholder default
-    # (cam.1) only matters if this variable is left unset; a real
-    # deployment should always set it explicitly.
-    command: celery -A workers.celery_app worker -Q ${SO_CAMERA_WORKER_A_QUEUES:-cam.1} -l warning --pool=solo
+    command: python3 -m src.camera_boot
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
@@ -307,53 +289,7 @@ services:
       retries: 3
       start_period: 30s
     deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 4G
-        reservations:
-          cpus: '1.0'
-          memory: 2G
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "10"
-
-  camera-worker-b:
-    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
-    attach: false
-    restart: unless-stopped
-    depends_on:
-      person-tracking:
-        condition: service_healthy
-    volumes:
-      - ./.env:/app/.env:ro
-      - ./credentials:/app/credentials
-      - ./volumes/models:/app/volumes/models
-      - ./volumes/models/huggingface:/root/.cache/huggingface
-      - rpc-sockets:/run/lumiohub
-      - frame-shm:/dev/shm
-    networks:
-      - person-tracking-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      C_FORCE_ROOT: "1"
-    # Empty by default — add a second worker's cameras via
-    # SO_CAMERA_WORKER_B_QUEUES once you have more than one worker's worth.
-    # A service with no cameras assigned is harmless: it consumes nothing
-    # and just idles (celery still needs -Q to be non-empty to start, hence
-    # the cam.2 placeholder — replace it, don't leave it pointed at a real
-    # camera-worker-a also owns).
-    command: celery -A workers.celery_app worker -Q ${SO_CAMERA_WORKER_B_QUEUES:-cam.2} -l warning --pool=solo
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 30s
-    deploy:
+      replicas: 2                # MUST equal settings.camera_slot_count (N=2)
       resources:
         limits:
           cpus: '2.0'
