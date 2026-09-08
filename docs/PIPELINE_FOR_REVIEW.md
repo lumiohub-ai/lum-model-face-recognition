@@ -107,16 +107,20 @@ queue — turns out to be unaffordable:
 
 | What travels | Cost, **per item** |
 |---|---|
-| A small instruction | **~0.3 ms** |
-| A full 720p picture | **~15.6 ms** |
+| A short note ("look at slot 5"), via shared memory | **~3.05 ms** |
+| A full 720p picture, through the queue (this app's real serializer) | **~175 ms** |
+| A full 720p picture, through the queue (best case, JPEG) | **~19.8 ms** |
 
-That 15.6 ms is **one frame, one direction** — not a batch. Which is what makes it disqualifying:
-ten cameras at 7.5 frames a second is 75 frames per second, so **~1.17 seconds of packing work per
-second of video.** More than a whole CPU core doing nothing but copying pixels into a queue, before
-any AI work starts.
+That ~175 ms is **one frame, one direction** — not a batch. Which is what makes it disqualifying:
+ten cameras at 7.5 frames a second is 75 frames per second, so **over 13 seconds of packing work
+per second of video.** Far more than a whole CPU core doing nothing but copying pixels into a
+queue, before any AI work starts. Even the cheapest form the queue can manage (JPEG) is still
+~6.5x the shared-memory path.
 
 Sending the picture would also cost **more than running the AI model on it.** So we don't. Pictures
 go into shared memory; only a short note saying *where to look* travels through the queue.
+Measured head-to-head on the same frames, same run:
+[`benchmarks/transport/`](../benchmarks/transport/README.md).
 
 **To be clear about what that number is:** it is the cost of the design we *rejected*. We never pay
 it. And it is worth separating the two things it could have cost us, because only one of them
@@ -560,10 +564,13 @@ design: **cost depends on payload size.**
 | What travels | Cost through the queue |
 |---|---|
 | A small instruction | **~0.3 ms** |
-| A full 720p picture | **~15.6 ms** |
+| A full 720p picture (this app's real serializer) | **~175 ms** |
+| A full 720p picture (cheapest form possible, JPEG) | **~19.8 ms** |
 
-Sending a picture through the queue costs **more than running the AI model on it.** The transport
-would cost more than the work. So pictures never go through the queue — only instructions do.
+Sending a picture through the queue costs **more than running the AI model on it**, even in the
+cheapest form the queue can manage. The transport would cost more than the work. So pictures
+never go through the queue — only instructions do. Measured, not assumed:
+[`benchmarks/transport/`](../benchmarks/transport/README.md).
 
 ## 2. Shared memory — for the pictures
 
@@ -745,9 +752,10 @@ changes, and the fix is a one-line addition per service, not a redesign.
 **No — and this is the important part.** They stay. What changes is *what spans hosts.*
 
 The wrong approach would be to make every worker reachable from anywhere, sending frames over the
-network so any host can process any camera. That is precisely the **15.6 ms per frame** problem — the
-transport would cost more than the inference. Frames should never leave the machine that decoded
-them.
+network so any host can process any camera. That is precisely the **picture-through-the-queue**
+problem measured above (~175 ms/frame, worse still over a network link than the local broker
+this was measured against) — the transport would cost more than the inference. Frames should
+never leave the machine that decoded them.
 
 The right shape is **sharding**: each host runs a complete, self-contained stack for *its own*
 cameras — its own decoding, its own workers, its own shared memory, its own socket. Cameras are
@@ -975,8 +983,9 @@ decoding, its own GPU workers, its own tracking workers, its own shared memory a
 are divided between servers; frames never cross between them.
 
 The alternative — one shared pool of GPU workers serving cameras from both servers — would mean
-frames travelling over the network to reach them. That is the ~15.6 ms-per-frame problem again, now
-over a link slower than the local machine. Sharding avoids it completely.
+frames travelling over the network to reach them. That is the picture-through-the-queue problem
+again (~175 ms/frame measured locally; a network link only makes it worse). Sharding avoids it
+completely.
 
 The only thing that has to cross between servers is the **identity lookup** — small, occasional, and
 the one piece of genuinely shared state. See "Making it scale to more machines" above for what that

@@ -38,9 +38,13 @@ tasks and consume none.
 
 ## 3. Why pixels never cross the broker
 
-Measured, not assumed: a 720p frame costs **~15.6 ms** through a Redis-backed payload — more
-than a YOLO inference pass itself — versus **~0.3 ms** for a small control message. At 6 cameras
-that would be over a full CPU core spent packing pixels before any AI work started.
+Measured, not assumed, head-to-head on the same frames: shared memory costs **~3.05 ms/frame**
+(producer copy-in + consumer copy-out, the same work either side of a Redis payload would also
+have to do); a 720p frame through Redis, under this app's actual json+base64 serializer, costs
+**~175 ms** — more than a YOLO inference pass itself — and even the cheapest broker alternative
+(JPEG) costs **~19.8 ms**, ~6.5x shared memory's cost. At 6 cameras the Redis path would be over
+a full CPU core spent packing pixels before any AI work started. Harness and full breakdown:
+[`benchmarks/transport/`](../benchmarks/transport/README.md).
 
 So every frame-carrying task payload is a *handle* (segment name + sequence number + shape); the
 pixels live in `multiprocessing.shared_memory` blocks that producer and consumer map directly.

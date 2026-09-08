@@ -1,0 +1,629 @@
+{
+  "meta": {
+    "measured_at": "2026-09-07 22:09:52 +0900",
+    "repo_rev": "df74b761055878eb87deda09eb1fd83bfea71df9",
+    "host": "dev-hbai-kr-s4-3080ti",
+    "cpu": "x86_64",
+    "cpu_count": 12,
+    "python": "3.10.19",
+    "numpy": "1.24.4",
+    "celery": "5.4.0",
+    "redis_py": "5.0.8",
+    "frame_shape": [
+      720,
+      1280,
+      3
+    ],
+    "frame_bytes": 2764800,
+    "loadavg_1min_at_start": 0.75,
+    "worker": "local subprocess (delivery_ms valid: shared kernel clock)",
+    "tasks_per_cell": 500,
+    "warmup_discarded": 50,
+    "note": "Transport only. No model, no GPU: the question is how pixels move between processes, so inference would only add variance."
+  },
+  "runs": [
+    {
+      "0-control": {
+        "what": "~100 B, no pixels",
+        "serializer": "json",
+        "wire_bytes": 100,
+        "encode_ms": {
+          "mean": 0.001,
+          "p50": 0.001,
+          "p95": 0.002,
+          "stdev": 0.001,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 0.796,
+          "p50": 0.774,
+          "p95": 1.189,
+          "stdev": 0.323,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 1.841,
+          "p50": 1.447,
+          "p95": 4.29,
+          "stdev": 1.111,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "stdev": 0.0,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 2.381,
+          "p50": 2.073,
+          "p95": 4.996,
+          "stdev": 1.176,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 2.638,
+          "p50": 2.323,
+          "p95": 5.228,
+          "stdev": 1.213,
+          "n": 500
+        }
+      },
+      "1-shm": {
+        "what": "handle + producer write + consumer copy (production path)",
+        "serializer": "json",
+        "wire_bytes": 49,
+        "encode_ms": {
+          "mean": 0.338,
+          "p50": 0.288,
+          "p95": 0.831,
+          "stdev": 0.203,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 0.808,
+          "p50": 0.773,
+          "p95": 1.183,
+          "stdev": 0.293,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 1.757,
+          "p50": 1.465,
+          "p95": 4.172,
+          "stdev": 1.014,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.597,
+          "p50": 0.29,
+          "p95": 1.907,
+          "stdev": 0.585,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 2.933,
+          "p50": 2.509,
+          "p95": 6.044,
+          "stdev": 1.416,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 3.499,
+          "p50": 3.051,
+          "p95": 6.905,
+          "stdev": 1.424,
+          "n": 500
+        }
+      },
+      "2-shm-view": {
+        "what": "handle + producer write, zero-copy read (best case)",
+        "serializer": "json",
+        "wire_bytes": 49,
+        "encode_ms": {
+          "mean": 0.339,
+          "p50": 0.287,
+          "p95": 0.848,
+          "stdev": 0.205,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 0.827,
+          "p50": 0.804,
+          "p95": 1.167,
+          "stdev": 0.387,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 1.778,
+          "p50": 1.419,
+          "p95": 4.214,
+          "stdev": 1.086,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.008,
+          "p50": 0.008,
+          "p95": 0.011,
+          "stdev": 0.003,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 2.353,
+          "p50": 2.055,
+          "p95": 4.984,
+          "stdev": 1.162,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 2.952,
+          "p50": 2.607,
+          "p95": 5.595,
+          "stdev": 1.257,
+          "n": 500
+        }
+      },
+      "3-json-b64": {
+        "what": "base64 pixels (production serializer)",
+        "serializer": "json",
+        "wire_bytes": 2764800,
+        "encode_ms": {
+          "mean": 5.415,
+          "p50": 5.046,
+          "p95": 9.294,
+          "stdev": 1.939,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 56.117,
+          "p50": 57.752,
+          "p95": 67.481,
+          "stdev": 8.213,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 109.526,
+          "p50": 108.517,
+          "p95": 134.209,
+          "stdev": 15.712,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 3.68,
+          "p50": 3.293,
+          "p95": 4.881,
+          "stdev": 0.779,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 114.106,
+          "p50": 113.206,
+          "p95": 140.004,
+          "stdev": 16.365,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 174.737,
+          "p50": 174.825,
+          "p95": 211.094,
+          "stdev": 24.244,
+          "n": 500
+        }
+      },
+      "4-pickle-raw": {
+        "what": "raw pixel bytes",
+        "serializer": "pickle",
+        "wire_bytes": 2764800,
+        "encode_ms": {
+          "mean": 0.879,
+          "p50": 0.49,
+          "p95": 2.19,
+          "stdev": 0.733,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 31.476,
+          "p50": 32.417,
+          "p95": 40.359,
+          "stdev": 5.856,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 61.423,
+          "p50": 60.875,
+          "p95": 81.644,
+          "stdev": 12.043,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.012,
+          "p50": 0.012,
+          "p95": 0.015,
+          "stdev": 0.001,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 62.243,
+          "p50": 61.851,
+          "p95": 82.551,
+          "stdev": 12.136,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 93.79,
+          "p50": 94.93,
+          "p95": 121.581,
+          "stdev": 17.302,
+          "n": 500
+        }
+      },
+      "5-jpeg": {
+        "what": "JPEG q90 bytes",
+        "serializer": "pickle",
+        "wire_bytes": 332717,
+        "encode_ms": {
+          "mean": 4.055,
+          "p50": 4.061,
+          "p95": 5.323,
+          "stdev": 0.897,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 3.252,
+          "p50": 3.199,
+          "p95": 4.779,
+          "stdev": 0.821,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 6.666,
+          "p50": 6.621,
+          "p95": 9.381,
+          "stdev": 1.455,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 5.595,
+          "p50": 5.249,
+          "p95": 8.788,
+          "stdev": 1.688,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 12.896,
+          "p50": 12.774,
+          "p95": 18.391,
+          "stdev": 2.88,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 19.568,
+          "p50": 19.842,
+          "p95": 26.273,
+          "stdev": 3.96,
+          "n": 500
+        }
+      }
+    },
+    {
+      "0-control": {
+        "what": "~100 B, no pixels",
+        "serializer": "json",
+        "wire_bytes": 100,
+        "encode_ms": {
+          "mean": 0.001,
+          "p50": 0.001,
+          "p95": 0.002,
+          "stdev": 0.0,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 0.821,
+          "p50": 0.796,
+          "p95": 1.172,
+          "stdev": 0.322,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 1.735,
+          "p50": 1.412,
+          "p95": 4.047,
+          "stdev": 0.984,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "stdev": 0.0,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 2.3,
+          "p50": 2.064,
+          "p95": 4.778,
+          "stdev": 1.039,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 2.558,
+          "p50": 2.301,
+          "p95": 5.029,
+          "stdev": 1.11,
+          "n": 500
+        }
+      },
+      "1-shm": {
+        "what": "handle + producer write + consumer copy (production path)",
+        "serializer": "json",
+        "wire_bytes": 49,
+        "encode_ms": {
+          "mean": 0.346,
+          "p50": 0.286,
+          "p95": 0.927,
+          "stdev": 0.219,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 0.851,
+          "p50": 0.818,
+          "p95": 1.212,
+          "stdev": 0.372,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 1.77,
+          "p50": 1.497,
+          "p95": 3.972,
+          "stdev": 0.949,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.333,
+          "p50": 0.285,
+          "p95": 0.849,
+          "stdev": 0.173,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 2.727,
+          "p50": 2.517,
+          "p95": 4.982,
+          "stdev": 1.022,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 3.3,
+          "p50": 3.102,
+          "p95": 5.586,
+          "stdev": 1.171,
+          "n": 500
+        }
+      },
+      "2-shm-view": {
+        "what": "handle + producer write, zero-copy read (best case)",
+        "serializer": "json",
+        "wire_bytes": 49,
+        "encode_ms": {
+          "mean": 0.349,
+          "p50": 0.286,
+          "p95": 0.935,
+          "stdev": 0.222,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 0.827,
+          "p50": 0.805,
+          "p95": 1.194,
+          "stdev": 0.299,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 1.684,
+          "p50": 1.422,
+          "p95": 3.711,
+          "stdev": 0.874,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.008,
+          "p50": 0.008,
+          "p95": 0.011,
+          "stdev": 0.003,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 2.288,
+          "p50": 2.127,
+          "p95": 4.38,
+          "stdev": 0.936,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 2.869,
+          "p50": 2.658,
+          "p95": 5.05,
+          "stdev": 1.023,
+          "n": 500
+        }
+      },
+      "3-json-b64": {
+        "what": "base64 pixels (production serializer)",
+        "serializer": "json",
+        "wire_bytes": 2764800,
+        "encode_ms": {
+          "mean": 5.394,
+          "p50": 5.139,
+          "p95": 9.011,
+          "stdev": 1.817,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 54.409,
+          "p50": 55.323,
+          "p95": 65.444,
+          "stdev": 7.972,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 103.398,
+          "p50": 104.335,
+          "p95": 124.71,
+          "stdev": 13.942,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 3.151,
+          "p50": 3.212,
+          "p95": 4.151,
+          "stdev": 0.66,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 107.489,
+          "p50": 108.357,
+          "p95": 129.505,
+          "stdev": 14.417,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 166.352,
+          "p50": 167.689,
+          "p95": 199.659,
+          "stdev": 22.42,
+          "n": 500
+        }
+      },
+      "4-pickle-raw": {
+        "what": "raw pixel bytes",
+        "serializer": "pickle",
+        "wire_bytes": 2764800,
+        "encode_ms": {
+          "mean": 0.88,
+          "p50": 0.448,
+          "p95": 2.208,
+          "stdev": 0.753,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 32.004,
+          "p50": 32.861,
+          "p95": 40.245,
+          "stdev": 5.564,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 56.632,
+          "p50": 57.319,
+          "p95": 71.71,
+          "stdev": 9.406,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 0.013,
+          "p50": 0.013,
+          "p95": 0.015,
+          "stdev": 0.002,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 57.487,
+          "p50": 58.165,
+          "p95": 72.596,
+          "stdev": 9.506,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 89.529,
+          "p50": 91.488,
+          "p95": 113.287,
+          "stdev": 14.71,
+          "n": 500
+        }
+      },
+      "5-jpeg": {
+        "what": "JPEG q90 bytes",
+        "serializer": "pickle",
+        "wire_bytes": 332717,
+        "encode_ms": {
+          "mean": 4.033,
+          "p50": 4.107,
+          "p95": 5.292,
+          "stdev": 0.901,
+          "n": 500
+        },
+        "publish_ms": {
+          "mean": 3.219,
+          "p50": 3.108,
+          "p95": 4.881,
+          "stdev": 0.883,
+          "n": 500
+        },
+        "delivery_ms": {
+          "mean": 6.65,
+          "p50": 6.622,
+          "p95": 9.284,
+          "stdev": 1.42,
+          "n": 500
+        },
+        "decode_ms": {
+          "mean": 5.196,
+          "p50": 5.199,
+          "p95": 6.62,
+          "stdev": 1.11,
+          "n": 500
+        },
+        "roundtrip_ms": {
+          "mean": 12.528,
+          "p50": 12.735,
+          "p95": 16.392,
+          "stdev": 2.328,
+          "n": 500
+        },
+        "transport_ms": {
+          "mean": 19.098,
+          "p50": 19.394,
+          "p95": 25.015,
+          "stdev": 3.542,
+          "n": 500
+        }
+      }
+    }
+  ],
+  "kombu": {
+    "json_dumps_frame": {
+      "p50": 5.885,
+      "p95": 7.0713,
+      "n": 200,
+      "body_kib": 3600.0
+    },
+    "json_loads_frame": {
+      "p50": 2.6492,
+      "p95": 3.0445,
+      "n": 200
+    },
+    "json_dumps_handle": {
+      "p50": 0.0036,
+      "p95": 0.0066,
+      "n": 200,
+      "body_bytes": 68
+    },
+    "json_loads_handle": {
+      "p50": 0.0038,
+      "p95": 0.0041,
+      "n": 200
+    },
+    "pickle_dumps_frame": {
+      "p50": 0.4653,
+      "p95": 0.5334,
+      "n": 200,
+      "body_kib": 2700.0
+    },
+    "pickle_loads_frame": {
+      "p50": 0.1792,
+      "p95": 0.1943,
+      "n": 200
+    }
+  }
+}

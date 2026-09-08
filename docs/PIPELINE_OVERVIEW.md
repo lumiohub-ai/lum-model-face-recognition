@@ -120,9 +120,12 @@ processes.
 
 ### The problem
 
-A video frame is heavy. Sending one through Redis was measured at **~15.6 ms per 720p frame** —
-slower than running the AI model on it. Sending a tiny note instead ("look at slot 5") costs
-**~0.3 ms**.
+A video frame is heavy. Sending one through Redis, using the same serializer this app actually
+runs, was measured at **~175 ms per 720p frame** — far slower than running the AI model on it,
+and slower even in the cheapest form Redis can manage (JPEG, ~19.8 ms). Sending it through shared
+memory instead — writing it once, reading it once, the actual work either side does — costs
+**~3.05 ms**. Measured head-to-head, same frames, same run:
+[`benchmarks/transport/`](../benchmarks/transport/README.md).
 
 So: like a whiteboard in a hallway. Rather than photocopying a document and mailing it, you write
 it on the board and send a sticky note saying "board 5." Both offices read the same board;

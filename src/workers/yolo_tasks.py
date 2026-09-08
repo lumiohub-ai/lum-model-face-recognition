@@ -17,8 +17,10 @@ latency; re-run the spike before assuming these numbers hold at a much
 higher camera count.
 
 Frames arrive as a `FrameHandle` (shared memory) per request, never as
-pixels: a 720p frame costs ~15.6 ms through a broker versus ~0.3 ms as a
-handle, more than the inference itself. Detections for each request are
+pixels: measured at ~3.05 ms/frame through shared memory versus ~19.8 ms
+through the broker even in the best case (JPEG; production's actual
+json+base64 payload measures ~175 ms) — see benchmarks/transport/README.md
+for the harness and full numbers. Detections for each request are
 forwarded on to `camera.track` on that camera's own pinned queue — this task
 never returns a result to a caller (`ignore_result=True`); the next hop is
 itself a `send_task` call, not a return value.
