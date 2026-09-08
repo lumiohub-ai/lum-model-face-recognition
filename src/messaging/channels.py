@@ -58,4 +58,7 @@ EVENT_TYPES = {
 INTERNAL_CHANNELS = {
     'EMBEDDING_RELOAD': 'internal:embedding:reload',
     'STATUS_RELOAD': 'internal:status:reload',
+    # Camera config changed (e.g. its `application` list). Empty payload:
+    # subscribers re-read from the DB themselves.
+    'CAMERA_CONFIG_RELOAD': 'internal:camera:config:reload',
 }

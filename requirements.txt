@@ -37,6 +37,7 @@ redis~=5.0.1
 
 # Celery for async task processing (MDA)
 celery~=5.4.0
+celery-batches~=0.11
 flower~=2.0.1
 
 # GCS image fetching

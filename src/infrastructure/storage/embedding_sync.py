@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from lum_vision import FaceDetector
 from .pgvector import PgVectorStore
-from .repository import Repository
+from .backend_reader import Repository
 from .url_utils import normalize_image_url
 from .gcs import ImageFetcher
 

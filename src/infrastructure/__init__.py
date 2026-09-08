@@ -8,8 +8,8 @@ External services and I/O operations.
 
 from .storage import PgVectorStore, ImageFetcher, EmbeddingSyncService, Repository
 from .video import StreamHandler, StreamManager, FrameAnnotator
-from .entry_logger import EntryLogger
-from .async_logger import AsyncLogger
+from .attendance_state import EntryLogger
+from .async_write_queue import AsyncLogger
 
 __all__ = [
     # Storage

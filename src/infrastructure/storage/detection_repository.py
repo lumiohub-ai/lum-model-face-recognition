@@ -61,13 +61,57 @@ class DetectionRepository:
         status: str,
         proof_image_url: Optional[str] = None,
     ) -> int:
-        """Insert an attendance record.
+        """Insert an attendance record, unless it duplicates the current state.
+
+        IN is only recorded after an OUT and vice versa; a repeat of the status
+        the user is already in is suppressed. This is the authoritative guard --
+        callers across processes cannot dedup this on their own.
 
         Returns:
-            New record ID
+            New record ID, or 0 if the write was suppressed as a duplicate.
         """
         external_id = str(uuid.uuid4())
         with self._db.get_connection() as conn:
+            # Serialize concurrent writers for this user. Since LSO-67 split
+            # tracking across camera-worker processes, each holds its own
+            # EntryLogger.person_status dict, so the in-memory IN/OUT guard
+            # there only dedups within one camera: two cameras seeing the same
+            # person both believe they observed the transition and both queue
+            # a record. The DB is the only shared state, so the guard has to
+            # live here. Lock the users row first -- under READ COMMITTED both
+            # writers would otherwise read the same stale prior status and
+            # both insert.
+            conn.execute(text(f"""
+                SELECT 1 FROM {self.schema}.users WHERE id = :user_id FOR UPDATE
+            """), {'user_id': user_id})
+
+            prior = conn.execute(text(f"""
+                SELECT status
+                FROM {self.schema}.attendance_records
+                WHERE user_id = :user_id
+                -- Order by id, NOT timestamp. `timestamp` is the caller's
+                -- detection time (per camera-worker process) and is subject to
+                -- clock drift and Celery queue delay, so it does not reflect
+                -- true transition order across processes. `id` is server-
+                -- assigned and, under the FOR UPDATE lock above, is the only
+                -- value guaranteed monotonic with commit order per user -- so
+                -- MAX(id) is the genuinely-latest status. Ordering by timestamp
+                -- could return an out-of-commit-order row and wrongly suppress
+                -- a real transition.
+                ORDER BY id DESC
+                LIMIT 1
+            """), {'user_id': user_id}).fetchone()
+
+            if prior is not None and prior[0] == status.lower():
+                # Already in this state -- a duplicate observation, not a
+                # transition. Roll back the lock and report "no record" so the
+                # caller skips the event publish too.
+                conn.rollback()
+                logger.debug(
+                    f"Skipping duplicate attendance: user={user_id} already {status.lower()}"
+                )
+                return 0
+
             branch_id = self._derive_branch_id(conn, camera_id, user_id)
             result = conn.execute(text(f"""
                 INSERT INTO {self.schema}.attendance_records
@@ -84,9 +128,17 @@ class DetectionRepository:
                 'proof_image_url': proof_image_url,
                 'source': 'ai_detection',
             })
-            conn.commit()
             row = result.fetchone()
-            return row[0] if row else 0
+            if row is None:
+                # RETURNING gave nothing back -- the insert did not land. Fail
+                # loudly rather than returning 0, which now means "suppressed
+                # duplicate" and would silently swallow a real write failure.
+                conn.rollback()
+                raise RuntimeError(
+                    f"attendance insert returned no id (user={user_id}, status={status})"
+                )
+            conn.commit()
+            return row[0]
 
     def save_unrecognized_face(
         self,

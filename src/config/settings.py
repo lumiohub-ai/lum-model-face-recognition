@@ -43,6 +43,18 @@ class Settings:
     celery_result_backend = os.getenv("SO_CELERY_RESULT_BACKEND", f"redis://{redis_host}:{redis_port}/1")
     celery_concurrency = int(os.getenv("SO_CELERY_CONCURRENCY", 2))
 
+    # Camera-worker slot routing (LSO-186). yolo routes each camera's
+    # `camera.track` to `cam-slot-{crc32(id) % N}` instead of a per-camera
+    # `cam.<id>` queue, and each camera-worker replica leases exactly one slot
+    # (see pipeline/slot_lease.py). Hardcoded, NOT an env var: decode, yolo and
+    # camera-worker all run this one image, so a single constant keeps them in
+    # lockstep with zero chance of a per-service env drifting out of agreement.
+    # N MUST equal the camera-worker `replicas` in compose — a replica that
+    # can't lease a slot exits loudly. Changing N remaps every camera to a
+    # different slot (a deliberate rebalance + image rebuild; tracker state
+    # re-inits), so it lives here in code, not in a hot config knob.
+    camera_slot_count = 2
+
     # Google Cloud Storage
     gcs_credentials_path = os.getenv("SO_GCS_CREDENTIALS_PATH", "")
     gcs_bucket = os.getenv("SO_GCS_BUCKET", "hbai-general-data")

@@ -55,6 +55,17 @@ def task_record_attendance(
             status=status,
             proof_image_url=proof_image_url,
         )
+        if record_id == 0:
+            # record_attendance suppressed a duplicate: the user was already in
+            # this state, so no transition happened and there is nothing for the
+            # backend to hear about. Returning early is what actually stops the
+            # duplicate IN/OUT events reaching the dashboard.
+            logger.info(
+                f"[Celery] Attendance skipped (already {status}): user={user_id} {user_name}"
+            )
+            return {'status': 'skipped', 'reason': 'duplicate', 'user_id': user_id,
+                    'attendance_status': status}
+
         logger.info(f"[Celery] Attendance recorded: id={record_id} user={user_id} {status}")
 
         MDAPublisher(client_slug).publish_attendance_recorded(
