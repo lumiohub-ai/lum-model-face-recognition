@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1 (2026-09-08)
+
+## What's Changed
+* build: revert pip wheel-vendoring on dev (forward-port of #103) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/104
+* feat(recognition): branch-scope the embedding register (SO_EDGE_BRANCH_CODE) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/105
+* Promote dev → main: branch-scoped register + Dockerfile revert (→ 0.7.1) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/106
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.0...v0.7.1
+
 ## v0.7.0 (2026-09-08)
 
 ## What's Changed
