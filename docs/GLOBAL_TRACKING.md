@@ -183,6 +183,21 @@ mid-flight (only `global-track-worker` and the camera workers were), so a
 recognition and action-recognition initialization were spot-checked and
 unaffected, but not the focus of this pass.
 
+### The deployment repo (`so.stack`)
+
+`so.stack` pins its own image tag independently of this repo. Its
+`compose.yml` had the same dead socket (`rpc-sockets`, the AF_UNIX
+healthcheck) — removed there too, and verified: bringing that stack up fresh
+took `person-tracking` from permanently `unhealthy` to healthy immediately,
+unblocking every service gated on it.
+
+**`global-track-worker` and `reid-worker` are not yet defined in
+`so.stack`.** Its pinned image predates this split (`lum_vision==0.3.0`), so
+adding those services now would describe containers that cannot run. Add
+them once a released image built from this work actually contains it — see
+that repo's `compose.yml` healthcheck comment on `person-tracking` for the
+pointer left there.
+
 `person-tracking` also uses the register for three things, which move with it since
 the register cannot exist in two places:
 
