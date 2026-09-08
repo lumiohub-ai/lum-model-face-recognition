@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.0 (2026-09-08)
+
+## What's Changed
+* fix(attendance): dedup IN/OUT records across camera-worker processes by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/100
+* feat(workers): self-assigning camera slot routing (LSO-186) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/101
+* Migration from single proccess to delery worked based pipeline by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/98
+* Promote dev → main: LSO-67 Celery-split AI pipeline by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/102
+* build: revert pip wheel-vendoring, restore pre-vendor network install by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/103
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.6.1...v0.7.0
+
 ## v0.6.1 (2026-08-26)
 
 ## What's Changed
