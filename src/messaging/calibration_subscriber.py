@@ -29,6 +29,7 @@ class CalibrationSubscriber(threading.Thread):
 
     def run(self) -> None:
         retry_delay = 1
+        pubsub = None
         channel = EVENT_CHANNELS["CALIBRATION"]
         while not self._stop.is_set():
             try:
@@ -77,3 +78,12 @@ class CalibrationSubscriber(threading.Thread):
                 )
                 time.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30)
+            finally:
+                # Every iteration creates a fresh pubsub (a new connection);
+                # without closing the previous one on retry, each reconnect
+                # leaked the old connection/socket instead of relying on GC.
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass

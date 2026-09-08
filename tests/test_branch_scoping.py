@@ -9,7 +9,7 @@ makes a second site's AI possible at all.
 import unittest
 from unittest.mock import MagicMock, patch
 
-from infrastructure.storage.repository import Repository
+from infrastructure.storage.backend_reader import Repository
 
 
 class _FakeConn:

@@ -213,8 +213,14 @@ properties that `prefetch_multiplier=1` exists to provide.
 
 ## Not covered (deliberately)
 
-`mode=bytes` payloads, the Celery event stream, open-loop rate pacing, golden
-detection-hash verification, `threads -c8`. Measured context for the first:
-JPEG encode 7.9 ms + decode 9.9 ms = **17.8 ms round trip**, and Celery's json
-serializer base64-inflates bytes by 33% (796 KiB per 2560×1440 frame). Worth
-measuring only once `path` mode has a verdict.
+The Celery event stream, open-loop rate pacing, golden detection-hash
+verification, `threads -c8`.
+
+`mode=bytes` payloads (pixels through the broker instead of shared memory) *are*
+now covered — see [`benchmarks/transport/`](../transport/README.md), a
+separate harness built specifically to measure that comparison head-to-head.
+Corrected context: this corpus is 720p, not 2560×1440; a 720p JPEG q90 frame
+is ~806 KiB before base64, and base64 inflates that by 33% again. Raw pixels
+through json+base64 (this app's actual serializer) measured ~175 ms/frame;
+JPEG (the cheapest broker option) ~19.8 ms/frame; shared memory ~3.05 ms/frame
+including both the producer's copy-in and the consumer's copy-out.

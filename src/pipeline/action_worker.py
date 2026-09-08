@@ -29,9 +29,6 @@ class ActionRecognitionWorker:
     extracted: ``enabled``, ``check_interval_seconds`` and ``recognize_async``.
     """
 
-    #: Cap on tracked identities before stale throttle entries are pruned.
-    MAX_TRACKED = 500
-
     def __init__(
         self,
         recognizer: ActionRecognizer,
@@ -74,8 +71,16 @@ class ActionRecognitionWorker:
         self.running = False
 
         # Per-identity throttle, shared across every camera in this engine.
-        self._last_check: Dict[str, float] = {}
-        self._throttle_lock = threading.Lock()
+        # Redis-backed, not an in-process dict: the throttle's whole
+        # job is cross-CAMERA ("classify a person once per interval, not once
+        # per camera"), and cameras now run as Celery tasks in separate
+        # processes where a threading.Lock protects nothing. See
+        # workers/identity_throttle.py.
+        from workers.identity_throttle import RedisIdentityThrottle
+
+        self._throttle = RedisIdentityThrottle(
+            interval_seconds=self.check_interval_seconds
+        )
 
         # Counters (queue-side; model-side counters live on the recognizer)
         self.total_queued = 0
@@ -110,37 +115,28 @@ class ActionRecognitionWorker:
     def reserve_check(self, identity: str, now: Optional[float] = None) -> bool:
         """Claim the right to classify ``identity`` now.
 
-        Atomic compare-and-set: returns True at most once per
-        ``check_interval_seconds`` per identity, no matter how many camera
-        threads ask. Callers that then fail to queue must call
-        :meth:`cancel_check` so the person isn't skipped for a whole interval.
+        Atomic across processes, not just threads: returns True at most once
+        per ``check_interval_seconds`` per identity no matter how many camera
+        workers ask, which is what stops a person seen on three cameras from
+        triggering three VLM inferences. Callers that then fail to queue must
+        call :meth:`cancel_check` so the person isn't skipped for a whole
+        interval.
 
         Args:
             identity: Recognized person name
-            now: Override for the current time (tests)
+            now: Ignored. Kept for signature compatibility with the previous
+                 in-process implementation, whose tests injected a clock;
+                 expiry is now the Redis server's own, so there is no local
+                 clock to override.
 
         Returns:
             True if the caller should run inference for this identity
         """
-        current = time.time() if now is None else now
-        interval = self.check_interval_seconds
-
-        with self._throttle_lock:
-            if current - self._last_check.get(identity, 0.0) < interval:
-                return False
-            self._last_check[identity] = current
-
-            if len(self._last_check) > self.MAX_TRACKED:
-                cutoff = current - interval * 2
-                for key in [k for k, t in self._last_check.items() if t < cutoff]:
-                    del self._last_check[key]
-
-            return True
+        return self._throttle.reserve(identity)
 
     def cancel_check(self, identity: str) -> None:
         """Release a reservation whose work never got queued."""
-        with self._throttle_lock:
-            self._last_check.pop(identity, None)
+        self._throttle.cancel(identity)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -437,6 +433,11 @@ class ActionRecognitionWorker:
             total_posted=self.total_posted,
             total_too_small=self.total_too_small,
             pending_callbacks=len(self.result_callbacks),
-            tracked_identities=len(self._last_check),
+            # Replaces the old `tracked_identities` gauge: the throttle's keys
+            # now live in Redis with their own expiry, and counting them would
+            # cost a SCAN per stats call. Whether the throttle is degraded is
+            # the fact worth surfacing anyway -- when it is, every action check
+            # is being declined.
+            throttle_degraded=self._throttle.degraded,
         )
         return stats

@@ -64,6 +64,12 @@ services:
       # it on first start rather than assuming the old model volume applies.
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
+      # The two Unix RPC sockets this process serves to camera-worker. They
+      # MUST live on a volume both containers mount — each container has its
+      # own /tmp, so a socket there is invisible to the other, and the
+      # clients degrade silently to "no detections" rather than failing loudly.
+      - rpc-sockets:/run/lumiohub
+      - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     ports:
@@ -74,23 +80,117 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'python' > /dev/null 2>&1"]
+      # Connects to the RPC socket rather than checking the process exists:
+      # `pgrep python` goes green the instant the interpreter starts, but the
+      # socket only binds after model warm-up (engine.py's run()), so the
+      # workers' `depends_on: service_healthy` was gating on nothing. connect()
+      # on AF_UNIX fails with ECONNREFUSED when the file exists but nothing is
+      # listening, which a file-existence test would miss.
+      #
+      # ONE socket, not two: gpu-worker-rpc.sock (the GPU-inference RPC to the
+      # now-deleted GPUInferenceWorker) is gone — YOLO/face batching moved
+      # into their own workers via docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md's
+      # per-camera-queue design. gpu-rpc.sock (GlobalTrackManager) is
+      # untouched by that change and is still the one socket this process
+      # serves.
+      #
+      # python3, NOT python: the image installs python3.10 with no
+      # python-is-python3, so `python` here would fail forever and nothing
+      # that depends on this service would ever start.
+      test: ["CMD-SHELL", "python3 -c \"import socket;socket.socket(socket.AF_UNIX).connect('/run/lumiohub/gpu-rpc.sock')\" 2>/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # Covers model warm-up before the sockets bind. Too low and the whole
+      # stack never comes up, since three services gate on this.
+      start_period: 180s
     deploy:
       resources:
+        # Lowered from 4.0/2.0: this process no longer decodes any camera
+        # (see decode-worker, below) — decoding was the CPU cost this limit
+        # was originally sized for, and starving GlobalTrackManager's RPC
+        # socket under that decode load is exactly the bug this split
+        # fixes (docs/FOLLOW_UPS.md item 5). What remains here — the
+        # identity register, the dashboard, action-recognition
+        # orchestration — is comparatively light. Re-measure on the target
+        # host after rollout (`docker stats`) rather than trusting this
+        # number blindly; it has not been isolated and confirmed the way
+        # the pre-split 4.0 limit was.
         limits:
-          cpus: '4.0'
-          memory: 8G
-        reservations:
           cpus: '2.0'
-          memory: 4G
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
           devices:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  # decode-worker: every replica is identical and interchangeable — it
+  # claims cameras up to SO_DECODE_WORKER_CAPACITY via a short-lived Redis
+  # lease (pipeline/camera_lease.py), not a computed formula. See
+  # docs/FOLLOW_UPS.md item 5 and the LSO-179 design for why:
+  # `camera_id % N` reshuffles almost every camera whenever the replica
+  # count changes, which decoding doesn't need to tolerate — a lease
+  # scheme does, with no hysteresis state machine or control-plane polling.
+  #
+  # Replica count and per-worker capacity are config, sized by a human for
+  # the TARGET host — not auto-scaled (that layer was deliberately left
+  # out, see the design doc). Size N+1, not exact-fit: e.g. for 12 cameras
+  # at capacity 6, run 3 replicas (18 slots), not 2 (12 slots) — so losing
+  # any single replica still leaves enough capacity across the survivors.
+  # Measure `nproc` and real per-camera decode cost on the target host
+  # before picking numbers; do not assume this repo's dev-box figures
+  # apply. Like camera-worker (post-LSO-186), this is one service with
+  # interchangeable, self-assigning replicas — decode claims cameras via a
+  # Redis lease, camera-worker leases a slot.
+  decode-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    # No depends_on person-tracking: unlike camera-worker/yolo-worker/
+    # face-worker, this process never calls person-tracking's RPC socket —
+    # it only needs Redis and Postgres, which it degrades against on its
+    # own (CameraLeaseManager, load_cameras_from_db) rather than blocking
+    # startup on. Gating it on person-tracking's ~180s health start_period
+    # would only delay the very thing this split exists to speed up.
+    volumes:
+      - ./.env:/app/.env:ro
+      - frame-shm:/dev/shm
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SO_DECODE_WORKER_CAPACITY: ${SO_DECODE_WORKER_CAPACITY:-6}
+      # 60s, not a tighter number: must exceed the worst-case time one
+      # reconcile pass can take to claim+start every camera up to
+      # SO_DECODE_WORKER_CAPACITY (each RTSP connect is ~1.5-2s, not
+      # instant) — see decode_main.py's _LEASE_TTL_S comment for the
+      # live-observed race this margin exists to avoid.
+      SO_DECODE_LEASE_TTL_S: ${SO_DECODE_LEASE_TTL_S:-60}
+    command: python3 -m src.decode_main
+    deploy:
+      replicas: ${SO_DECODE_WORKER_REPLICAS:-1}
+      resources:
+        # ~1 CPU core per 1440p camera decoded (measured: person-tracking's
+        # decode load was ~600% for 6 cameras before this split). Capped
+        # below SO_DECODE_WORKER_CAPACITY's default (6) would throttle
+        # decode inside its own new container — the exact starvation this
+        # split exists to fix, just moved, not removed. Raise both together
+        # if SO_DECODE_WORKER_CAPACITY is raised for the target host.
+        limits:
+          cpus: '6.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
     logging:
       driver: json-file
       options:
@@ -111,13 +211,19 @@ services:
       # face model from here rather than downloading its own copy.
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
+      - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
     healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -140,8 +246,181 @@ services:
         max-size: "50m"
         max-file: "10"
 
+  # camera-worker: identical replicas that self-assign a slot (LSO-186).
+  # Each replica leases one of N slots from Redis at boot (src/camera_boot.py)
+  # and consumes only cam-slot-<n>; yolo routes each camera to
+  # cam-slot-{crc32(id) % N}. No hand-maintained -Q list — a camera added in
+  # the app hashes to a slot a worker already consumes, no restart. N is
+  # hardcoded in settings.camera_slot_count (2); replicas MUST equal it (a
+  # replica that can't lease a slot exits loudly). This is dev/local compose;
+  # the deployed stack lives in the lum-stack repo.
+  #
+  # --pool=solo (set inside camera_boot): one process, one task at a time —
+  # what makes each worker's per-camera tracker state safe without a lock, so
+  # process_frame's tracker mutations for a camera never interleave.
+  camera-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - rpc-sockets:/run/lumiohub
+      - frame-shm:/dev/shm
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
+    command: python3 -m src.camera_boot
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 2                # MUST equal settings.camera_slot_count (N=2)
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  yolo-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - frame-shm:/dev/shm
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Preload only this worker's own model. Without it every worker
+      # loads both (worker_process_init is app-global) — see yolo_tasks.py.
+      SO_WORKER_PRELOAD: yolo
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
+    # --prefetch-multiplier=32 is load-bearing, not a performance tweak:
+    # yolo.detect is a celery-batches Batches task, which only acks a
+    # request after its flush completes — so the worker's buffer can never
+    # hold more than `worker_prefetch_multiplier` unacked requests at once.
+    # At the app-wide default of 1, every batch would be capped at size 1,
+    # defeating the entire point of batching. Verified in the go/no-go spike
+    # (benchmarks/celery_batches_spike/README.md): mean batch size 2.17 at
+    # this setting, vs. exactly 1.0 with prefetch=1.
+    command: celery -A workers.celery_app worker -Q yolo -l warning --pool=solo --prefetch-multiplier=32
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  face-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - frame-shm:/dev/shm
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SO_WORKER_PRELOAD: face
+      # Celery refuses to start as root when pickle deserialization is
+      # enabled (accept_content includes 'pickle', needed for the numpy
+      # in face results). The image has no USER, so it runs as root.
+      C_FORCE_ROOT: "1"
+    command: celery -A workers.celery_app worker -Q face -l warning --pool=solo
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
 volumes:
   ollama-data:
+    driver: local
+  # Holds the two Unix RPC sockets person-tracking serves to camera-worker.
+  # A volume rather than a bind mount: socket inodes stay out of the repo tree.
+  rpc-sockets:
+    driver: local
+  # POSIX shared memory for the frame transport. `ipc:` shares the IPC
+  # NAMESPACE but not the /dev/shm MOUNT, and multiprocessing.shared_memory
+  # is backed by files under /dev/shm — so without this every worker sees an
+  # empty /dev/shm and each task bails out before inference.
+  frame-shm:
     driver: local
 
 networks:

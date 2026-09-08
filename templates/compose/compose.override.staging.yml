@@ -1,3 +1,11 @@
+# Staging override. Copy to the repo root to activate it:
+#
+#     cp templates/compose/compose.override.staging.yml compose.override.yml
+#
+# Identical to the prod override except SO_LOG_LEVEL: DEBUG throughout — same
+# image, same no-bind-mount policy, so staging exercises the artifact that
+# ships. Sizing (SO_DECODE_WORKER_REPLICAS, SO_DECODE_WORKER_CAPACITY) lives
+# in .env, measured on the target host.
 services:
   ollama:
     restart: unless-stopped
@@ -8,6 +16,26 @@ services:
       SO_LOG_LEVEL: DEBUG
 
   celery-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: DEBUG
+
+  camera-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: DEBUG
+
+  yolo-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: DEBUG
+
+  face-worker:
+    restart: unless-stopped
+    environment:
+      SO_LOG_LEVEL: DEBUG
+
+  decode-worker:
     restart: unless-stopped
     environment:
       SO_LOG_LEVEL: DEBUG

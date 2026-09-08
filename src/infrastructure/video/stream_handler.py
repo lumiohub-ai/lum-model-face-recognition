@@ -53,6 +53,18 @@ class StreamHandler:
         # NO QUEUE - use latest frame only to prevent jitter and lag
         self.latest_frame = None
         self.latest_ret = False
+        # Incremented once per GENUINELY new frame off the stream (see
+        # update()). `read()` deliberately returns the latest frame whether
+        # or not the caller has already seen it — correct for a viewer, but
+        # a per-frame pipeline that polls faster than the stream delivers
+        # would otherwise re-process the same pixels repeatedly. Measured
+        # live before this existed: CeleryCameraProducer was enqueueing
+        # ~51% duplicate frames, doubling GPU load and cycling the
+        # shared-memory ring fast enough to drop real frames. Callers that
+        # must act once per frame use read_with_seq() and skip an unchanged
+        # seq; callers that just want "whatever is on screen now"
+        # (calibration, dashboards) keep using read().
+        self.frame_seq: int = 0
         self.reconnect_delay = 1  # Initial delay between reconnection attempts
         self.max_delay = 30  # Maximum delay between reconnection attempts
         self.last_gc_time = time.time()
@@ -297,6 +309,10 @@ class StreamHandler:
             with self.lock:
                 self.latest_ret = ret
                 self.latest_frame = frame
+                # Bumped under the SAME lock that publishes the frame, so a
+                # reader taking both together (read_with_seq) can never pair
+                # a new frame with a stale seq or vice versa.
+                self.frame_seq += 1
 
             # Periodically run garbage collection
             current_time = time.time()
@@ -349,6 +365,42 @@ class StreamHandler:
                 self.ret = self.latest_ret
                 self.frame = self.latest_frame
             return self.ret, self.frame
+
+    def read_with_seq(self) -> Tuple[bool, Any, int]:
+        """Like `read()`, but also returns the frame's sequence number, so a
+        caller can tell a genuinely new frame from one it has already seen.
+
+        `read()` alone cannot: it returns whatever the background thread last
+        published, so a caller polling faster than the stream delivers gets
+        the same pixels back repeatedly. That is correct for "show me the
+        current picture" callers, but a per-frame pipeline needs to act once
+        per frame — measured live, CeleryCameraProducer was re-enqueueing
+        ~51% of frames it had already sent, doubling GPU work and cycling
+        the shared-memory ring fast enough to drop frames that were never
+        processed at all.
+
+        The frame and its seq are taken under one lock acquisition, so they
+        always correspond; comparing the returned seq against the last one
+        acted on is what makes "only on a new frame" reliable rather than
+        timing-dependent.
+        """
+        if self.is_video:
+            # A file has no background thread: every successful read is a
+            # genuinely new frame by construction, so just advance the
+            # counter to keep the caller's compare-and-skip logic uniform
+            # across both source types.
+            ret, frame = self.read()
+            if ret:
+                with self.lock:
+                    self.frame_seq += 1
+                    return ret, frame, self.frame_seq
+            return ret, frame, self.frame_seq
+
+        with self.lock:
+            if self.latest_frame is not None:
+                self.ret = self.latest_ret
+                self.frame = self.latest_frame
+            return self.ret, self.frame, self.frame_seq
 
     def stop(self) -> None:
         """Stop the frame reading thread and release resources."""

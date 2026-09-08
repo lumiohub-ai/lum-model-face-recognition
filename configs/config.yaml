@@ -72,6 +72,7 @@ pipeline:
   recognition_interval: 3      # run ArcFace every N detection frames
   async_queue_size: 500        # AsyncLogger queue depth (db/redis); GCS uses 200
 
+
 # Monitoring & alerting thresholds
 monitoring:
   fps_alert_threshold: 15.0    # alert if any camera FPS drops below this

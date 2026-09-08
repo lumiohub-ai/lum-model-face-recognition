@@ -1,10 +1,22 @@
 """SmartOfficeEngine - Unified person tracking and face recognition system.
 
-Architecture (parallel multi-camera):
-- GPUInferenceWorker: single thread owns the GPU, batches YOLO + ArcFace
-- CameraWorker: one thread per camera (frame read + CPU processing)
-- AsyncLogger: three background I/O threads (db, gcs, redis)
-- StreamManager/StreamHandler: background threads for RTSP read (existing)
+Camera decoding runs in its own process(es) now (decode_main.py,
+docs/FOLLOW_UPS.md item 5) — each claims a set of cameras via a Redis lease
+(pipeline/camera_lease.py) and hands frames to the `yolo` queue directly.
+This process no longer decodes anything or owns a StreamHandler; it holds
+only the cross-camera identity state (GlobalTrackManager), served to
+camera-worker over the one remaining RPC socket
+(workers/global_track_rpc.py). The GPU inference RPC middleman
+(GPUInferenceWorker + gpu_worker_rpc.py) that used to live here was deleted
+once YOLO/face batching moved into their own Celery workers directly (see
+docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md).
+
+Two things a decode process needs from this one, now bridged instead of
+called directly (see pipeline/decode_metrics.py and
+workers/frame_store.py's RawFrameSlot): the dashboard's stream-health
+gauges, and a live frame for calibration commands. Both used to be
+synchronous calls onto a StreamHandler this process owned; both are now
+reads of something the decode worker publishes.
 """
 
 import threading
@@ -17,8 +29,9 @@ from loguru import logger
 from config.settings import settings
 
 # Infrastructure
-from infrastructure.video import StreamManager
 from infrastructure import EntryLogger
+from messaging import RedisClient
+from messaging.channels import INTERNAL_CHANNELS
 from infrastructure.storage import Repository, EmbeddingSyncService, PgVectorStore
 
 # Models
@@ -28,22 +41,17 @@ from lum_vision import ModelFactory, VisionConfig
 from config import load_cameras_from_db, build_vision_config
 
 # Local
-from pipeline.camera_engine import CameraEngine
-
-from pipeline.gpu_worker import GPUInferenceWorker
-from pipeline.camera_worker import CameraWorker
-from pipeline.action_worker import ActionRecognitionWorker
-from infrastructure.async_logger import AsyncLogger
-from infrastructure.video.annotator import FrameAnnotator
+from pipeline.decode_metrics import read_raw_frame, read_stream_health
+from pipeline.infer_metrics import read_infer_latency
 
 
 class SmartOfficeEngine:
     """Unified engine for Smart Office person tracking and face recognition.
 
-    Replaces the sequential FrameProcessor loop with a parallel architecture:
-      - GPUInferenceWorker batches inference across all camera threads
-      - CameraWorker runs one thread per camera for frame read + CPU processing
-      - AsyncLogger offloads all I/O to background threads
+    Decoding, YOLO batching and tracking all run in other processes now —
+    see the module docstring. This process holds the cross-camera identity
+    state and the dashboard/calibration bridges to what decode workers
+    publish.
     """
 
     def __init__(
@@ -66,7 +74,6 @@ class SmartOfficeEngine:
         pipeline_cfg = kwargs.get("pipeline", {})
         self._detection_interval: int = pipeline_cfg.get("detection_interval", 2)
         self._recognition_interval: int = pipeline_cfg.get("recognition_interval", 5)
-        self._async_queue_size: int = pipeline_cfg.get("async_queue_size", 500)
 
         # Database repository
         self.repository = Repository(client_slug)
@@ -92,23 +99,13 @@ class SmartOfficeEngine:
                 build_vision_config(self.config),
                 embedding_provider=self.pgvector_store,
             )
-            self.models.initialize_all()
-            self._owns_models = True
+            # Not initialize_all(): that would eagerly load YOLO, which
+            # belongs to the `yolo` Celery worker. Shares main.py's helper
+            # so the two startup paths can't drift.
+            from main import _warm_up_models
 
-        # Action recognition: the model is synchronous, so the queue and worker
-        # threads that drive it are owned here. Constructed now because the
-        # camera engines need the reference; started in run(), once the
-        # AsyncLogger it uploads through exists.
-        action_cfg = kwargs.get("action_recognition", {}) or {}
-        self.action_worker = ActionRecognitionWorker(
-            recognizer=self.models.action_recognizer,
-            client_slug=client_slug,
-            max_queue_size=action_cfg.get("max_queue_size", 50),
-            num_workers=action_cfg.get("async_workers", 1),
-            min_crop_height=action_cfg.get("min_crop_height", 0),
-            min_crop_width=action_cfg.get("min_crop_width", 0),
-            min_crop_area=action_cfg.get("min_crop_area", 0),
-        )
+            _warm_up_models(self.models)
+            self._owns_models = True
 
         # Sync missing embeddings on startup
         self._sync_embeddings_on_startup()
@@ -116,27 +113,20 @@ class SmartOfficeEngine:
         # Build name → user_id mapping
         self.name_to_id_map = self._build_name_to_id_map()
 
-        # Initialize video streams
-        self.stream_manager = StreamManager(self.camera_configs)
-        self.stream_manager.init_streams()
-
-        self.save_video = kwargs.get("save_video", False)
-        if self.save_video:
-            output_dir = kwargs.get("output_dir", "volumes/storage/person-tracking")
-            self.stream_manager.init_video_writers(output_dir)
-            self._annotator = FrameAnnotator()
-        else:
-            self._annotator = None
-
-        # Homography registry + calibration subscriber 
-        from domain.calibration.homography_registry import HomographyRegistry
-        from messaging.calibration_subscriber import CalibrationSubscriber
-        self.homography_registry = HomographyRegistry()
-        self._calibration_subscriber = CalibrationSubscriber(self.homography_registry)
-        self._calibration_subscriber.start()
-
-        # Initialize per-camera engines (CPU-only components)
-        self.camera_engines = self._init_camera_engines()
+        # Decoding (and any recording built on it) now lives in
+        # decode_main.py's DecodeWorker processes, not here — see the
+        # module docstring. save_video was a StreamManager feature this
+        # process no longer has a StreamManager to drive; recording is not
+        # yet ported to the decode worker (see docs/FOLLOW_UPS.md), so this
+        # loudly refuses rather than silently doing nothing.
+        if kwargs.get("save_video", False):
+            logger.warning(
+                "save_video=True requested, but recording is not yet "
+                "supported from the decode-worker process — ignoring. "
+                "See docs/FOLLOW_UPS.md."
+            )
+        self.save_video = False
+        self._annotator = None
 
         # Entry logger (handles status tracking + Celery dispatch)
         self.entry_logger = self._init_entry_logger()
@@ -176,31 +166,13 @@ class SmartOfficeEngine:
             self._metrics_store = None
             self._metrics_dashboard = None
 
-        # GPU worker (shared across all cameras). Keyed by DB camera id so a
-        # camera can leave the set without re-pointing every other camera's
-        # queues (LSO-130).
-        self.gpu_worker = GPUInferenceWorker(
-            detector=self.models.person_detector,
-            face_detector=self.models.face_detector,
-            camera_ids=self._camera_ids(),
-            metrics_collector=self.metrics,
-        )
+        # How camera-worker reaches this process's GlobalTrackManager. YOLO
+        # and face batching no longer route through this process at all —
+        # frame_pump hands frames straight to the `yolo` queue; see
+        # docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md.
+        from workers.global_track_rpc import GpuRpcServer
 
-        # Async logger (non-blocking I/O)
-        self.async_logger = AsyncLogger(
-            entry_logger=self.entry_logger,
-            async_queue_size=self._async_queue_size,
-        )
-        # The action worker is constructed early (before models/metrics/logger
-        # exist) so it can start its threads as soon as models are ready. Wire
-        # its late-bound dependencies now that both exist — without this,
-        # action-recognition metrics stay permanently zero (LSO-66) and
-        # activity proof images are silently dropped rather than uploaded.
-        self.action_worker.set_metrics_collector(self.metrics)
-        self.action_worker.set_async_logger(self.async_logger)
-
-        # One CameraWorker per camera
-        self.camera_workers = self._init_camera_workers()
+        self._gpu_rpc_server = GpuRpcServer(self.models.global_track_manager)
 
         logger.debug(
             f"SmartOfficeEngine initialised: {len(self.camera_configs)} camera(s), "
@@ -246,28 +218,6 @@ class SmartOfficeEngine:
 
         return ids
 
-    def _init_camera_engines(self) -> List[CameraEngine]:
-        engines = []
-        for config in self.camera_configs:
-            # Gate thresholds (LSO-7) are global config.yaml, not per-camera DB —
-            # inject so CameraEngine._best_face_signals can prefer passing frames.
-            config["unrecognized_frontality_min"] = self.config.get("unrecognized_frontality_min", 0.6)
-            config["unrecognized_pitch_min"] = self.config.get("unrecognized_pitch_min", 0.4)
-            engine = CameraEngine(
-                camera_config=config,
-                face_detector=self.models.face_detector,
-                face_recognizer=self.models.face_matcher,
-                person_detector=self.models.person_detector,
-                client_slug=self.client_slug,
-                global_id_generator=self.models.global_id_generator,
-                name_to_id_map=self.name_to_id_map,
-                global_track_manager=self.models.global_track_manager,
-                action_recognizer=self.action_worker,
-                homography_registry=self.homography_registry,
-            )
-            engines.append(engine)
-        return engines
-
     def _init_entry_logger(self) -> EntryLogger:
         args = type("Args", (), {})()
         args.client_slug = self.client_slug
@@ -278,31 +228,6 @@ class SmartOfficeEngine:
         args.unrecognized_frontality_min = self.config.get("unrecognized_frontality_min", 0.6)
         args.unrecognized_pitch_min = self.config.get("unrecognized_pitch_min", 0.4)
         return EntryLogger(args=args)
-
-    def _init_camera_workers(self) -> List[CameraWorker]:
-        workers = []
-        for config, engine in zip(self.camera_configs, self.camera_engines):
-            camera_id = config.get("camera_id")
-            video_writer = (
-                self.stream_manager.video_writers.get(camera_id)
-                if self.save_video
-                else None
-            )
-            worker = CameraWorker(
-                camera_id=camera_id,
-                camera_config=config,
-                camera_engine=engine,
-                gpu_worker=self.gpu_worker,
-                async_logger=self.async_logger,
-                stream_handler=self.stream_manager.streams.get(camera_id),
-                detection_interval=self._detection_interval,
-                recognition_interval=self._recognition_interval,
-                annotator=self._annotator,
-                video_writer=video_writer,
-                metrics_collector=self.metrics,
-            )
-            workers.append(worker)
-        return workers
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -315,23 +240,10 @@ class SmartOfficeEngine:
         self._running = True
         self._start_time = time.time()
 
-        # Start background streams
-        self.stream_manager.start_streams()
-
-        # Start GPU worker thread
-        self.gpu_worker.start()
-
-        # Start async logger workers
-        self.async_logger.start()
-
-        # Start action recognition workers (after the AsyncLogger they upload through).
-        # The late-bound async_logger/metrics wiring dev added here already happens
-        # earlier in __init__, so only the start call belongs at this point.
-        self.action_worker.start_workers()
-
-        # Start camera worker threads
-        for worker in self.camera_workers:
-            worker.start()
+        # Serve global-track state to camera-worker. Decoding runs
+        # elsewhere now — see decode_main.py — so there is nothing to start
+        # here for streams or camera producers.
+        self._gpu_rpc_server.start()
 
         # Start monitoring dashboard
         if self._metrics_enabled:
@@ -398,19 +310,33 @@ class SmartOfficeEngine:
 
             if old_ids == new_ids:
                 for new_config in new_configs:
-                    for i, old_config in enumerate(self.camera_configs):
-                        if old_config.get("camera_id") == new_config.get("camera_id"):
-                            self.camera_configs[i] = new_config
-                            for engine in self.camera_engines:
-                                if engine.camera_id == new_config.get("camera_id"):
-                                    engine.application = new_config.get(
-                                        "application", ["attendance"]
-                                    )
-                                    logger.info(
-                                        f"Updated camera {engine.camera_id} "
-                                        f"applications: {engine.application}"
-                                    )
-                            break
+                    for old_config in self.camera_configs:
+                        if old_config.get("camera_id") != new_config.get("camera_id"):
+                            continue
+                        # LSO-155: a rename/re-IP keeps the same camera_id but
+                        # changes stream_url. The old code rebound this list
+                        # slot to a brand-new dict (self.camera_configs[i] =
+                        # new_config), which a long-lived reader holding
+                        # `old_config` would never see. Mutating in place
+                        # instead means anything holding this same dict
+                        # object sees the update for free — this process no
+                        # longer decodes, so the reader that matters now is
+                        # each decode-worker's CeleryCameraProducer, in a
+                        # different process. It cannot share this object; it
+                        # reaches the same in-place-mutation outcome itself,
+                        # via its own DecodeWorker._sync_config, triggered by
+                        # the CAMERA_CONFIG_RELOAD publish below.
+                        #
+                        # Update-then-remove, never clear()-then-update: a
+                        # concurrent reader (e.g. this process's own
+                        # `_camera_ids()`) could otherwise see an empty
+                        # config mid-reload. Growing then shrinking never
+                        # exposes an empty dict. Same pattern as
+                        # camera_tasks.py's on_embedding_reload.
+                        old_config.update(new_config)
+                        for key in [k for k in old_config if k not in new_config]:
+                            old_config.pop(key, None)
+                        break
                 logger.info(
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
                 )
@@ -422,6 +348,12 @@ class SmartOfficeEngine:
                 self.camera_configs = new_configs
                 self.stop()
 
+            # Notify the camera workers in both branches: they hold their own
+            # CameraEngine per camera and re-read config from the DB, and the
+            # restart above restarts this engine, not their container.
+            RedisClient.get_instance().publish(
+                INTERNAL_CHANNELS["CAMERA_CONFIG_RELOAD"], {}
+            )
             return True
 
         except Exception as e:
@@ -440,8 +372,6 @@ class SmartOfficeEngine:
             self.models.face_matcher.reload_embeddings()
 
             self.name_to_id_map = self._build_name_to_id_map()
-            for engine in self.camera_engines:
-                engine.name_to_id_map = self.name_to_id_map
 
             self.entry_logger.current_users = self.models.face_matcher.db_names
             self.entry_logger.name_to_id = [
@@ -501,9 +431,7 @@ class SmartOfficeEngine:
         max_frame_age_sec = 5.0
 
         try:
-            frame = self.stream_manager.get_fresh_frame(
-                camera_id, max_age_sec=max_frame_age_sec
-            )
+            frame = read_raw_frame(camera_id, max_age_sec=max_frame_age_sec)
             if frame is None:
                 error = (
                     f"No live frame within {max_frame_age_sec:.0f}s for camera {camera_id}"
@@ -715,7 +643,7 @@ class SmartOfficeEngine:
         publisher = MDAPublisher(self.client_slug)
 
         try:
-            frame = self.stream_manager.get_frame(camera_id)
+            frame = read_raw_frame(camera_id)
             if frame is None:
                 logger.warning(f"test_calibration: no frame for camera {camera_id}")
                 publisher.publish_calibration_failed(
@@ -808,56 +736,12 @@ class SmartOfficeEngine:
     def _register_pipeline_gauges(self) -> None:
         """Expose live pipeline sizes to the metrics collector.
 
-        These are the counts that reveal *why* memory moves. Per-track state is
-        bounded (history capped, `remove_track` on disappearance), so total
-        memory scales with how many tracks are alive — without these gauges a
-        growing footprint is indistinguishable from a leak.
-
-        Crops dominate the per-track cost: `max_crops` full-resolution person
-        crops each, so `tracks` multiplied by that is the real memory driver.
+        The per-track gauges (tracks/crops/identities/states) used to live
+        here. That state belongs to the camera Celery workers now, so this
+        process cannot see it — a constant 0 would be worse than no gauge at
+        all. Reinstating them means collecting over RPC.
         """
-        engines = self.camera_engines
         _MISSING = object()  # distinguishes "attribute doesn't exist" from "value is None"
-
-        def _check_attr_chain(label: str, attr: str, sub: str) -> None:
-            """Verify attr/sub actually resolve on a live engine, once at
-            startup. _sum()'s getattr(..., None) fallback means a renamed
-            attribute (this reaches into lum_vision, an external package not
-            visible in this repo) would otherwise report a silent, permanent
-            0 forever - indistinguishable from "genuinely empty" and exactly
-            the false-flat signal that could mislead the next leak
-            investigation this instrumentation exists to catch."""
-            if not engines:
-                return
-            mgr = getattr(engines[0], attr, _MISSING)
-            if mgr is _MISSING:
-                logger.warning(f"[metrics] gauge '{label}': camera engine has no attribute '{attr}' - will always report 0")
-                return
-            if getattr(mgr, sub, _MISSING) is _MISSING:
-                logger.warning(f"[metrics] gauge '{label}': '{attr}' has no attribute '{sub}' - will always report 0")
-
-        def _sum(attr: str, sub: str) -> int:
-            total = 0
-            for e in engines:
-                mgr = getattr(e, attr, None)
-                coll = getattr(mgr, sub, None) if mgr is not None else None
-                if coll is not None:
-                    total += len(coll)
-            return total
-
-        _check_attr_chain("tracks", "track_manager", "track_bbox_history")
-        _check_attr_chain("crops", "track_manager", "track_crop_history")
-        _check_attr_chain("identities", "identity_manager", "locked_identities")
-        _check_attr_chain("states", "state_manager", "person_states")
-
-        self.metrics.register_gauge("tracks", lambda: _sum("track_manager", "track_bbox_history"))
-        self.metrics.register_gauge("crops", lambda: sum(
-            len(frames)
-            for e in engines
-            for frames in getattr(getattr(e, "track_manager", None), "track_crop_history", {}).values()
-        ))
-        self.metrics.register_gauge("identities", lambda: _sum("identity_manager", "locked_identities"))
-        self.metrics.register_gauge("states", lambda: _sum("state_manager", "person_states"))
 
         gtm = self.models.global_track_manager
         if gtm is not None:
@@ -865,41 +749,72 @@ class SmartOfficeEngine:
                 logger.warning("[metrics] gauge 'global_tracks': global_track_manager has no attribute 'global_tracks' - will always report 0")
             self.metrics.register_gauge("global_tracks", lambda: len(gtm.global_tracks))
 
-        # Split cap.read() into its two halves: grab() (read_ms) is time spent
+        # Split "read" into its two halves: grab() (read_ms) is time spent
         # BLOCKED waiting for the next frame off the network/demuxer - a
         # stalled camera shows up here. retrieve() (decode_ms) is the actual
         # CPU cost of decoding a frame that already arrived - the dominant CPU
         # consumer at high camera counts. Conflating them (as one cap.read()
         # timer previously did) hides which one is actually the problem.
-        streams = self.stream_manager.streams
+        #
+        # These no longer come from a StreamHandler this process owns —
+        # decoding runs in decode_main.py's DecodeWorker processes now, so
+        # each gauge reads what that worker last published to Redis
+        # (pipeline/decode_metrics.py). A camera with no decode worker
+        # currently holding it (starting up, or genuinely unclaimed) simply
+        # reads back {} — that's "no data", not an error.
+        camera_ids = self._camera_ids()
 
         def _read_ms(camera_id: int) -> float:
-            s = streams.get(camera_id)
-            return s.get_read_avg_ms() if s is not None else 0.0
+            return read_stream_health(camera_id).get("read_ms", 0.0)
 
         def _decode_ms(camera_id: int) -> float:
-            s = streams.get(camera_id)
-            return s.get_decode_avg_ms() if s is not None else 0.0
+            return read_stream_health(camera_id).get("decode_ms", 0.0)
 
         def _stream_state(camera_id: int):
-            s = streams.get(camera_id)
-            return s.get_health()["state"] if s is not None else None
+            return read_stream_health(camera_id).get("state")
 
         self.metrics.register_camera_gauge("read_ms", _read_ms)
         self.metrics.register_camera_gauge("decode_ms", _decode_ms)
         self.metrics.register_camera_gauge("stream_state", _stream_state)
-        self.metrics.register_gauge("read_ms_avg", lambda: round(
-            sum(s.get_read_avg_ms() for s in streams.values()) / len(streams), 1
-        ) if streams else 0.0)
-        self.metrics.register_gauge("decode_ms_avg", lambda: round(
-            sum(s.get_decode_avg_ms() for s in streams.values()) / len(streams), 1
-        ) if streams else 0.0)
+
+        def _avg(field: str) -> float:
+            values = [read_stream_health(cid).get(field, 0.0) for cid in camera_ids]
+            return round(sum(values) / len(values), 1) if values else 0.0
+
+        self.metrics.register_gauge("read_ms_avg", lambda: _avg("read_ms"))
+        self.metrics.register_gauge("decode_ms_avg", lambda: _avg("decode_ms"))
+
+        # fps is published by the decode worker alongside read_ms/decode_ms
+        # (it samples CeleryCameraProducer's frame counter per tick), rather
+        # than coming from MetricsCollector.record_frame — that path only
+        # fires for an in-process producer, which no longer exists.
+        def _fps(camera_id: int) -> float:
+            return read_stream_health(camera_id).get("fps", 0.0)
+
+        self.metrics.register_camera_gauge("fps", _fps)
+        self.metrics.register_gauge("fps_avg", lambda: _avg("fps"))
+
+        # GPU-stage latency, published per worker PROCESS rather than per
+        # camera (these queues are cross-camera and horizontally scaled), so
+        # these are fleet-wide averages over the interval between polls — not
+        # attributable to any one camera. Blank rather than 0 when no worker
+        # of that stage is up: see infer_metrics.read_infer_latency.
+        def _infer(stage: str, field: str):
+            def _read():
+                return read_infer_latency(stage).get(field)
+
+            return _read
+
+        self.metrics.register_gauge("yolo_batch_avg_ms", _infer("yolo", "batch_avg_ms"))
+        self.metrics.register_gauge("yolo_frame_avg_ms", _infer("yolo", "frame_avg_ms"))
+        self.metrics.register_gauge("face_det_avg_ms", _infer("face", "det_avg_ms"))
+        self.metrics.register_gauge("face_embed_avg_ms", _infer("face", "embed_avg_ms"))
 
     def _report_metrics(self) -> None:
         """Log a metrics summary and publish alerts for critical conditions."""
         # Must match the keys the recording path uses (camera id, not
         # position) or every gauge lookup misses (LSO-130).
-        cam_indices = [w.camera_id for w in self.camera_workers]
+        cam_indices = self._camera_ids()
 
         # Log compact summary line
         self.metrics.log_summary(cam_indices)
@@ -941,29 +856,18 @@ class SmartOfficeEngine:
     def _cleanup(self) -> None:
         logger.info("Shutting down SmartOfficeEngine...")
 
-        # Stop camera workers
-        for worker in self.camera_workers:
-            worker.stop(timeout=3.0)
-
-        # Stop GPU worker
-        self.gpu_worker.stop(timeout=5.0)
-
-        # Stop async logger (let queued events drain briefly)
-        self.async_logger.stop(timeout=5.0)
+        # No camera producers or streams to stop here — decoding runs in
+        # decode_main.py's DecodeWorker processes, which own their own
+        # shutdown (releasing their Redis leases so another worker can
+        # pick their cameras up immediately).
+        self._gpu_rpc_server.stop()
 
         # Log final global tracking metrics
         if self.models.global_track_manager and self.models.global_track_manager.enabled:
             self._log_final_metrics()
 
-        # Stop action recognition workers — always, since this engine owns them
-        # regardless of where the models came from.
-        self.action_worker.stop_workers()
-
         if self._owns_models:
             self.models.cleanup()
-
-        # Stop streams
-        self.stream_manager.cleanup()
 
         # Stop monitoring dashboard
         if self._metrics_enabled:
