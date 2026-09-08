@@ -358,7 +358,7 @@ class CameraEngine:
                             and current_global_id >= 0
                         ):
                             # Only publish a REAL global id. When the
-                            # assign_global_id RPC fails, gpu_rpc's
+                            # assign_global_id call fails, the client's
                             # _LocalIdFallback hands back a negative,
                             # process-local id (real ones start at 1000 and
                             # count up). Sending that to the shared manager

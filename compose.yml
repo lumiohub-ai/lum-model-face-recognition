@@ -64,11 +64,6 @@ services:
       # it on first start rather than assuming the old model volume applies.
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
-      # The two Unix RPC sockets this process serves to camera-worker. They
-      # MUST live on a volume both containers mount — each container has its
-      # own /tmp, so a socket there is invisible to the other, and the
-      # clients degrade silently to "no detections" rather than failing loudly.
-      - rpc-sockets:/run/lumiohub
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
@@ -80,28 +75,26 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      # Connects to the RPC socket rather than checking the process exists:
-      # `pgrep python` goes green the instant the interpreter starts, but the
-      # socket only binds after model warm-up (engine.py's run()), so the
-      # workers' `depends_on: service_healthy` was gating on nothing. connect()
-      # on AF_UNIX fails with ECONNREFUSED when the file exists but nothing is
-      # listening, which a file-existence test would miss.
+      # Connects to the metrics port rather than checking the process exists:
+      # `pgrep python` goes green the instant the interpreter starts, but this
+      # port only binds after model warm-up (engine.py's run() starts the
+      # dashboard), so the workers' `depends_on: service_healthy` would
+      # otherwise gate on nothing.
       #
-      # ONE socket, not two: gpu-worker-rpc.sock (the GPU-inference RPC to the
-      # now-deleted GPUInferenceWorker) is gone — YOLO/face batching moved
-      # into their own workers via docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md's
-      # per-camera-queue design. gpu-rpc.sock (GlobalTrackManager) is
-      # untouched by that change and is still the one socket this process
-      # serves.
+      # This replaced an AF_UNIX connect to gpu-rpc.sock, which was the
+      # readiness signal while this process served GlobalTrackManager over a
+      # socket. That register moved to global-track-worker, so the socket is
+      # gone; the metrics port binds at the same point in startup and is the
+      # natural stand-in.
       #
       # python3, NOT python: the image installs python3.10 with no
       # python-is-python3, so `python` here would fail forever and nothing
       # that depends on this service would ever start.
-      test: ["CMD-SHELL", "python3 -c \"import socket;socket.socket(socket.AF_UNIX).connect('/run/lumiohub/gpu-rpc.sock')\" 2>/dev/null"]
+      test: ["CMD-SHELL", "python3 -c \"import socket;socket.create_connection(('127.0.0.1', ${SO_METRICS_PORT:-8765}), timeout=5).close()\" 2>/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
-      # Covers model warm-up before the sockets bind. Too low and the whole
+      # Covers model warm-up before the port binds. Too low and the whole
       # stack never comes up, since three services gate on this.
       start_period: 180s
     deploy:
@@ -284,7 +277,6 @@ services:
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
-      - rpc-sockets:/run/lumiohub
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
@@ -332,7 +324,6 @@ services:
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
       - ./volumes/models/huggingface:/root/.cache/huggingface
-      - rpc-sockets:/run/lumiohub
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
@@ -473,12 +464,112 @@ services:
         max-size: "50m"
         max-file: "10"
 
+  # The cross-camera register (GlobalTrackManager), which used to live inside
+  # person-tracking and be reached over a Unix socket. See
+  # docs/GLOBAL_TRACKING.md.
+  #
+  # NEVER SCALE THIS SERVICE. It holds one shared list of who is in the
+  # building (global_tracks / local_to_global); a second replica would consume
+  # the same queue and each copy would mint its own global IDs for the same
+  # people — the exact duplicate-identity problem global tracking exists to
+  # solve. There is deliberately no `replicas:` key here: adding one is the
+  # mistake this comment exists to prevent. reid-worker below is the service
+  # to scale if ReID becomes the bottleneck.
+  #
+  # No GPU reservation: the ReID model runs in reid-worker, so this process
+  # holds only Python dicts and does numpy similarity comparisons on CPU.
+  global-track-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - frame-shm:/dev/shm
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SO_WORKER_PRELOAD: globaltrack
+      C_FORCE_ROOT: "1"
+    command: celery -A workers.celery_app worker -Q globaltrack -l warning --pool=solo
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  # Body ReID embeddings for global-track-worker. Stateless (crop in, vector
+  # out), so unlike the register above this one MAY be scaled — raise
+  # SO_REID_WORKER_REPLICAS if ReID extraction becomes the bottleneck. Each
+  # replica loads its own copy of the OSNet model onto the GPU, so scale
+  # against available VRAM, not just CPU.
+  reid-worker:
+    image: humblebeeai/lumiohub-model:${SO_IMAGE_TAG:-0.1.0}
+    attach: false
+    restart: unless-stopped
+    depends_on:
+      person-tracking:
+        condition: service_healthy
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials
+      - ./volumes/models:/app/volumes/models
+      - frame-shm:/dev/shm
+    networks:
+      - person-tracking-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SO_WORKER_PRELOAD: reid
+      C_FORCE_ROOT: "1"
+    command: celery -A workers.celery_app worker -Q reid -l warning --pool=solo
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      replicas: ${SO_REID_WORKER_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
 volumes:
   ollama-data:
-    driver: local
-  # Holds the two Unix RPC sockets person-tracking serves to camera-worker.
-  # A volume rather than a bind mount: socket inodes stay out of the repo tree.
-  rpc-sockets:
     driver: local
   # POSIX shared memory for the frame transport. `ipc:` shares the IPC
   # NAMESPACE but not the /dev/shm MOUNT, and multiprocessing.shared_memory

@@ -10,12 +10,11 @@ process never calls a detection RPC or holds a GPU model itself.
 
 No torch/ultralytics/insightface/onnxruntime import at module scope, and no
 GPU model construction anywhere in this file — this process holds zero
-models. Face embedding is reached via face_client.FaceEmbedClient (a direct,
-synchronous Celery call to face-worker — no RPC socket involved), and
-GlobalTrackManager via global_track_rpc/global_track_adapter (a Unix-socket
-RPC to the main process — unaffected by the per-camera-queue switch, see
-docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md): this process touches no main-process-
-owned object directly except through one of these clients.
+models. Face embedding is reached via face_client.FaceEmbedClient and the
+global-track register via global_track_client/global_track_adapter — both
+direct, synchronous Celery calls to their own workers, no sockets anywhere
+(see docs/GLOBAL_TRACKING.md). This process touches no object owned by
+another process except through one of those clients.
 
 ## What this task does not handle
 
@@ -41,9 +40,8 @@ from loguru import logger
 from workers.celery_app import celery
 from workers.face_client import FaceEmbedClient
 from workers.frame_store import FrameHandle, RoiBatchHandle, attach_and_read_roi_batch
-from workers.global_track_rpc import GpuRpcClient
+from workers.global_track_client import GlobalTrackClient
 from workers.global_track_adapter import RemoteGlobalTrackManager
-from workers.rpc_framing import recv_framed  # noqa: F401  (re-export sanity import)
 
 
 class _CameraContext:
@@ -105,7 +103,11 @@ class _CameraContext:
             device="cpu",  # this process does no local GPU inference
         )
 
-        self.rpc_client = GpuRpcClient()
+        # Celery-backed, not the old Unix socket: the register runs in
+        # global-track-worker now, which a socket could not reach across
+        # hosts. Same two-method interface, so RemoteGlobalTrackManager below
+        # is unchanged — see workers/global_track_client.py.
+        self.rpc_client = GlobalTrackClient()
         self.face_client = FaceEmbedClient()
         self.rpc_client.on_fallback = lambda: logger.warning(
             f"camera_tasks[cam={camera_id}]: GlobalTrackManager RPC fallback fired"
@@ -537,7 +539,8 @@ def track_task(
     dataclass — json.dumps has no idea how to encode it. Reconstructing it
     here, rather than widening the global serializer config, keeps
     FrameHandle a real dataclass everywhere else that matters (frame_store's
-    internal API, global_track_rpc's pickled socket protocol) and confines
+    internal API, and the ROI handles the reid/globaltrack tasks read) and
+    confines
     the JSON constraint to the one hop that actually has it.
 
     `detections` arrives already computed — `yolo.detect`'s Batches task ran

@@ -31,6 +31,8 @@ celery = Celery(
         'workers.camera_tasks',
         'workers.yolo_tasks',
         'workers.face_tasks',
+        'workers.reid_tasks',
+        'workers.global_track_tasks',
     ]
 )
 
@@ -92,10 +94,14 @@ celery.conf.update(
         'workers.detection_tasks.*': {'queue': 'detections'},
         'workers.yolo_tasks.*': {'queue': 'yolo'},
         'workers.face_tasks.*': {'queue': 'face'},
+        'workers.reid_tasks.*': {'queue': 'reid'},
+        'workers.global_track_tasks.*': {'queue': 'globaltrack'},
         'detection.*': {'queue': 'detections'},
         'embedding.*': {'queue': 'embeddings'},
         'yolo.*': {'queue': 'yolo'},
         'face.*': {'queue': 'face'},
+        'reid.*': {'queue': 'reid'},
+        'globaltrack.*': {'queue': 'globaltrack'},
     },
 
     # Queue definitions with DLQ support
@@ -113,16 +119,29 @@ celery.conf.update(
     # backlog on one could starve the worker the other is waiting on.
     # Keeping them separate is what makes the blocking call safe — do not
     # consolidate these to "simplify".
+    #
+    # globaltrack MUST run as exactly one consumer: GlobalTrackManager is a
+    # single shared in-memory list (global_tracks, local_to_global) plus one
+    # GPU ReID model instance — see docs/GLOBAL_TRACKING.md. A second
+    # replica would mint duplicate global IDs, the exact problem global
+    # tracking exists to solve. reid is a stateless extractor and may run
+    # more than one replica; nothing here enforces either constraint, it is
+    # a deploy-time (compose.yml replica count) discipline, documented here
+    # so it isn't rediscovered by an incident.
     task_queues=(
         Queue('embeddings', exchange=default_exchange, routing_key='embeddings'),
         Queue('detections', exchange=default_exchange, routing_key='detections'),
         Queue('yolo', exchange=default_exchange, routing_key='yolo'),
         Queue('face', exchange=default_exchange, routing_key='face'),
+        Queue('reid', exchange=default_exchange, routing_key='reid'),
+        Queue('globaltrack', exchange=default_exchange, routing_key='globaltrack'),
         Queue('dlq.embeddings', exchange=dlq_exchange, routing_key='dlq.embeddings'),
         Queue('dlq.detections', exchange=dlq_exchange, routing_key='dlq.detections'),
         Queue('dlq.camera_frames', exchange=dlq_exchange, routing_key='dlq.camera_frames'),
         Queue('dlq.yolo', exchange=dlq_exchange, routing_key='dlq.yolo'),
         Queue('dlq.face', exchange=dlq_exchange, routing_key='dlq.face'),
+        Queue('dlq.reid', exchange=dlq_exchange, routing_key='dlq.reid'),
+        Queue('dlq.globaltrack', exchange=dlq_exchange, routing_key='dlq.globaltrack'),
     ),
 
     # Task execution settings

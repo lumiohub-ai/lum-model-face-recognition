@@ -4,12 +4,12 @@ Camera decoding runs in its own process(es) now (decode_main.py,
 docs/FOLLOW_UPS.md item 5) — each claims a set of cameras via a Redis lease
 (pipeline/camera_lease.py) and hands frames to the `yolo` queue directly.
 This process no longer decodes anything or owns a StreamHandler; it holds
-only the cross-camera identity state (GlobalTrackManager), served to
-camera-worker over the one remaining RPC socket
-(workers/global_track_rpc.py). The GPU inference RPC middleman
-(GPUInferenceWorker + gpu_worker_rpc.py) that used to live here was deleted
-once YOLO/face batching moved into their own Celery workers directly (see
-docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md).
+no models it serves to anyone. The cross-camera identity state
+(GlobalTrackManager) moved to its own single-replica Celery worker
+(workers/global_track_tasks.py, docs/GLOBAL_TRACKING.md), and the GPU
+inference RPC middleman (GPUInferenceWorker + gpu_worker_rpc.py) was deleted
+earlier once YOLO/face batching moved into their own Celery workers (see
+docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md). No Unix sockets remain.
 
 Two things a decode process needs from this one, now bridged instead of
 called directly (see pipeline/decode_metrics.py and
@@ -19,6 +19,7 @@ synchronous calls onto a StreamHandler this process owned; both are now
 reads of something the decode worker publishes.
 """
 
+import json
 import threading
 import time
 from typing import List, Optional
@@ -43,6 +44,31 @@ from config import load_cameras_from_db, build_vision_config
 # Local
 from pipeline.decode_metrics import read_raw_frame, read_stream_health
 from pipeline.infer_metrics import read_infer_latency
+
+
+def _read_global_tracks_gauge() -> int:
+    """How many global tracks the register currently holds.
+
+    Read from Redis, not from a local object: the register lives in
+    global-track-worker (workers/global_track_tasks.py), which publishes this
+    on a timer. Returns 0 when the key is missing — either the worker is not
+    running, or it died and the key's TTL expired. That is the honest answer
+    for a gauge; the alternative (freezing at the last live count) would make
+    a dead worker look healthy on the dashboard.
+
+    Never raises: a Redis outage must not propagate into the metrics scrape.
+    """
+    try:
+        from messaging.redis_client import RedisClient
+        from workers.global_track_tasks import STATS_KEY
+
+        raw = RedisClient.get_instance().client.get(STATS_KEY)
+        if not raw:
+            return 0
+        return int(json.loads(raw).get("global_tracks", 0))
+    except Exception as e:
+        logger.debug(f"[metrics] gauge 'global_tracks' read failed: {e}")
+        return 0
 
 
 class SmartOfficeEngine:
@@ -166,13 +192,14 @@ class SmartOfficeEngine:
             self._metrics_store = None
             self._metrics_dashboard = None
 
-        # How camera-worker reaches this process's GlobalTrackManager. YOLO
-        # and face batching no longer route through this process at all —
-        # frame_pump hands frames straight to the `yolo` queue; see
-        # docs/LSO67_FOLLOWUP_QUEUE_DESIGN.md.
-        from workers.global_track_rpc import GpuRpcServer
-
-        self._gpu_rpc_server = GpuRpcServer(self.models.global_track_manager)
+        # The GlobalTrackManager this process used to own — and serve to
+        # camera-worker over a Unix socket — now lives in its own
+        # single-replica Celery worker (workers/global_track_tasks.py), which
+        # a socket could not reach across hosts. This process no longer holds
+        # the register at all: it is a single shared list, so a second copy
+        # here would mint duplicate global IDs. Its periodic validation, its
+        # dashboard gauge and its baseline summary moved with it; see
+        # docs/GLOBAL_TRACKING.md.
 
         logger.debug(
             f"SmartOfficeEngine initialised: {len(self.camera_configs)} camera(s), "
@@ -240,10 +267,9 @@ class SmartOfficeEngine:
         self._running = True
         self._start_time = time.time()
 
-        # Serve global-track state to camera-worker. Decoding runs
-        # elsewhere now — see decode_main.py — so there is nothing to start
-        # here for streams or camera producers.
-        self._gpu_rpc_server.start()
+        # Nothing to start here for global tracking, streams or camera
+        # producers: the register runs in global-track-worker and decoding in
+        # decode_main.py's processes.
 
         # Start monitoring dashboard
         if self._metrics_enabled:
@@ -266,11 +292,10 @@ class SmartOfficeEngine:
 
                 current_time = time.time()
 
-                # Periodic global track validation
-                if current_time - last_validation_time >= validation_interval:
-                    if self.models.global_track_manager:
-                        self.models.global_track_manager.periodic_validation()
-                    last_validation_time = current_time
+                # Periodic global track validation runs in global-track-worker
+                # now, on its own timer next to the register it validates —
+                # this process no longer holds that object. See
+                # workers/global_track_tasks.py's background loop.
 
                 # Periodic metrics reporting
                 if self._metrics_enabled and current_time - last_metrics_time >= metrics_interval:
@@ -741,13 +766,15 @@ class SmartOfficeEngine:
         process cannot see it — a constant 0 would be worse than no gauge at
         all. Reinstating them means collecting over RPC.
         """
-        _MISSING = object()  # distinguishes "attribute doesn't exist" from "value is None"
-
-        gtm = self.models.global_track_manager
-        if gtm is not None:
-            if getattr(gtm, "global_tracks", _MISSING) is _MISSING:
-                logger.warning("[metrics] gauge 'global_tracks': global_track_manager has no attribute 'global_tracks' - will always report 0")
-            self.metrics.register_gauge("global_tracks", lambda: len(gtm.global_tracks))
+        # global_tracks is read back from Redis rather than off the register
+        # itself: that object lives in global-track-worker now (it is a single
+        # shared list, so this process must not hold a second copy). The
+        # worker publishes on a timer and this reads the last value — the same
+        # publish/read-back split pipeline/infer_metrics.py already uses for
+        # per-stage latency. A gauge tolerates being a couple of seconds
+        # stale; the key's TTL means a dead worker reads as 0 rather than
+        # freezing at its last live count.
+        self.metrics.register_gauge("global_tracks", _read_global_tracks_gauge)
 
         # Split "read" into its two halves: grab() (read_ms) is time spent
         # BLOCKED waiting for the next frame off the network/demuxer - a
@@ -860,11 +887,10 @@ class SmartOfficeEngine:
         # decode_main.py's DecodeWorker processes, which own their own
         # shutdown (releasing their Redis leases so another worker can
         # pick their cameras up immediately).
-        self._gpu_rpc_server.stop()
-
-        # Log final global tracking metrics
-        if self.models.global_track_manager and self.models.global_track_manager.enabled:
-            self._log_final_metrics()
+        # The final global-tracking summary is logged by global-track-worker
+        # at its own shutdown (workers/global_track_tasks.py), where the true
+        # final numbers are — this process no longer holds the register, so a
+        # summary here could only report a last-published snapshot.
 
         if self._owns_models:
             self.models.cleanup()
@@ -928,21 +954,9 @@ class SmartOfficeEngine:
             logger.warning(f"Failed to build name-to-ID map: {e}")
             return {}
 
-    def _log_final_metrics(self) -> None:
-        logger.info("=" * 80)
-        logger.info("PHASE 0 - FINAL BASELINE METRICS")
-        logger.info("=" * 80)
-        self.models.global_track_manager.log_baseline_summary()
-        metrics = self.models.global_track_manager.get_baseline_metrics()
-        logger.info(f"Total tracks created: {metrics['total_tracks_created']}")
-        logger.info(f"Total tracks removed: {metrics['total_tracks_removed']}")
-        logger.info(
-            f"Average track duration: {metrics['avg_track_duration_sec']:.1f}s"
-        )
-        logger.info(f"Face visibility rate: {metrics['face_visibility_rate']:.1%}")
-        logger.info(f"Faces detected: {metrics['total_faces_detected']}")
-        logger.info(f"Faces not visible: {metrics['total_faces_not_visible']}")
-        logger.info("=" * 80)
+    # _log_final_metrics moved to workers/global_track_tasks.py's shutdown
+    # hook, with the register it reports on. Keeping a copy here would print
+    # zeros: this process holds no GlobalTrackManager any more.
 
     def _log_final_stats(self) -> None:
         elapsed = time.time() - self._start_time if self._start_time > 0 else 0
