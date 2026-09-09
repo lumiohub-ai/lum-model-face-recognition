@@ -465,10 +465,6 @@ class FakeEntryLogger:
         self.repository = FakeRepository(rows)
         self.current_users = []
         self.name_to_id = []
-        self.status_reloads = 0
-
-    def reload_status(self):
-        self.status_reloads += 1
 
 
 class ReloadHandlerTests(unittest.TestCase):
@@ -533,14 +529,14 @@ class ReloadHandlerTests(unittest.TestCase):
 
         self.assertEqual(ctx.entry_logger.current_users, ["alice"])
         self.assertEqual(ctx.entry_logger.name_to_id, [{"name": "bob", "id": 2}])
-        self.assertEqual(ctx.entry_logger.status_reloads, 1)
 
-    def test_status_reload_delegates_to_the_entry_logger(self):
+    def test_status_reload_is_a_noop(self):
+        """LSO-193: the AI keeps no in-memory IN/OUT cache, so the backend's
+        status-reload signal is a no-op — it must run without raising and
+        without needing any hook on the EntryLogger."""
         ctx = self._ctx({}, rows=[])
 
-        ctx.on_status_reload()
-
-        self.assertEqual(ctx.entry_logger.status_reloads, 1)
+        ctx.on_status_reload()  # must not raise
 
     def test_config_reload_updates_the_engines_application_list(self):
         """recognition_interval reads from _load_yaml_config() (the static

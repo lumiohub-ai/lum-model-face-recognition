@@ -1,11 +1,17 @@
 """Entry logging for tracking and visualizing person entries and exits."""
 
-from collections import deque
+from collections import deque, OrderedDict
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
 import numpy as np
 from loguru import logger
+
+# Cap on the per-track attendance-dedup set (LSO-193). Track ids grow
+# monotonically per camera, so the oldest entry is the longest-departed track
+# and is safe to evict — this bounds memory without a track-removal hook.
+_SENT_ATTENDANCE_CAP = 4096
+
 
 class EntryLogger:
     """Logger for tracking and recording person entries and exits.
@@ -39,51 +45,28 @@ class EntryLogger:
         self.new_users, self.deleted_users, self.name_to_id = \
             self.repository.check_new_and_deleted_users(self.current_users)
 
-        # Get initial person status
-        self.person_status = self._get_last_status()
+        # LSO-193: attendance IN/OUT is deduped authoritatively in the DB
+        # (record_attendance, FOR UPDATE) — the only state shared across the
+        # split camera-workers. There is deliberately NO in-memory status cache
+        # here: a per-worker cache drifts from the DB and from other workers and
+        # silently drops transitions (and never sees manual edits). This set is
+        # only a bounded per-track send throttle, not a status store.
+        self._sent_attendance: "OrderedDict[tuple, None]" = OrderedDict()
 
-    def _get_last_status(self) -> Dict[str, str]:
-        """Get the last status of each user from the database."""
-        in_names = self.repository.get_users_by_status("in")
-        out_names = self.repository.get_users_by_status("out")
+    def prune_location_cache(self) -> None:
+        """Drop `person_last_camera` entries for users no longer known.
 
-        person_status = {}
-
-        # Set OUT status first
-        for name in out_names:
-            person_status[name] = "OUT"
-
-        # IN overrides OUT if there's any overlap
-        for name in in_names:
-            person_status[name] = "IN"
-
-        # Handle users without status
-        for entry in self.name_to_id:
-            name = entry["name"]
-            if name not in person_status:
-                logger.warning(f"No status for user '{name}', defaulting to OUT")
-                person_status[name] = "OUT"
-
-        return person_status
-
-    def reload_status(self) -> None:
-        """Reload person status from the database."""
-        logger.info("Reloading person status from database...")
-        old_status = self.person_status.copy()
-        self.person_status = self._get_last_status()
-
-        # Log changes
-        for name, new_status in self.person_status.items():
-            old = old_status.get(name)
-            if old != new_status:
-                logger.info(f"Status updated for {name}: {old} -> {new_status}")
-
-        # Remove stale entries for users no longer in the system
-        removed = [name for name in self.person_last_camera if name not in self.person_status]
-        for name in removed:
-            del self.person_last_camera[name]
-        if removed:
-            logger.debug(f"Cleaned {len(removed)} stale entries from person_last_camera")
+        Called on an embedding/user reload. Preserves the one piece of cleanup
+        the removed `reload_status()` used to do (LSO-193): without it,
+        `person_last_camera` keeps stale camera names for deleted/renamed users
+        for the life of the process. `name_to_id` is the current known set.
+        """
+        known = {e["name"] for e in self.name_to_id}
+        stale = [n for n in self.person_last_camera if n not in known]
+        for n in stale:
+            del self.person_last_camera[n]
+        if stale:
+            logger.debug(f"Pruned {len(stale)} stale person_last_camera entries")
 
     def log_person_entry(
         self,
@@ -92,10 +75,18 @@ class EntryLogger:
         appear_time: datetime,
         camera_name: str = "Unknown",
         camera_id: Optional[int] = None,
-        proof_image: Optional[np.ndarray] = None
+        proof_image: Optional[np.ndarray] = None,
+        track_id: Optional[int] = None,
     ) -> bool:
-        """Log a person's entry or exit."""
-        previous_status = self.person_status.get(name)
+        """Log a person's entry or exit.
+
+        Emits at most one attendance event per (track, identity): one appearance
+        sends once, not every recognition frame. Whether that event is a real
+        IN/OUT transition or a duplicate is decided by the DB
+        (`record_attendance`), the only guard shared across the split
+        camera-workers — so a manual edit or another worker's write is always
+        respected (LSO-193).
+        """
         previous_camera = self.person_last_camera.get(name)
         recorded = False
         location_changed = previous_camera != camera_name
@@ -105,17 +96,23 @@ class EntryLogger:
             self._send_location_data(name, status, appear_time, camera_name, camera_id)
             self.person_last_camera[name] = camera_name
 
-        # If status unchanged, do nothing else
-        if previous_status == status.upper():
-            return recorded
+        # Per-track send throttle (NOT a status cache). A track holds one
+        # cam-direction status for its whole life, so keying on (track_id, name)
+        # sends once per appearance; an identity correction mid-track re-sends
+        # and the DB dedups it. track_id is None only on paths that don't carry
+        # one — then always send and let the DB guard decide.
+        if track_id is not None:
+            key = (track_id, name)
+            if key in self._sent_attendance:
+                return recorded
+            self._sent_attendance[key] = None
+            if len(self._sent_attendance) > _SENT_ATTENDANCE_CAP:
+                self._sent_attendance.popitem(last=False)
 
         recorded = True
-        self.person_status[name] = status.upper()
-
-        today_date = appear_time.strftime("%Y-%m-%d")
         today_time = appear_time.strftime("%H:%M:%S")
 
-        # Send attendance data (production mode)
+        # Send attendance data (production mode). The DB suppresses duplicates.
         if self.args.production:
             self._send_attendance(name, status, camera_id, camera_name, proof_image)
 
