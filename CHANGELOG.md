@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.3 (2026-09-09)
+
+## What's Changed
+* DB-authoritative attendance: drop per-worker status cache (LSO-193) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/109
+* DB-authoritative attendance: drop per-worker status cache (LSO-193) (… by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/110
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.2...v0.7.3
+
 ## v0.7.2 (2026-09-09)
 
 ## What's Changed
