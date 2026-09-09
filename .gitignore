@@ -363,3 +363,5 @@ benchmarks/celery_worker/output/*
 !benchmarks/celery_worker/output/results.json
 benchmarks/celery_face/output/*
 !benchmarks/celery_face/output/results.json
+benchmarks/transport/output/*
+!benchmarks/transport/output/results.json

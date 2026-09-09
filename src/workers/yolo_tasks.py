@@ -17,8 +17,10 @@ latency; re-run the spike before assuming these numbers hold at a much
 higher camera count.
 
 Frames arrive as a `FrameHandle` (shared memory) per request, never as
-pixels: a 720p frame costs ~15.6 ms through a broker versus ~0.3 ms as a
-handle, more than the inference itself. Detections for each request are
+pixels: measured at ~3.05 ms/frame through shared memory versus ~19.8 ms
+through the broker even in the best case (JPEG; production's actual
+json+base64 payload measures ~175 ms) — see benchmarks/transport/README.md
+for the harness and full numbers. Detections for each request are
 forwarded on to `camera.track` on that camera's own pinned queue — this task
 never returns a result to a caller (`ignore_result=True`); the next hop is
 itself a `send_task` call, not a return value.
@@ -51,7 +53,7 @@ from celery_batches import Batches, SimpleRequest
 from loguru import logger
 
 from workers import model_holder
-from workers.celery_app import celery
+from workers.celery_app import celery, camera_queue_name
 
 # Matches the values validated in the spike (benchmarks/celery_batches_spike/
 # bench_tasks.py) — see the module docstring's batching-mechanism note before
@@ -259,7 +261,10 @@ def run_detect_batch(
         if remaining is not None and remaining <= 0:
             n_skipped_expired += 1
             continue
-        next_queue = req.kwargs.get("next_queue") or f"cam.{camera_id}"
+        # Producer always sets next_queue (frame_pump), but fall back to the
+        # same slot routing rather than a literal cam.<id> so a payload without
+        # it still lands on a queue a worker actually consumes (LSO-186).
+        next_queue = req.kwargs.get("next_queue") or camera_queue_name(camera_id)
         dispatch(
             kwargs={
                 "camera_id": camera_id,

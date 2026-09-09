@@ -1,12 +1,15 @@
 """Shared-memory transport for camera frames crossing the Celery broker.
 
-Redis round-trip cost is payload-size dependent (measured: a 720p frame costs
-~15.6ms through Redis, more than a YOLO inference pass) but flat and cheap for
-small control messages (~0.3ms). So the frame itself must never be serialised
-into a task payload — only a handle (block name + sequence number) travels
-through the broker; the pixels live in a `multiprocessing.shared_memory` block
-that both the producer (this process) and the worker (a separate process on
-the same host) can map directly.
+Redis round-trip cost is payload-size dependent (measured against this repo's
+own 720p corpus: shared memory costs ~3.05ms/frame including the producer's
+copy-in and the consumer's copy-out; the cheapest broker alternative, JPEG,
+costs ~19.8ms; production's actual json+base64 serializer costs ~175ms — see
+benchmarks/transport/README.md) but flat and cheap for small control messages.
+So the frame itself must never be serialised into a task payload — only a
+handle (block name + sequence number) travels through the broker; the pixels
+live in a `multiprocessing.shared_memory` block that both the producer (this
+process) and the worker (a separate process on the same host) can map
+directly.
 
 This differs from benchmarks/celery_worker/frame_store.py, which builds one
 static corpus decoded once and read many times. Here each camera has a ring of

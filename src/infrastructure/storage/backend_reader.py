@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 from loguru import logger
 
+from config.settings import settings
 from .db_config import DatabaseConfig
 from .validators import validate_client_slug, schema_name_for
 
@@ -38,11 +39,26 @@ class Repository:
         """
         try:
             with self.db.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    SELECT id, full_name, image_urls
-                    FROM {self.schema}.users
-                    ORDER BY full_name
-                """))
+                # Branch scoping (mirrors get_all_embeddings / get_user_name_to_id):
+                # when SO_EDGE_BRANCH_CODE is set, only this branch's users (plus
+                # org-wide null-branch users). This is the list embedding_sync walks
+                # to enrol faces and that check_new_and_deleted_users diffs — a branch
+                # box must not fetch/enrol the whole org, only its own people.
+                branch_code = settings.edge_branch_code
+                if branch_code:
+                    result = conn.execute(text(f"""
+                        SELECT u.id, u.full_name, u.image_urls
+                        FROM {self.schema}.users AS u
+                        LEFT JOIN {self.schema}.branches AS b ON b.id = u.branch_id
+                        WHERE LOWER(b.code) = :branch_code OR u.branch_id IS NULL
+                        ORDER BY u.full_name
+                    """), {"branch_code": branch_code})
+                else:
+                    result = conn.execute(text(f"""
+                        SELECT id, full_name, image_urls
+                        FROM {self.schema}.users
+                        ORDER BY full_name
+                    """))
                 users = []
                 for row in result.fetchall():
                     image_urls = row[2] or []
@@ -58,43 +74,6 @@ class Repository:
             logger.exception(f"Failed to fetch users: {e}")
             return []
 
-    def get_users_by_status(self, status: str) -> List[str]:
-        """Get user names by their current attendance status.
-
-        Args:
-            status: 'in' or 'out'
-
-        Returns:
-            List of full names
-        """
-        status = status.lower()
-        if status not in ('in', 'out'):
-            logger.warning(f"Invalid status: {status}")
-            return []
-
-        try:
-            with self.db.get_connection() as conn:
-                # Get latest attendance status for each user
-                result = conn.execute(text(f"""
-                    WITH latest AS (
-                        SELECT DISTINCT ON (user_id)
-                            user_id, status
-                        FROM {self.schema}.attendance_records
-                        ORDER BY user_id, timestamp DESC
-                    )
-                    SELECT u.full_name
-                    FROM {self.schema}.users u
-                    JOIN latest l ON u.id = l.user_id
-                    WHERE l.status = :status
-                """), {'status': status})
-
-                names = [row[0] for row in result.fetchall()]
-                logger.debug(f"Found {len(names)} users with status '{status}'")
-                return names
-        except Exception as e:
-            logger.exception(f"Failed to fetch users by status: {e}")
-            return []
-
     def get_user_name_to_id(self) -> List[Dict[str, Any]]:
         """Get mapping of user names to IDs.
 
@@ -103,10 +82,23 @@ class Repository:
         """
         try:
             with self.db.get_connection() as conn:
-                result = conn.execute(text(f"""
-                    SELECT id, full_name
-                    FROM {self.schema}.users
-                """))
+                # Branch scoping: match get_all_embeddings — when SO_EDGE_BRANCH_CODE
+                # is set, only this branch's users, so the name→id map stays in step
+                # with the branch-scoped register (a name absent from the register
+                # must not resolve to a user_id here either).
+                branch_code = settings.edge_branch_code
+                if branch_code:
+                    result = conn.execute(text(f"""
+                        SELECT u.id, u.full_name
+                        FROM {self.schema}.users AS u
+                        LEFT JOIN {self.schema}.branches AS b ON b.id = u.branch_id
+                        WHERE LOWER(b.code) = :branch_code OR u.branch_id IS NULL
+                    """), {"branch_code": branch_code})
+                else:
+                    result = conn.execute(text(f"""
+                        SELECT id, full_name
+                        FROM {self.schema}.users
+                    """))
                 return [
                     {'id': row[0], 'name': row[1]}
                     for row in result.fetchall()
