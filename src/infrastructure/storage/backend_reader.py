@@ -74,64 +74,6 @@ class Repository:
             logger.exception(f"Failed to fetch users: {e}")
             return []
 
-    def get_users_by_status(self, status: str) -> List[str]:
-        """Get user names by their current attendance status.
-
-        Args:
-            status: 'in' or 'out'
-
-        Returns:
-            List of full names
-        """
-        status = status.lower()
-        if status not in ('in', 'out'):
-            logger.warning(f"Invalid status: {status}")
-            return []
-
-        try:
-            with self.db.get_connection() as conn:
-                # Get latest attendance status for each user.
-                # Branch scoping (mirrors get_all_users / get_user_name_to_id): a
-                # branch box only primes its own users' last status, so the status
-                # map stays in step with the branch-scoped register instead of
-                # warning about every other branch's users on each reload.
-                branch_code = settings.edge_branch_code
-                if branch_code:
-                    result = conn.execute(text(f"""
-                        WITH latest AS (
-                            SELECT DISTINCT ON (user_id)
-                                user_id, status
-                            FROM {self.schema}.attendance_records
-                            ORDER BY user_id, timestamp DESC
-                        )
-                        SELECT u.full_name
-                        FROM {self.schema}.users u
-                        JOIN latest l ON u.id = l.user_id
-                        LEFT JOIN {self.schema}.branches b ON b.id = u.branch_id
-                        WHERE l.status = :status
-                          AND (LOWER(b.code) = :branch_code OR u.branch_id IS NULL)
-                    """), {'status': status, 'branch_code': branch_code})
-                else:
-                    result = conn.execute(text(f"""
-                        WITH latest AS (
-                            SELECT DISTINCT ON (user_id)
-                                user_id, status
-                            FROM {self.schema}.attendance_records
-                            ORDER BY user_id, timestamp DESC
-                        )
-                        SELECT u.full_name
-                        FROM {self.schema}.users u
-                        JOIN latest l ON u.id = l.user_id
-                        WHERE l.status = :status
-                    """), {'status': status})
-
-                names = [row[0] for row in result.fetchall()]
-                logger.debug(f"Found {len(names)} users with status '{status}'")
-                return names
-        except Exception as e:
-            logger.exception(f"Failed to fetch users by status: {e}")
-            return []
-
     def get_user_name_to_id(self) -> List[Dict[str, Any]]:
         """Get mapping of user names to IDs.
 

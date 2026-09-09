@@ -160,12 +160,13 @@ class MDAManager:
             logger.warning("Engine not available for embedding reload")
 
     def _handle_status_reload(self, data: dict) -> None:
-        """Handle status reload notification."""
-        logger.info(f"Status reload: {data}")
-        if self.engine and hasattr(self.engine, 'entry_logger'):
-            self.engine.entry_logger.reload_status()
-        else:
-            logger.warning("Engine not available")
+        """Backend status-reload signal — now a no-op (LSO-193).
+
+        The AI no longer keeps an in-memory IN/OUT cache to refresh: attendance
+        status is deduped authoritatively in the DB, re-checked on every
+        recognition, so a manual attendance edit is honoured on the person's
+        next appearance without a reload."""
+        logger.info(f"Status reload signal (no-op, DB-authoritative): {data}")
 
     def _handle_camera_command(self, command_type: str, client_slug: str, payload: dict) -> None:
         """Handle camera config commands from Backend."""
