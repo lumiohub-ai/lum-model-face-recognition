@@ -316,16 +316,16 @@ class _CameraContext:
         self.entry_logger.name_to_id = [
             {"name": name, "id": user_id} for name, user_id in new_map.items()
         ]
-        self.entry_logger.reload_status()
         logger.info(
             f"camera_tasks[cam={self.camera_id}]: reloaded embeddings "
             f"({len(new_map)} users)"
         )
 
     def on_status_reload(self) -> None:
-        """The backend publishes this; this worker's EntryLogger is now one of
-        the loggers it is about."""
-        self.entry_logger.reload_status()
+        """Backend status-reload signal. Now a no-op (LSO-193): the AI keeps no
+        in-memory IN/OUT cache to refresh — attendance status lives only in the
+        DB, and every recognition re-checks it there, so a manual edit is picked
+        up on the person's next appearance without any reload."""
 
     def on_camera_config_reload(self) -> None:
         """Pick up config changes (currently `application`) without a restart."""

@@ -378,7 +378,6 @@ class SmartOfficeEngine:
                 {"name": name, "id": user_id}
                 for name, user_id in self.name_to_id_map.items()
             ]
-            self.entry_logger.reload_status()
 
             logger.info(
                 f"Face embeddings reloaded: "

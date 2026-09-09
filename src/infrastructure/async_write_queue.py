@@ -169,6 +169,7 @@ class AsyncLogger:
                 camera_name=camera_name,
                 camera_id=camera_id,
                 proof_image=proof_image,
+                track_id=entry.get("track_id"),
             )
             if recorded:
                 logger.info(
