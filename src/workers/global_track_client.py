@@ -79,6 +79,19 @@ class _LocalIdFallback:
 DEFAULT_EXPIRES_S = float(os.environ.get("SO_GLOBALTRACK_EXPIRES_S", "1.0"))
 DEFAULT_TIMEOUT_S = float(os.environ.get("SO_GLOBALTRACK_TIMEOUT_S", "1.5"))
 
+# Per-method expiry overrides. on_track_removed is rare (once per track, not
+# once per frame) and idempotent (mark_camera_inactive and the
+# local_to_global pop are both safe to apply twice), and nothing awaits its
+# result — so unlike the per-frame one-way calls, it can afford a longer
+# window to survive a busy or restarting global-track-worker. This narrows
+# the "message silently expires before the worker is free" gap that leaves a
+# camera's active flag stuck True forever (see docs/GLOBAL_TRACKS_LEAK.md);
+# it does not close it — cleanup_inactive_global_tracks' hard-expiry fallback
+# is what actually bounds the leak when a message is still lost.
+_EXPIRES_OVERRIDES_S: Dict[str, float] = {
+    "on_track_removed": float(os.environ.get("SO_GLOBALTRACK_REMOVED_EXPIRES_S", "30.0")),
+}
+
 _BLOCKING_METHODS = frozenset({"assign_global_id", "find_global_track_by_identity"})
 _ONE_WAY_METHODS = frozenset(
     {
@@ -251,7 +264,7 @@ class GlobalTrackClient:
                 args=self._json_safe(args),
                 kwargs=self._json_safe(kwargs),
                 queue="globaltrack",
-                expires=self._expires_s,
+                expires=_EXPIRES_OVERRIDES_S.get(method, self._expires_s),
             )
         except Exception as e:
             logger.warning(

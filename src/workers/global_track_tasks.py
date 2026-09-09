@@ -126,6 +126,16 @@ def _publish_stats(manager) -> None:
     try:
         payload = {
             "global_tracks": len(manager.global_tracks),
+            # force_archived: how many tracks needed the hard-expiry safety net
+            # instead of the normal all-cameras-inactive path — a sustained
+            # rise means on_track_removed messages are being dropped (busy or
+            # restarting global-track-worker, broker lag). Should stay ~0.
+            "force_archived": getattr(manager.metrics, "force_archived", 0),
+            # local_to_global_entries: should track global_tracks closely. A
+            # persistent gap between the two means entries are being archived
+            # from global_tracks without their local_to_global mapping being
+            # cleaned up alongside it.
+            "local_to_global_entries": sum(len(d) for d in manager.local_to_global.values()),
             "ts": time.time(),
         }
         _redis().set(STATS_KEY, json.dumps(payload), ex=_STATS_TTL_S)

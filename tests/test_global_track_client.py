@@ -182,6 +182,54 @@ class JsonSafetyTests(unittest.TestCase):
         )  # must not raise
 
 
+class ExpiryOverrideTests(unittest.TestCase):
+    """on_track_removed gets a longer Celery message expiry than the other
+    one-way calls (docs/GLOBAL_TRACKS_LEAK.md): it's rare and idempotent,
+    unlike the per-frame calls, which must stay tight so a backed-up worker
+    sheds stale frame data instead of acting on minute-old positions."""
+
+    def test_on_track_removed_uses_the_longer_override(self):
+        import workers.global_track_client as client_module
+
+        client = GlobalTrackClient()
+        recorded = {}
+
+        class FakeTask:
+            def apply_async(self, args=None, kwargs=None, queue=None, expires=None):
+                recorded["expires"] = expires
+
+        original = client_module._task_for
+        client_module._task_for = lambda method: FakeTask()
+        try:
+            client.call_one_way("on_track_removed", camera_id=1, local_track_id=1)
+        finally:
+            client_module._task_for = original
+
+        self.assertEqual(
+            recorded["expires"], client_module._EXPIRES_OVERRIDES_S["on_track_removed"]
+        )
+        self.assertGreater(recorded["expires"], client._expires_s)
+
+    def test_other_one_way_methods_keep_the_default_expiry(self):
+        import workers.global_track_client as client_module
+
+        client = GlobalTrackClient()
+        recorded = {}
+
+        class FakeTask:
+            def apply_async(self, args=None, kwargs=None, queue=None, expires=None):
+                recorded["expires"] = expires
+
+        original = client_module._task_for
+        client_module._task_for = lambda method: FakeTask()
+        try:
+            client.call_one_way("on_face_detected", camera_id=1, local_track_id=1)
+        finally:
+            client_module._task_for = original
+
+        self.assertEqual(recorded["expires"], client._expires_s)
+
+
 def pytest_approx(value, tol=1e-5):
     """Tiny float-tolerance helper — avoids pulling in pytest.approx for one
     assertion in a unittest.TestCase-based file."""

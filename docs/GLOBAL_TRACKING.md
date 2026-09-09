@@ -143,6 +143,7 @@ Redis was measured at ~15.6 ms — far more than the work itself.
 | ReID worker + client + transport | **done** |
 | Register worker; delete the socket | **done** |
 | Verified against live camera traffic | **done** (2026-09-08) |
+| Fix `global_tracks` unbounded growth | **done** (2026-09-09) — see [GLOBAL_TRACKS_LEAK.md](GLOBAL_TRACKS_LEAK.md) |
 
 ### The live run
 

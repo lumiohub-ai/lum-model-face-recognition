@@ -46,8 +46,8 @@ from pipeline.decode_metrics import read_raw_frame, read_stream_health
 from pipeline.infer_metrics import read_infer_latency
 
 
-def _read_global_tracks_gauge() -> int:
-    """How many global tracks the register currently holds.
+def _read_globaltrack_stat(key: str) -> int:
+    """Read one field out of global-track-worker's published stats blob.
 
     Read from Redis, not from a local object: the register lives in
     global-track-worker (workers/global_track_tasks.py), which publishes this
@@ -65,10 +65,33 @@ def _read_global_tracks_gauge() -> int:
         raw = RedisClient.get_instance().client.get(STATS_KEY)
         if not raw:
             return 0
-        return int(json.loads(raw).get("global_tracks", 0))
+        return int(json.loads(raw).get(key, 0))
     except Exception as e:
-        logger.debug(f"[metrics] gauge 'global_tracks' read failed: {e}")
+        logger.debug(f"[metrics] gauge '{key}' read failed: {e}")
         return 0
+
+
+def _read_global_tracks_gauge() -> int:
+    """How many global tracks the register currently holds."""
+    return _read_globaltrack_stat("global_tracks")
+
+
+def _read_force_archived_gauge() -> int:
+    """How many tracks needed the hard-expiry safety net instead of the
+    normal all-cameras-inactive path. Should stay near zero; a sustained rise
+    means on_track_removed messages are being dropped. See docs/GLOBAL_TRACKS_LEAK.md.
+    """
+    return _read_globaltrack_stat("force_archived")
+
+
+def _read_local_to_global_entries_gauge() -> int:
+    """Size of the register's local-track -> global-track lookup table.
+
+    Should track global_tracks closely. A persistent gap means entries are
+    being archived from global_tracks without this mapping being cleaned up
+    alongside it. See docs/GLOBAL_TRACKS_LEAK.md.
+    """
+    return _read_globaltrack_stat("local_to_global_entries")
 
 
 class SmartOfficeEngine:
@@ -775,6 +798,12 @@ class SmartOfficeEngine:
         # stale; the key's TTL means a dead worker reads as 0 rather than
         # freezing at its last live count.
         self.metrics.register_gauge("global_tracks", _read_global_tracks_gauge)
+
+        # Diagnostics for the global_tracks unbounded-growth failure mode (see
+        # docs/GLOBAL_TRACKS_LEAK.md): force_archived should stay near zero,
+        # and local_to_global_entries should track global_tracks closely.
+        self.metrics.register_gauge("force_archived", _read_force_archived_gauge)
+        self.metrics.register_gauge("local_to_global_entries", _read_local_to_global_entries_gauge)
 
         # Split "read" into its two halves: grab() (read_ms) is time spent
         # BLOCKED waiting for the next frame off the network/demuxer - a
