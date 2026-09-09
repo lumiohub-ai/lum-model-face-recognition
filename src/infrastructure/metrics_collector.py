@@ -446,21 +446,23 @@ class MetricsCollector:
             "| " + " ".join(f"{k}={v}" for k, v in sorted(pipe.items()) if v is not None) + " "
             if pipe else ""
         )
+        # The old trailing "YOLO=...ms/batch(...) ArcFace=...(...)" section
+        # read snap["inference"], which is fed by record_yolo_ms/
+        # record_arcface_ms — in-process detector calls that no longer exist
+        # now that YOLO/ArcFace run in their own Celery workers (yolo-worker/
+        # face-worker). It always showed 0. The real, live numbers are
+        # already in pipe_str above (yolo_batch_avg_ms, yolo_frame_avg_ms,
+        # face_det_avg_ms, face_embed_avg_ms — published via Redis by those
+        # workers, see pipeline/infer_metrics.py), so this section was pure
+        # duplication of a broken kind. Removed rather than reconstructed:
+        # the Redis-side gauges don't publish batch-size/face-count, only
+        # latency, so a like-for-like replacement isn't a small change — do
+        # that separately if batch-size visibility is needed again.
         logger.info(
             f"[Metrics] CPU={snap['cpu_percent']:.0f}% "
             f"RAM={snap['memory']['used_gb']:.1f}/{snap['memory']['total_gb']:.1f}GB({snap['memory']['percent']:.0f}%) "
             f"{proc_str}{gpu_str} {pipe_str}| "
             + (", ".join(fps_parts) if fps_parts else "no cameras yet")
-            + f" | YOLO={snap['inference']['yolo_avg_ms']:.0f}ms/batch"
-            f"(avg {snap['inference']['yolo_avg_batch_size']:.1f} frames,"
-            f" {snap['inference']['yolo_ms_per_frame']:.0f}ms/frame)"
-            f" ArcFace={snap['inference']['arcface_avg_ms']:.0f}ms/batch"
-            f"(avg {snap['inference']['arcface_avg_batch_size']:.1f} faces,"
-            f" {snap['inference']['arcface_ms_per_face']:.0f}ms/face)"
-            f" [det={snap['inference']['arcface_det_avg_ms']:.0f}ms"
-            f"/{snap['inference']['arcface_det_avg_rois']:.1f}rois"
-            f" embed={snap['inference']['arcface_embed_avg_ms']:.0f}ms"
-            f"/{snap['inference']['arcface_embed_avg_batch_size']:.1f}faces]"
         )
 
     def check_alerts(
