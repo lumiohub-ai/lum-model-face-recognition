@@ -53,6 +53,21 @@ class EntryLogger:
         # only a bounded per-track send throttle, not a status store.
         self._sent_attendance: "OrderedDict[tuple, None]" = OrderedDict()
 
+    def prune_location_cache(self) -> None:
+        """Drop `person_last_camera` entries for users no longer known.
+
+        Called on an embedding/user reload. Preserves the one piece of cleanup
+        the removed `reload_status()` used to do (LSO-193): without it,
+        `person_last_camera` keeps stale camera names for deleted/renamed users
+        for the life of the process. `name_to_id` is the current known set.
+        """
+        known = {e["name"] for e in self.name_to_id}
+        stale = [n for n in self.person_last_camera if n not in known]
+        for n in stale:
+            del self.person_last_camera[n]
+        if stale:
+            logger.debug(f"Pruned {len(stale)} stale person_last_camera entries")
+
     def log_person_entry(
         self,
         name: str,

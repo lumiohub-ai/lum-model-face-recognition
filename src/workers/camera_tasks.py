@@ -316,6 +316,7 @@ class _CameraContext:
         self.entry_logger.name_to_id = [
             {"name": name, "id": user_id} for name, user_id in new_map.items()
         ]
+        self.entry_logger.prune_location_cache()
         logger.info(
             f"camera_tasks[cam={self.camera_id}]: reloaded embeddings "
             f"({len(new_map)} users)"
