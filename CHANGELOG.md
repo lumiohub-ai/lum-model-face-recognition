@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.2 (2026-09-09)
+
+## What's Changed
+* Branch-scope get_all_users + get_users_by_status (LSO-191) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/107
+* feat(recognition): branch-scope get_all_users + get_users_by_status (… by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/108
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.1...v0.7.2
+
 ## v0.7.1 (2026-09-08)
 
 ## What's Changed
