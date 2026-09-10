@@ -14,13 +14,16 @@ NOTE: Exception classes and BaseTaskWithRetry are in task_base.py
 to avoid circular imports. Import from there in task modules.
 """
 
+import os
 import zlib
 
 from celery import Celery
+from celery.signals import worker_process_init
 from kombu import Queue, Exchange
 from loguru import logger
 
 from config.settings import settings
+from config.startup import setup_logging
 
 
 def camera_slot(camera_id: int, n_slots: int) -> int:
@@ -205,6 +208,25 @@ celery.conf.update(
     # Enable task events for monitoring
     task_events=True,
 )
+
+@worker_process_init.connect
+def _configure_worker_logging(**kwargs):
+    """Install the app's JSON/rotation logging setup in each worker process.
+
+    `celery -A workers.celery_app worker ...` (compose.yml's command for every
+    worker service) never calls setup_logging() on its own, so without this
+    every worker logs on loguru's untouched default handler — plain text to
+    stderr, no JSON, no log files, no rotation. worker_process_init fires once
+    per worker process, before it starts consuming, matching how
+    init_smart_office_app() calls setup_logging() once for the main process.
+
+    Reuses SO_WORKER_PRELOAD (already set per worker service in compose.yml to
+    pick which model to preload, e.g. "yolo"/"face"/"globaltrack"/"reid") as
+    the service-name hint rather than adding a second identical env var.
+    """
+    queue_hint = os.environ.get("SO_WORKER_PRELOAD", "worker")
+    setup_logging(app_name=f"celery-{queue_hint}")
+
 
 # Log configuration (use logger, not print)
 logger.info(f"[Celery] Configured with broker: {settings.celery_broker_url}")

@@ -210,6 +210,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      # Also used as the `service` field in this worker's logs (celery_app.py).
+      SO_WORKER_PRELOAD: embeddings-detections
       # Celery refuses to start as root when pickle deserialization is
       # enabled (accept_content includes 'pickle', needed for the numpy
       # in face results). The image has no USER, so it runs as root.
