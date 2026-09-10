@@ -22,7 +22,7 @@ reads of something the decode worker publishes.
 import json
 import threading
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from loguru import logger
 
@@ -207,6 +207,7 @@ class SmartOfficeEngine:
                 self.metrics,
                 store=self._metrics_store,
                 camera_ids=_cam_indices,
+                camera_names=self._camera_names(),
                 port=settings.metrics_port,
             )
             self._register_pipeline_gauges()
@@ -267,6 +268,13 @@ class SmartOfficeEngine:
             )
 
         return ids
+
+    def _camera_names(self) -> Dict[int, str]:
+        """{camera_id: camera_name} for the current config set, for logging."""
+        return {
+            c["camera_id"]: c.get("camera_name", str(c["camera_id"]))
+            for c in self.camera_configs
+        }
 
     def _init_entry_logger(self) -> EntryLogger:
         args = type("Args", (), {})()
@@ -873,7 +881,7 @@ class SmartOfficeEngine:
         cam_indices = self._camera_ids()
 
         # Log compact summary line
-        self.metrics.log_summary(cam_indices)
+        self.metrics.log_summary(cam_indices, camera_names=self._camera_names())
 
         # Check for and handle critical alerts
         monitoring_cfg = self.config.get("monitoring", {})
@@ -882,6 +890,7 @@ class SmartOfficeEngine:
             fps_threshold=float(monitoring_cfg.get("fps_alert_threshold", 1.0)),
             gpu_mem_threshold=float(monitoring_cfg.get("gpu_mem_threshold", 90.0)),
             ram_threshold=float(monitoring_cfg.get("ram_threshold", 90.0)),
+            camera_names=self._camera_names(),
         )
 
         if alerts:
