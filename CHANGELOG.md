@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.0 (2026-09-11)
+
+## What's Changed
+* Feat/global track reid workers by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/111
+* fix(reid): distinct shm purposes for the two reid ROI hops by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/113
+* Promote dev → main: global-track/reid worker split (gtreid) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/112
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.3...v0.8.0
+
 ## v0.7.3 (2026-09-09)
 
 ## What's Changed
