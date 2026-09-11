@@ -43,7 +43,7 @@ class RemoteBodyReidExtractor:
     the real `lum_vision.BodyReidExtractor` without any change to
     GlobalTrackManager itself.
 
-    Owns one `RoiBatchSlot(purpose="reid")` per camera_id, mirroring how
+    Owns one `RoiBatchSlot(purpose="reid-extract")` per camera_id, mirroring how
     `_CameraContext` in camera_tasks.py owns one per-camera slot for face
     crops — a single crop still needs a camera_id to name its shared-memory
     ring, since the ring is per-camera (see frame_store.py's RoiBatchSlot).
@@ -68,9 +68,14 @@ class RemoteBodyReidExtractor:
         self.on_fallback: Optional[Callable[[], None]] = None
 
     def _slot_for(self, camera_id: int) -> RoiBatchSlot:
+        # purpose="reid-extract": person crops for the global-track-worker ->
+        # reid-worker hop. MUST differ from global_track_client's "reid-assign"
+        # (camera-worker -> global-track-worker): global-track-worker owns a slot
+        # from each ring for the same camera, so a shared purpose collides their
+        # _LOCAL_SLOTS entries and silently misreads crops (see frame_store).
         slot = self._slots.get(camera_id)
         if slot is None:
-            slot = RoiBatchSlot(camera_id, purpose="reid")
+            slot = RoiBatchSlot(camera_id, purpose="reid-extract")
             self._slots[camera_id] = slot
         return slot
 
@@ -100,7 +105,9 @@ class RemoteBodyReidExtractor:
         same-process model failure already produced.
         """
         if camera_id is None:
-            logger.warning("reid_client: extract() called with camera_id=None — no embedding")
+            logger.warning(
+                "reid_client: extract() called with camera_id=None — no embedding"
+            )
             return None
         from workers.reid_tasks import extract_batch_task
 
