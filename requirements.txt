@@ -6,13 +6,10 @@
 # Brings in opencv, ultralytics, onnxruntime, loguru, gdown, lap, filterpy,
 # ollama and boxmot.
 #
-# TEMPORARY: pinned to a branch, not a tag, for the global-track/reid worker
-# split (feat/global-track-reid-workers). feat/body-reid-extractor carries
-# BodyReidExtractor (person_tracking/reid.py) — required so reid-worker can
-# construct the ReID model directly, the same way yolo-worker constructs
-# PersonDetector — stacked on fix/recycled-local-id-false-merge. Re-pin to a
-# released tag once both are reviewed and merged.
-lum-model-vision @ git+ssh://git@github.com/lumiohub-ai/lum-model-vision.git@feat/body-reid-extractor
+# v0.4.0 is the first release carrying BodyReidExtractor (person_tracking/reid.py)
+# — required so reid-worker can construct the ReID model directly, the same way
+# yolo-worker constructs PersonDetector.
+lum-model-vision @ git+ssh://git@github.com/lumiohub-ai/lum-model-vision.git@v0.4.0
 
 # To iterate on model code locally instead, clone the package repo alongside
 # this one and comment out the line above in favor of:
