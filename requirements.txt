@@ -1,11 +1,15 @@
 # ML models (face detection, person tracking, ReID, action recognition), now
-# a standalone package at github.com/lumiohub-ai/lum-model-vision. Pinned to a
-# tag, not a branch, so installs are reproducible — bump the tag deliberately,
-# don't float it. Private repo: this needs an SSH agent forwarded at install
-# time (docker build --ssh default; see Dockerfile).
+# a standalone package at github.com/lumiohub-ai/lum-model-vision. Normally
+# pinned to a tag, not a branch, so installs are reproducible — bump the tag
+# deliberately, don't float it. Private repo: this needs an SSH agent
+# forwarded at install time (docker build --ssh default; see Dockerfile).
 # Brings in opencv, ultralytics, onnxruntime, loguru, gdown, lap, filterpy,
 # ollama and boxmot.
-lum-model-vision @ git+ssh://git@github.com/lumiohub-ai/lum-model-vision.git@v0.3.0
+#
+# v0.4.0 is the first release carrying BodyReidExtractor (person_tracking/reid.py)
+# — required so reid-worker can construct the ReID model directly, the same way
+# yolo-worker constructs PersonDetector.
+lum-model-vision @ git+ssh://git@github.com/lumiohub-ai/lum-model-vision.git@v0.4.0
 
 # To iterate on model code locally instead, clone the package repo alongside
 # this one and comment out the line above in favor of:

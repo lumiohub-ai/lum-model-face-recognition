@@ -324,15 +324,23 @@ class MetricsCollector:
 
     # ── Full snapshot ─────────────────────────────────────────────────────────
 
-    def snapshot(self, camera_ids: Optional[List[int]] = None) -> Dict:
+    def snapshot(
+        self,
+        camera_ids: Optional[List[int]] = None,
+        camera_names: Optional[Dict[int, str]] = None,
+    ) -> Dict:
         """Return a complete metrics snapshot dict.
 
         Args:
             camera_ids: list of DB camera ids to include; defaults to all seen.
+            camera_names: optional {camera_id: name}, surfaced per-camera as
+                "name" (falls back to the id) for display — e.g. the metrics
+                dashboard.
 
         Returns a dict with keys: timestamp, cpu_percent, memory, gpu, cameras, inference.
         """
         indices = camera_ids if camera_ids is not None else list(self._frame_ts.keys())
+        names = camera_names or {}
 
         def _batch_stats(buf: deque) -> Dict[str, float]:
             """Per-call average ms/batch-size, plus the honest per-item cost
@@ -366,6 +374,7 @@ class MetricsCollector:
             "gpu": self.gpu(),
             "cameras": {
                 str(idx): {
+                    "name": names.get(idx, str(idx)),
                     # Prefer a registered gauge over the local deque: with
                     # decoding in its own process, record_frame is never
                     # called here, so get_fps would report a flat 0.0 for
@@ -419,16 +428,27 @@ class MetricsCollector:
             },
         }
 
-    def log_summary(self, camera_ids: Optional[List[int]] = None) -> None:
-        """Log a compact metrics summary line to loguru (INFO level)."""
-        snap = self.snapshot(camera_ids)
+    def log_summary(
+        self,
+        camera_ids: Optional[List[int]] = None,
+        camera_names: Optional[Dict[int, str]] = None,
+    ) -> None:
+        """Log a compact metrics summary line to loguru (INFO level).
+
+        camera_names: optional {camera_id: name} for a human-readable label
+        in the fps list (e.g. "Vision_1" instead of "32"). Falls back to the
+        id when a camera has no entry, so this stays optional for callers
+        that don't have names handy (tests, other single-process paths).
+        """
+        snap = self.snapshot(camera_ids, camera_names=camera_names)
         gpu = snap["gpu"]
         gpu_str = (
             f"GPU={gpu['util_percent']}% VRAM={gpu['mem_used_mb']:.0f}/{gpu['mem_total_mb']:.0f}MB({gpu['mem_percent']:.0f}%)"
             if gpu else "GPU=N/A"
         )
+        names = camera_names or {}
         fps_parts = [
-            f"cam{idx}={snap['cameras'][str(idx)]['fps']:.1f}fps"
+            f"cam[{names.get(idx, idx)}]={snap['cameras'][str(idx)]['fps']:.1f}fps"
             f"(drops={snap['cameras'][str(idx)]['frame_drops']},"
             f"read={snap['cameras'][str(idx)]['read_ms']:.0f}ms,"
             f"dec={snap['cameras'][str(idx)]['decode_ms']:.0f}ms)"
@@ -446,21 +466,23 @@ class MetricsCollector:
             "| " + " ".join(f"{k}={v}" for k, v in sorted(pipe.items()) if v is not None) + " "
             if pipe else ""
         )
+        # The old trailing "YOLO=...ms/batch(...) ArcFace=...(...)" section
+        # read snap["inference"], which is fed by record_yolo_ms/
+        # record_arcface_ms — in-process detector calls that no longer exist
+        # now that YOLO/ArcFace run in their own Celery workers (yolo-worker/
+        # face-worker). It always showed 0. The real, live numbers are
+        # already in pipe_str above (yolo_batch_avg_ms, yolo_frame_avg_ms,
+        # face_det_avg_ms, face_embed_avg_ms — published via Redis by those
+        # workers, see pipeline/infer_metrics.py), so this section was pure
+        # duplication of a broken kind. Removed rather than reconstructed:
+        # the Redis-side gauges don't publish batch-size/face-count, only
+        # latency, so a like-for-like replacement isn't a small change — do
+        # that separately if batch-size visibility is needed again.
         logger.info(
             f"[Metrics] CPU={snap['cpu_percent']:.0f}% "
             f"RAM={snap['memory']['used_gb']:.1f}/{snap['memory']['total_gb']:.1f}GB({snap['memory']['percent']:.0f}%) "
             f"{proc_str}{gpu_str} {pipe_str}| "
             + (", ".join(fps_parts) if fps_parts else "no cameras yet")
-            + f" | YOLO={snap['inference']['yolo_avg_ms']:.0f}ms/batch"
-            f"(avg {snap['inference']['yolo_avg_batch_size']:.1f} frames,"
-            f" {snap['inference']['yolo_ms_per_frame']:.0f}ms/frame)"
-            f" ArcFace={snap['inference']['arcface_avg_ms']:.0f}ms/batch"
-            f"(avg {snap['inference']['arcface_avg_batch_size']:.1f} faces,"
-            f" {snap['inference']['arcface_ms_per_face']:.0f}ms/face)"
-            f" [det={snap['inference']['arcface_det_avg_ms']:.0f}ms"
-            f"/{snap['inference']['arcface_det_avg_rois']:.1f}rois"
-            f" embed={snap['inference']['arcface_embed_avg_ms']:.0f}ms"
-            f"/{snap['inference']['arcface_embed_avg_batch_size']:.1f}faces]"
         )
 
     def check_alerts(
@@ -469,6 +491,7 @@ class MetricsCollector:
         fps_threshold: float = 1.0,
         gpu_mem_threshold: float = 90.0,
         ram_threshold: float = 90.0,
+        camera_names: Optional[Dict[int, str]] = None,
     ) -> List[Dict]:
         """Check for critical conditions and return a list of alert dicts.
 
@@ -477,9 +500,12 @@ class MetricsCollector:
             fps_threshold:    alert if FPS drops below this (0 = camera just started)
             gpu_mem_threshold: alert if GPU VRAM % exceeds this
             ram_threshold:    alert if system RAM % exceeds this
+            camera_names: optional {camera_id: name} for a human-readable
+                camera in the alert message; falls back to the id.
         """
         alerts = []
         snap = self.snapshot(camera_ids)
+        names = camera_names or {}
 
         for idx in (camera_ids or []):
             fps = snap["cameras"].get(str(idx), {}).get("fps", 0.0)
@@ -490,7 +516,7 @@ class MetricsCollector:
                     "camera_id": idx,
                     "fps": fps,
                     "threshold": fps_threshold,
-                    "message": f"Camera {idx} FPS={fps:.2f} is below threshold ({fps_threshold})",
+                    "message": f"Camera {names.get(idx, idx)} FPS={fps:.2f} is below threshold ({fps_threshold})",
                 })
 
         gpu = snap["gpu"]

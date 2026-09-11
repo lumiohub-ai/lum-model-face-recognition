@@ -458,8 +458,17 @@ def shared_memory_exists(name: str) -> bool:
 _ROI_SLOT_NAME_PREFIX = "camroi"
 
 
-def _roi_slot_name(camera_id: int) -> str:
-    return f"{_ROI_SLOT_NAME_PREFIX}_{camera_id}"
+def _roi_slot_name(camera_id: int, purpose: str = "face") -> str:
+    # purpose namespaces the ring so two independent ROI batches for the same
+    # camera (face crops for face-worker, person crops for reid-worker) don't
+    # share segment names and overwrite each other. "face" is the default so
+    # every pre-existing call site (face_client.py, camera_tasks.py) needs no
+    # change. The segment name itself is a live /dev/shm identifier only,
+    # created and destroyed within one process's lifetime and never persisted
+    # or referenced outside this process — the writer and every reader always
+    # restart together (same image, same compose), so changing this prefix's
+    # exact string carries no cross-deploy compatibility concern.
+    return f"{_ROI_SLOT_NAME_PREFIX}_{purpose}_{camera_id}"
 
 
 @dataclass(frozen=True)
@@ -475,11 +484,11 @@ class RoiHandle:
 
 @dataclass(frozen=True)
 class RoiBatchHandle:
-    """What actually travels through the Celery broker for submit_faces — no
-    pixels, same principle as FrameHandle. `rois` carries each crop's shape
-    and packed offset since, unlike frames, crops in one batch are not all
-    the same size — there is no single (height, width, channels) to put on
-    the handle itself.
+    """What actually travels through the Celery broker for submit_faces (or
+    reid-worker's extraction call) — no pixels, same principle as
+    FrameHandle. `rois` carries each crop's shape and packed offset since,
+    unlike frames, crops in one batch are not all the same size — there is
+    no single (height, width, channels) to put on the handle itself.
     """
 
     camera_id: int
@@ -487,18 +496,24 @@ class RoiBatchHandle:
     segment: int
     instance_id: int
     rois: Tuple[RoiHandle, ...]
+    purpose: str = "face"
 
 
 class RoiBatchSlot:
     """Producer-side owner of one camera's ring of shared-memory ROI-batch
     segments.
 
-    One instance per camera, mirroring CameraFrameSlot: a single-writer
-    ring, one batch in flight per segment (each `write()` call replaces
-    whatever the segment's previous generation held `_RING_SIZE` writes
-    ago). Owned by `_CameraContext.process_frame` (workers/camera_tasks.py),
-    which writes here on every recognition-due detection frame and hands the
-    resulting handle to `FaceEmbedClient.embed` (workers/face_client.py).
+    One instance per (camera, purpose), mirroring CameraFrameSlot: a
+    single-writer ring, one batch in flight per segment (each `write()` call
+    replaces whatever the segment's previous generation held `_RING_SIZE`
+    writes ago). The `purpose="face"` instance is owned by
+    `_CameraContext.process_frame` (workers/camera_tasks.py), which writes
+    here on every recognition-due detection frame and hands the resulting
+    handle to `FaceEmbedClient.embed` (workers/face_client.py).
+    `purpose="reid"` is a second, independent ring for person crops headed to
+    reid-worker instead — same class, same wire format, disjoint segment
+    names (see `_roi_slot_name`), so the two never collide for the same
+    camera.
 
     All crops in one call are packed into a single contiguous payload —
     variable-size, so packed by running byte offset (after the header) rather
@@ -509,9 +524,10 @@ class RoiBatchSlot:
     needing to inspect the block at all.
     """
 
-    def __init__(self, camera_id: int):
+    def __init__(self, camera_id: int, purpose: str = "face"):
         self.camera_id = camera_id
-        self._base_name = _roi_slot_name(camera_id)
+        self.purpose = purpose
+        self._base_name = _roi_slot_name(camera_id, purpose)
         self._shms: Dict[int, shared_memory.SharedMemory] = {}
         self._seq = 0
         with _ATTACHED_LOCK:
@@ -605,6 +621,7 @@ class RoiBatchSlot:
             segment=segment,
             instance_id=_INSTANCE_ID,
             rois=tuple(rois),
+            purpose=self.purpose,
         )
 
     def _release(self) -> None:
@@ -644,13 +661,13 @@ def attach_and_read_roi_batch(
     if not handle.rois:
         return []
 
-    name = _segment_name(_roi_slot_name(handle.camera_id), handle.segment)
+    name = _segment_name(_roi_slot_name(handle.camera_id, handle.purpose), handle.segment)
     needed = _HEADER_SIZE + max(
         r.offset + int(np.prod((r.height, r.width, r.channels))) for r in handle.rois
     )
 
     with _ATTACHED_LOCK:
-        local_slot = _LOCAL_SLOTS.get(_roi_slot_name(handle.camera_id))
+        local_slot = _LOCAL_SLOTS.get(_roi_slot_name(handle.camera_id, handle.purpose))
         if local_slot is not None:
             # Same-process fast path — see _LOCAL_SLOTS and the matching
             # block in attach_and_read. Each copy is a single expression so

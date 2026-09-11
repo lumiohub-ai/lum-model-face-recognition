@@ -67,6 +67,14 @@ global_tracking:
     # Archive global tracks after N minutes of inactivity
     archive_after_inactive_min: 10
 
+    # Hard expiry: archive on staleness alone, ignoring per-camera active flags.
+    # Safety net for a dropped on_track_removed message, which would otherwise
+    # pin a record in memory forever.
+    #
+    # Must stay >= matching.removal_window_sec (300s), or we would delete records
+    # that re-entry matching still needs and split one person into two IDs.
+    force_archive_after_inactive_min: 10
+
     # Overlapping camera groups
     # Cameras in the same group can see the same person simultaneously
     # Only split tracks if simultaneity occurs between cameras NOT in the same group

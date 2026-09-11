@@ -249,10 +249,11 @@ class RoiBatchSlotTests(unittest.TestCase):
 
 
 class SameProcessReadTests(unittest.TestCase):
-    """Reads in the PRODUCER'S OWN process - not a degenerate test setup:
-    global_track_rpc.py's GpuRpcServer (the one RPC bridge left after the
-    per-camera-queue switch) runs in the main process, the same process
-    whose CeleryCameraProducer threads own the slots, so any same-process
+    """Reads in the PRODUCER'S OWN process - not a degenerate test setup.
+    Several producers can also be readers: pipeline/frame_pump.py owns a
+    camera's CameraFrameSlot in the same process its threads write it, and
+    the ROI slots in global_track_client.py / reid_client.py are written by a
+    worker that may read them back under an eager or solo pool. Any such
     reader hits this path. These reads must take the _LOCAL_SLOTS fast path
     (straight from the owning slot's mapping) rather than _attach_fresh,
     whose resource_tracker.unregister would delete the producer's own

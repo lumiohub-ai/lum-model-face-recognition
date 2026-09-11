@@ -14,7 +14,7 @@ Endpoints:
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
@@ -315,7 +315,7 @@ async function fetchLive() {
 
     const cameras = d.cameras||{};
     const ks = Object.keys(cameras).sort((a,b)=>+a-+b);
-    fpsChart.data.labels = ks.map(k=>'cam'+k);
+    fpsChart.data.labels = ks.map(k=>cameras[k].name||k);
     if (!fpsChart.data.datasets.length)
       fpsChart.data.datasets.push({data:[],backgroundColor:[],borderRadius:4});
     fpsChart.data.datasets[0].data = ks.map(k=>cameras[k].fps);
@@ -328,7 +328,7 @@ async function fetchLive() {
       const cls=fps<5?'low':fps<15?'mid':'';
       const stateCls = cam.stream_state==='streaming' ? 'ok' : 'low';
       return `<div class="cam-card">
-        <div class="cam-title">Camera ${k} <span class="cam-state ${stateCls}">${cam.stream_state||'unknown'}</span></div>
+        <div class="cam-title">Camera ${cam.name||k} <span class="cam-state ${stateCls}">${cam.stream_state||'unknown'}</span></div>
         <div class="cam-fps ${cls}">${fps.toFixed(1)}</div>
         <div class="cam-drops">fps &nbsp;·&nbsp; ${cam.frame_drops} drops</div>
         <div class="cam-drops">read ${cam.read_ms!=null?cam.read_ms.toFixed(0):'—'}ms &nbsp;·&nbsp; decode ${cam.decode_ms!=null?cam.decode_ms.toFixed(0):'—'}ms</div>
@@ -472,6 +472,7 @@ class _Handler(BaseHTTPRequestHandler):
     _metrics = None
     _store = None
     _camera_ids: List[int] = []
+    _camera_names: Dict[int, str] = {}
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -482,7 +483,9 @@ class _Handler(BaseHTTPRequestHandler):
 
         elif path == "/api/metrics":
             try:
-                snap = self.__class__._metrics.snapshot(self.__class__._camera_ids)
+                snap = self.__class__._metrics.snapshot(
+                    self.__class__._camera_ids, camera_names=self.__class__._camera_names
+                )
                 self._ok("application/json", json.dumps(snap, default=float).encode())
             except Exception as e:
                 self._err(500, str(e))
@@ -548,17 +551,23 @@ class MetricsDashboardServer:
         metrics,
         store=None,
         camera_ids: Optional[List[int]] = None,
+        camera_names: Optional[Dict[int, str]] = None,
         port: int = 8765,
     ):
         self._metrics = metrics
         self._store = store
         self._camera_ids = camera_ids or []
+        self._camera_names = camera_names or {}
         self._port = port
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
-    def update_camera_ids(self, camera_ids: List[int]) -> None:
+    def update_camera_ids(
+        self, camera_ids: List[int], camera_names: Optional[Dict[int, str]] = None
+    ) -> None:
         _Handler._camera_ids = camera_ids
+        if camera_names is not None:
+            _Handler._camera_names = camera_names
         if self._store:
             self._store.update_camera_ids(camera_ids)
 
@@ -566,6 +575,7 @@ class MetricsDashboardServer:
         _Handler._metrics = self._metrics
         _Handler._store = self._store
         _Handler._camera_ids = self._camera_ids
+        _Handler._camera_names = self._camera_names
 
         if self._store:
             self._store.start()
