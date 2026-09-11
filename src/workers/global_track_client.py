@@ -70,6 +70,7 @@ class _LocalIdFallback:
             self._next -= 1
             return value
 
+
 # Below the task's own soft limits, and sized like the socket timeout it
 # replaces (SO_GPU_RPC_TIMEOUT_S defaulted to 0.25s): a timeout here degrades
 # to a local-only ID rather than dropping a frame, so it does not need to be
@@ -89,7 +90,9 @@ DEFAULT_TIMEOUT_S = float(os.environ.get("SO_GLOBALTRACK_TIMEOUT_S", "1.5"))
 # it does not close it — cleanup_inactive_global_tracks' hard-expiry fallback
 # is what actually bounds the leak when a message is still lost.
 _EXPIRES_OVERRIDES_S: Dict[str, float] = {
-    "on_track_removed": float(os.environ.get("SO_GLOBALTRACK_REMOVED_EXPIRES_S", "30.0")),
+    "on_track_removed": float(
+        os.environ.get("SO_GLOBALTRACK_REMOVED_EXPIRES_S", "30.0")
+    ),
 }
 
 _BLOCKING_METHODS = frozenset({"assign_global_id", "find_global_track_by_identity"})
@@ -153,13 +156,16 @@ class GlobalTrackClient:
         self.on_fallback: Optional[Callable[[], None]] = None
 
     def _slot_for(self, camera_id: int) -> RoiBatchSlot:
-        # purpose="reid": these are person crops headed for ReID matching,
-        # namespaced away from the face-crop ring for the same camera (see
-        # frame_store._roi_slot_name).
+        # purpose="reid-assign": person crops for the camera-worker ->
+        # global-track-worker hop. MUST differ from reid_client's "reid-extract"
+        # (global-track-worker -> reid-worker): global-track-worker hosts a
+        # reader of THIS ring AND a producer of that one for the same camera, so
+        # a shared purpose would collide their _LOCAL_SLOTS entries in that
+        # process and silently misread crops (see frame_store._LOCAL_SLOTS).
         with self._slots_lock:
             slot = self._slots.get(camera_id)
             if slot is None:
-                slot = RoiBatchSlot(camera_id, purpose="reid")
+                slot = RoiBatchSlot(camera_id, purpose="reid-assign")
                 self._slots[camera_id] = slot
             return slot
 
@@ -220,13 +226,16 @@ class GlobalTrackClient:
                 kwargs.pop("face_embedding", None)
                 kwargs["handle"] = self._to_handle(kwargs.get("camera_id", 0), crop)
                 async_result = task.apply_async(
-                    kwargs=self._json_safe(kwargs), queue="globaltrack",
+                    kwargs=self._json_safe(kwargs),
+                    queue="globaltrack",
                     expires=self._expires_s,
                 )
             else:
                 async_result = task.apply_async(
-                    args=self._json_safe(args), kwargs=self._json_safe(kwargs),
-                    queue="globaltrack", expires=self._expires_s,
+                    args=self._json_safe(args),
+                    kwargs=self._json_safe(kwargs),
+                    queue="globaltrack",
+                    expires=self._expires_s,
                 )
             value = async_result.get(
                 timeout=self._timeout_s, disable_sync_subtasks=False

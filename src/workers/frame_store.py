@@ -153,7 +153,9 @@ class CameraFrameSlot:
     def _segment_shm(self, segment: int) -> Optional[shared_memory.SharedMemory]:
         return self._shms.get(segment)
 
-    def _ensure_segment(self, segment: int, shape: Tuple[int, int, int]) -> shared_memory.SharedMemory:
+    def _ensure_segment(
+        self, segment: int, shape: Tuple[int, int, int]
+    ) -> shared_memory.SharedMemory:
         if self._shape != shape:
             # Shape changed: every existing segment is the wrong size, drop
             # them all so each is reallocated the next time it's written.
@@ -384,7 +386,9 @@ def _attach_and_read_ring(handle: FrameHandle, base_name: str) -> Optional[np.nd
             # single expression so its temporary view releases its buffer
             # export before this lock does; _release() takes the same lock,
             # which is what makes a concurrent reshape/close safe here.
-            local_shm = getattr(local_slot, "_segment_shm", lambda _s: None)(handle.segment)
+            local_shm = getattr(local_slot, "_segment_shm", lambda _s: None)(
+                handle.segment
+            )
             if local_shm is None or local_shm.size < nbytes:
                 return None
             if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
@@ -510,10 +514,15 @@ class RoiBatchSlot:
     `_CameraContext.process_frame` (workers/camera_tasks.py), which writes
     here on every recognition-due detection frame and hands the resulting
     handle to `FaceEmbedClient.embed` (workers/face_client.py).
-    `purpose="reid"` is a second, independent ring for person crops headed to
-    reid-worker instead — same class, same wire format, disjoint segment
-    names (see `_roi_slot_name`), so the two never collide for the same
-    camera.
+    Person crops use TWO reid purposes, not one, because the crop makes two
+    hops through a shared middle process: `"reid-assign"` (camera-worker ->
+    global-track-worker) and `"reid-extract"` (global-track-worker ->
+    reid-worker). global-track-worker reads the first ring AND produces into
+    the second for the same camera, so the two purposes MUST differ — a shared
+    one collides their `_LOCAL_SLOTS` entries in that process and silently
+    misreads crops (see `global_track_client._slot_for` /
+    `reid_client._slot_for`). All purposes get disjoint segment names via
+    `_roi_slot_name`, so no two rings collide for the same camera.
 
     All crops in one call are packed into a single contiguous payload —
     variable-size, so packed by running byte offset (after the header) rather
@@ -661,7 +670,9 @@ def attach_and_read_roi_batch(
     if not handle.rois:
         return []
 
-    name = _segment_name(_roi_slot_name(handle.camera_id, handle.purpose), handle.segment)
+    name = _segment_name(
+        _roi_slot_name(handle.camera_id, handle.purpose), handle.segment
+    )
     needed = _HEADER_SIZE + max(
         r.offset + int(np.prod((r.height, r.width, r.channels))) for r in handle.rois
     )
@@ -673,7 +684,9 @@ def attach_and_read_roi_batch(
             # block in attach_and_read. Each copy is a single expression so
             # no view outlives its statement; _release() takes this same
             # lock, making a concurrent reallocation/close safe.
-            local_shm = getattr(local_slot, "_segment_shm", lambda _s: None)(handle.segment)
+            local_shm = getattr(local_slot, "_segment_shm", lambda _s: None)(
+                handle.segment
+            )
             if local_shm is None or local_shm.size < needed:
                 return None
             if _unpack_seq_header(local_shm.buf) != (handle.instance_id, handle.seq):
@@ -728,4 +741,3 @@ def attach_and_read_roi_batch(
             return None
 
     return crops
-

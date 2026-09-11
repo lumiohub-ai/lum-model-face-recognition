@@ -62,7 +62,9 @@ def _frame_reader(conn, results):
         handle, raw, shape, dtype = msg
         expected = np.frombuffer(raw, dtype=dtype).reshape(shape)
         got = frame_store.attach_and_read(handle)
-        results.append((handle.seq, np.array_equal(expected, got) if got is not None else False))
+        results.append(
+            (handle.seq, np.array_equal(expected, got) if got is not None else False)
+        )
         conn.send("ack")
 
 
@@ -98,9 +100,7 @@ def _roi_reader(conn, results):
         else:
             ok = len(got) == len(raw) and all(
                 tid == expected_tid
-                and np.array_equal(
-                    crop, np.frombuffer(rb, dtype=dt).reshape(shape)
-                )
+                and np.array_equal(crop, np.frombuffer(rb, dtype=dt).reshape(shape))
                 for (tid, crop), (rb, shape, dt), expected_tid in zip(
                     got, raw, [h.track_id for h in handle.rois]
                 )
@@ -119,7 +119,9 @@ class CameraFrameSlotTests(unittest.TestCase):
         results = manager.list()
         parent_conn, child_conn = mp.Pipe()
         reader = mp.Process(target=_frame_reader, args=(parent_conn, results))
-        producer = mp.Process(target=_frame_producer, args=(camera_id, child_conn, frames))
+        producer = mp.Process(
+            target=_frame_producer, args=(camera_id, child_conn, frames)
+        )
         reader.start()
         producer.start()
         producer.join(timeout=15)
@@ -163,7 +165,9 @@ class RoiBatchSlotTests(unittest.TestCase):
         results = manager.list()
         parent_conn, child_conn = mp.Pipe()
         reader = mp.Process(target=_roi_reader, args=(parent_conn, results))
-        producer = mp.Process(target=_roi_producer, args=(camera_id, child_conn, batches))
+        producer = mp.Process(
+            target=_roi_producer, args=(camera_id, child_conn, batches)
+        )
         reader.start()
         producer.start()
         producer.join(timeout=15)
@@ -319,6 +323,47 @@ class SameProcessReadTests(unittest.TestCase):
         slot.close()
         self.assertIsNone(frame_store.attach_and_read_roi_batch(handle))
 
+    def test_reid_assign_and_extract_rings_do_not_collide_same_process(self):
+        """Regression: global-track-worker hosts BOTH a reader of the
+        camera-worker -> global-track ring ("reid-assign") and a producer of
+        the global-track -> reid-worker ring ("reid-extract") for the SAME
+        camera. If the two shared one purpose, the producer's _LOCAL_SLOTS
+        entry would shadow the inbound ring in that process, so a same-process
+        read of the inbound handle silently matched the wrong slot — turning
+        ReID matching permanently off for the camera with no error or metric.
+        Distinct purposes must keep the two rings separate.
+        """
+        from workers import frame_store
+
+        cam = 350
+        assign_slot = frame_store.RoiBatchSlot(cam, purpose="reid-assign")
+        extract_slot = frame_store.RoiBatchSlot(cam, purpose="reid-extract")
+        try:
+            assign_crops = [_random_frame(20, 10), _random_frame(24, 12)]
+            assign_handle = assign_slot.write(assign_crops, [1, 2])
+
+            # extract_slot created/written AFTER — this is exactly the overwrite
+            # that broke the inbound read when both shared purpose="reid".
+            extract_crops = [_random_frame(30, 15)]
+            extract_handle = extract_slot.write(extract_crops, [9])
+
+            # The inbound (assign) handle must still read its OWN crops — not
+            # the extract ring's, and not None.
+            got_assign = frame_store.attach_and_read_roi_batch(assign_handle)
+            self.assertIsNotNone(got_assign)
+            self.assertEqual([tid for tid, _ in got_assign], [1, 2])
+            for (_tid, crop), expected in zip(got_assign, assign_crops):
+                self.assertTrue(np.array_equal(crop, expected))
+
+            # And the extract handle reads its own.
+            got_extract = frame_store.attach_and_read_roi_batch(extract_handle)
+            self.assertIsNotNone(got_extract)
+            self.assertEqual([tid for tid, _ in got_extract], [9])
+            self.assertTrue(np.array_equal(got_extract[0][1], extract_crops[0]))
+        finally:
+            assign_slot.close()
+            extract_slot.close()
+
     def test_frame_read_of_recycled_generation_returns_none_not_wrong_pixels(self):
         """The actual bug measured live: a single depth-1 slot let a reader
         silently see whichever frame currently occupies the segment, not the
@@ -392,9 +437,7 @@ class SameProcessReadTests(unittest.TestCase):
                         # old size-only check would have kept trusting the
                         # cached mapping forever here. The header check
                         # (seq AND instance id) must not.
-                        self.assertIsNone(
-                            frame_store.attach_and_read(stale_handle)
-                        )
+                        self.assertIsNone(frame_store.attach_and_read(stale_handle))
                     got_after = frame_store.attach_and_read(new_handle)
                     self.assertTrue(np.array_equal(got_after, frame_data_after))
                 finally:
@@ -563,7 +606,9 @@ class RoiBatchSlotValidationTests(unittest.TestCase):
         slot = frame_store.RoiBatchSlot(camera_id=198)
         try:
             with self.assertRaises(ValueError):
-                slot.write([np.zeros((10, 10), dtype=np.uint8)], [1])  # missing channel dim
+                slot.write(
+                    [np.zeros((10, 10), dtype=np.uint8)], [1]
+                )  # missing channel dim
         finally:
             slot.close()
 
