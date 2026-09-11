@@ -466,6 +466,9 @@ class FakeEntryLogger:
         self.current_users = []
         self.name_to_id = []
 
+    def prune_location_cache(self) -> None:
+        pass
+
 
 class ReloadHandlerTests(unittest.TestCase):
     """The worker owns its own FaceMatcher/EntryLogger/CameraEngine, so it

@@ -40,8 +40,10 @@ from loguru import logger
 
 _person_detector: Optional[Any] = None
 _face_detector: Optional[Any] = None
+_reid_extractor: Optional[Any] = None
 _person_lock = threading.Lock()
 _face_lock = threading.Lock()
+_reid_lock = threading.Lock()
 
 
 def _vision_config():
@@ -129,6 +131,69 @@ def ensure_face_detector_loaded():
     return _face_detector
 
 
+def _body_reid_config() -> dict:
+    """Read the `body_reid` section straight from configs/global_tracking.yaml,
+    the same file and the same merge shape GlobalTrackManager itself reads
+    (lum_vision.person_tracking.global_track.GlobalTrackManager._load_config:
+    `yaml.safe_load(f)["global_tracking"]`). This worker never constructs a
+    GlobalTrackManager - it only needs the one sub-section GlobalTrackManager
+    would otherwise use to build its own default BodyReidExtractor - so this
+    reads the file directly rather than instantiating anything from lum_vision
+    just to reach one dict.
+
+    Falls back to {} (so BodyReidExtractor's own defaults apply) if the
+    app-level override file is absent, matching GlobalTrackManager's own
+    fallback to its packaged config.
+    """
+    import yaml
+
+    from config.vision import GLOBAL_TRACKING_CONFIG
+
+    if not GLOBAL_TRACKING_CONFIG.exists():
+        return {}
+    with open(GLOBAL_TRACKING_CONFIG) as f:
+        config = yaml.safe_load(f) or {}
+    return config.get("global_tracking", {}).get("body_reid", {})
+
+
+def ensure_reid_extractor_loaded():
+    """Load the body ReID model once per process. Idempotent, thread-safe.
+
+    Builds the exact BodyReidExtractor GlobalTrackManager would build itself
+    by default (person_tracking/reid.py) - reid-worker just constructs it
+    directly instead of indirectly through a GlobalTrackManager instance,
+    since this process runs no matching logic, only extraction.
+    """
+    global _reid_extractor
+    if _reid_extractor is not None:
+        return _reid_extractor
+    with _reid_lock:
+        if _reid_extractor is not None:
+            return _reid_extractor
+
+        from lum_vision import BodyReidExtractor
+
+        cfg = _vision_config()
+        reid_cfg = _body_reid_config()
+        logger.info(
+            f"model_holder: loading BodyReidExtractor "
+            f"({reid_cfg.get('model', 'osnet_x0_25_msmt17')}, "
+            f"weights_dir={cfg.weights_dir})"
+        )
+        _reid_extractor = BodyReidExtractor(
+            model_name=reid_cfg.get("model", "osnet_x0_25_msmt17"),
+            weights_path=reid_cfg.get("weights_path"),
+            # Explicit, never auto-detected inside BodyReidExtractor if this
+            # is None — see constraint 2 above. A worker pinned to a second
+            # GPU is told which one via SO_GPU_DEVICE, same as PersonDetector.
+            device=reid_cfg.get("device") or _resolve_device(),
+            half_precision=reid_cfg.get("half_precision", False),
+            weights_dir=cfg.weights_dir,
+        )
+        logger.info("model_holder: BodyReidExtractor ready")
+    return _reid_extractor
+
+
 def _resolve_device() -> str:
     """Device for the YOLO model, from config/env rather than auto-detection.
 
@@ -149,4 +214,5 @@ def identity() -> dict:
         "pid": os.getpid(),
         "person_detector_id": id(_person_detector) if _person_detector else None,
         "face_detector_id": id(_face_detector) if _face_detector else None,
+        "reid_extractor_id": id(_reid_extractor) if _reid_extractor else None,
     }

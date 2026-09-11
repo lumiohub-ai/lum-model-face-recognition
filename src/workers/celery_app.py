@@ -14,13 +14,16 @@ NOTE: Exception classes and BaseTaskWithRetry are in task_base.py
 to avoid circular imports. Import from there in task modules.
 """
 
+import os
 import zlib
 
 from celery import Celery
+from celery.signals import worker_process_init
 from kombu import Queue, Exchange
 from loguru import logger
 
 from config.settings import settings
+from config.startup import setup_logging
 
 
 def camera_slot(camera_id: int, n_slots: int) -> int:
@@ -48,6 +51,8 @@ celery = Celery(
         'workers.camera_tasks',
         'workers.yolo_tasks',
         'workers.face_tasks',
+        'workers.reid_tasks',
+        'workers.global_track_tasks',
     ]
 )
 
@@ -119,10 +124,14 @@ celery.conf.update(
         'workers.detection_tasks.*': {'queue': 'detections'},
         'workers.yolo_tasks.*': {'queue': 'yolo'},
         'workers.face_tasks.*': {'queue': 'face'},
+        'workers.reid_tasks.*': {'queue': 'reid'},
+        'workers.global_track_tasks.*': {'queue': 'globaltrack'},
         'detection.*': {'queue': 'detections'},
         'embedding.*': {'queue': 'embeddings'},
         'yolo.*': {'queue': 'yolo'},
         'face.*': {'queue': 'face'},
+        'reid.*': {'queue': 'reid'},
+        'globaltrack.*': {'queue': 'globaltrack'},
     },
 
     # Queue definitions with DLQ support
@@ -140,16 +149,29 @@ celery.conf.update(
     # backlog on one could starve the worker the other is waiting on.
     # Keeping them separate is what makes the blocking call safe — do not
     # consolidate these to "simplify".
+    #
+    # globaltrack MUST run as exactly one consumer: GlobalTrackManager is a
+    # single shared in-memory list (global_tracks, local_to_global) plus one
+    # GPU ReID model instance — see docs/GLOBAL_TRACKING.md. A second
+    # replica would mint duplicate global IDs, the exact problem global
+    # tracking exists to solve. reid is a stateless extractor and may run
+    # more than one replica; nothing here enforces either constraint, it is
+    # a deploy-time (compose.yml replica count) discipline, documented here
+    # so it isn't rediscovered by an incident.
     task_queues=(
         Queue('embeddings', exchange=default_exchange, routing_key='embeddings'),
         Queue('detections', exchange=default_exchange, routing_key='detections'),
         Queue('yolo', exchange=default_exchange, routing_key='yolo'),
         Queue('face', exchange=default_exchange, routing_key='face'),
+        Queue('reid', exchange=default_exchange, routing_key='reid'),
+        Queue('globaltrack', exchange=default_exchange, routing_key='globaltrack'),
         Queue('dlq.embeddings', exchange=dlq_exchange, routing_key='dlq.embeddings'),
         Queue('dlq.detections', exchange=dlq_exchange, routing_key='dlq.detections'),
         Queue('dlq.camera_frames', exchange=dlq_exchange, routing_key='dlq.camera_frames'),
         Queue('dlq.yolo', exchange=dlq_exchange, routing_key='dlq.yolo'),
         Queue('dlq.face', exchange=dlq_exchange, routing_key='dlq.face'),
+        Queue('dlq.reid', exchange=dlq_exchange, routing_key='dlq.reid'),
+        Queue('dlq.globaltrack', exchange=dlq_exchange, routing_key='dlq.globaltrack'),
     ),
 
     # Task execution settings
@@ -186,6 +208,25 @@ celery.conf.update(
     # Enable task events for monitoring
     task_events=True,
 )
+
+@worker_process_init.connect
+def _configure_worker_logging(**kwargs):
+    """Install the app's JSON/rotation logging setup in each worker process.
+
+    `celery -A workers.celery_app worker ...` (compose.yml's command for every
+    worker service) never calls setup_logging() on its own, so without this
+    every worker logs on loguru's untouched default handler — plain text to
+    stderr, no JSON, no log files, no rotation. worker_process_init fires once
+    per worker process, before it starts consuming, matching how
+    init_smart_office_app() calls setup_logging() once for the main process.
+
+    Reuses SO_WORKER_PRELOAD (already set per worker service in compose.yml to
+    pick which model to preload, e.g. "yolo"/"face"/"globaltrack"/"reid") as
+    the service-name hint rather than adding a second identical env var.
+    """
+    queue_hint = os.environ.get("SO_WORKER_PRELOAD", "worker")
+    setup_logging(app_name=f"celery-{queue_hint}")
+
 
 # Log configuration (use logger, not print)
 logger.info(f"[Celery] Configured with broker: {settings.celery_broker_url}")
