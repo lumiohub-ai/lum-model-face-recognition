@@ -341,7 +341,7 @@ class SmartOfficeEngine:
         finally:
             self._cleanup()
 
-    # ── Config reload (unchanged from original) ───────────────────────────────
+    # ── Config reload ────────────────────────────────────────────────────────
 
     def reload_camera_configs(self, allow_empty: bool = False) -> bool:
         """Reload camera configurations from database.
@@ -397,12 +397,28 @@ class SmartOfficeEngine:
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
                 )
             else:
+                # LSO-216: a camera add/remove used to force a full engine
+                # reinit (needs_reinit + stop()), stalling every OTHER
+                # camera's metrics/dashboard while main.py rebuilt this whole
+                # object. Nothing here actually needs that: decoding and
+                # inference already live in decode_main.py/camera_tasks.py
+                # processes, keyed off camera_id and reconciled independently
+                # via their own CAMERA_CONFIG_RELOAD handlers. All this
+                # object owns per-camera is the metrics dashboard/store's
+                # camera_id list (gauges themselves are camera-agnostic
+                # callbacks, see _register_pipeline_gauges) — updating that
+                # list in place is enough.
+                added = new_ids - old_ids
+                removed = old_ids - new_ids
                 logger.info(
-                    f"Camera set changed: {old_ids} → {new_ids}. Restarting engine..."
+                    f"Camera set changed: +{added or '{}'} -{removed or '{}'}"
                 )
-                self.needs_reinit = True
                 self.camera_configs = new_configs
-                self.stop()
+                if self._metrics_enabled:
+                    new_cam_indices = self._camera_ids()
+                    self._metrics_dashboard.update_camera_ids(
+                        new_cam_indices, camera_names=self._camera_names()
+                    )
 
             # Notify the camera workers in both branches: they hold their own
             # CameraEngine per camera and re-read config from the DB, and the

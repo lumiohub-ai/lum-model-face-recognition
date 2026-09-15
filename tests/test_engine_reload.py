@@ -42,6 +42,8 @@ def _make_engine(camera_configs):
     engine.applications = ["attendance"]
     engine.camera_configs = camera_configs
     engine.needs_reinit = False
+    engine._metrics_enabled = False
+    engine._metrics_dashboard = None
     return engine
 
 
@@ -106,9 +108,13 @@ class SameCameraSetReloadTests(unittest.TestCase):
 
         self.assertNotIn("roi", cam_config)
 
-    def test_camera_set_changed_branch_is_unaffected(self):
-        """The pre-existing full-engine-restart path (different camera_id
-        set) must still take the old branch, not the per-field diff."""
+    def test_camera_set_changed_is_applied_without_a_restart(self):
+        """LSO-216: adding/removing a camera must update camera_configs in
+        place and NOT flag needs_reinit / call stop() — that used to tear
+        down and rebuild the whole engine, stalling every other camera's
+        metrics/dashboard for a single add/remove. Decoding and inference
+        already live in decode_main.py/camera_tasks.py, reconciled per
+        camera via their own CAMERA_CONFIG_RELOAD handlers."""
         cam1_config = {"camera_id": 1, "stream_url": "rtsp://a/1"}
         engine = _make_engine([cam1_config])
         engine._running = True
@@ -120,9 +126,57 @@ class SameCameraSetReloadTests(unittest.TestCase):
                 result = engine.reload_camera_configs()
 
         self.assertTrue(result)
-        self.assertTrue(engine.needs_reinit)
-        mock_stop.assert_called_once()
+        self.assertFalse(engine.needs_reinit)
+        mock_stop.assert_not_called()
         self.assertEqual(engine.camera_configs, new_configs)
+
+    def test_camera_added_updates_metrics_dashboard_camera_ids(self):
+        """Adding a camera must push the new camera_id list (and names) to
+        the metrics dashboard, without touching existing cameras' state."""
+        cam1_config = {"camera_id": 1, "stream_url": "rtsp://a/1", "camera_name": "lobby"}
+        engine = _make_engine([cam1_config])
+        engine._running = True
+        engine._metrics_enabled = True
+        engine._metrics_dashboard = mock.Mock()
+
+        new_configs = [
+            cam1_config,
+            {"camera_id": 2, "stream_url": "rtsp://b/2", "camera_name": "exit"},
+        ]
+
+        with self._patch_common(new_configs):
+            with mock.patch.object(engine, "stop") as mock_stop:
+                result = engine.reload_camera_configs()
+
+        self.assertTrue(result)
+        self.assertFalse(engine.needs_reinit)
+        mock_stop.assert_not_called()
+        engine._metrics_dashboard.update_camera_ids.assert_called_once_with(
+            [1, 2], camera_names={1: "lobby", 2: "exit"}
+        )
+
+    def test_camera_removed_updates_metrics_dashboard_camera_ids(self):
+        """Removing a camera must shrink the metrics dashboard's camera_id
+        list without restarting the engine."""
+        cam1_config = {"camera_id": 1, "stream_url": "rtsp://a/1", "camera_name": "lobby"}
+        cam2_config = {"camera_id": 2, "stream_url": "rtsp://b/2", "camera_name": "exit"}
+        engine = _make_engine([cam1_config, cam2_config])
+        engine._running = True
+        engine._metrics_enabled = True
+        engine._metrics_dashboard = mock.Mock()
+
+        new_configs = [cam1_config]
+
+        with self._patch_common(new_configs):
+            with mock.patch.object(engine, "stop") as mock_stop:
+                result = engine.reload_camera_configs()
+
+        self.assertTrue(result)
+        self.assertFalse(engine.needs_reinit)
+        mock_stop.assert_not_called()
+        engine._metrics_dashboard.update_camera_ids.assert_called_once_with(
+            [1], camera_names={1: "lobby"}
+        )
 
 
 if __name__ == "__main__":
