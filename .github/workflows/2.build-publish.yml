@@ -6,11 +6,6 @@ name: 2. Build and Publish
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Custom tag to push instead of latest/<version> (e.g. test-lso-216). Leave empty for the normal latest/<version> push."
-        required: false
-        type: string
   workflow_run:
     workflows: ["1. Bump Version"]
     types:
@@ -59,21 +54,6 @@ jobs:
       - name: Get version
         run: echo "_VERSION=$(./scripts/get-version.sh)" >> ${GITHUB_ENV}
 
-      # A manual dispatch with a custom tag pushes ONLY that tag - it must
-      # never touch :latest or :<version>, both of which main's builds own.
-      - name: Resolve tags to push
-        run: |
-          {
-            echo "_TAGS<<EOF"
-            if [ -n "${{ inputs.tag }}" ]; then
-              echo "${{ env.IMAGE }}:${{ inputs.tag }}"
-            else
-              echo "${{ env.IMAGE }}:latest"
-              echo "${{ env.IMAGE }}:${{ env._VERSION }}"
-            fi
-            echo "EOF"
-          } >> ${GITHUB_ENV}
-
       # Default builder → uses the self-hosted runner's persistent Docker layer
       # cache, so rebuilds are incremental (no gha cache: a 4 GB image would blow
       # the 10 GB per-repo Actions cache limit).
@@ -85,7 +65,9 @@ jobs:
             org.opencontainers.image.source=https://github.com/lumiohub-ai/lum-model-face-recognition
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ env._VERSION }}
-          tags: ${{ env._TAGS }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ env._VERSION }}
           push: true
           # Forwards $SSH_AUTH_SOCK (set by the ssh-agent step above) into
           # BuildKit - matches the Dockerfile's `RUN --mount=type=ssh` and the

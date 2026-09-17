@@ -384,7 +384,13 @@ def main() -> None:
             logger.exception(f"Fatal error: {e}")
             raise
 
-        # engine.run() returned — check if it was due to a camera set change
+        # engine.run() returned — check if it was due to a camera set change.
+        # LSO-216: camera add/remove no longer sets needs_reinit (see
+        # SmartOfficeEngine.reload_camera_configs) — nothing in the codebase
+        # does anymore, so this branch is currently dead. Kept as a fallback
+        # rather than deleted: it's still the correct recovery path for a
+        # future case that genuinely needs a full rebuild (e.g. a change
+        # reload_camera_configs can't apply incrementally).
         if not engine.needs_reinit:
             break
 

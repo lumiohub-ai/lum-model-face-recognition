@@ -10,10 +10,13 @@ This engine no longer owns any StreamManager or CeleryCameraProducer —
 decoding moved into decode_main.py's DecodeWorker (docs/FOLLOW_UPS.md item
 5). reload_camera_configs' job here is now only: keep `self.camera_configs`
 correct (in-place mutation, so anything else holding the same dict object
-sees updates for free) and, on a real camera-set change, flag
-`needs_reinit` and stop. Restarting a camera's stream after its stream_url
-changes is DecodeWorker's job now (test_decode_worker.py's
-SyncConfigTests) — this file no longer covers that.
+sees updates for free) and, on a camera-set change (add/remove), update it
+and the metrics dashboard's camera_id list in place — LSO-216 removed the
+old `needs_reinit`/`stop()` full-engine-restart path for this case; see
+`test_camera_set_changed_is_applied_without_a_restart`. Restarting a
+camera's stream after its stream_url changes is DecodeWorker's job now
+(test_decode_worker.py's SyncConfigTests) — this file no longer covers
+that.
 
 Run: PYTHONPATH=src python -m pytest tests/test_engine_reload.py
 """
@@ -157,13 +160,17 @@ class SameCameraSetReloadTests(unittest.TestCase):
 
     def test_camera_removed_updates_metrics_dashboard_camera_ids(self):
         """Removing a camera must shrink the metrics dashboard's camera_id
-        list without restarting the engine."""
+        list without restarting the engine, and drop that camera's
+        MetricsCollector state (LSO-216 PR review: this no longer gets a
+        fresh MetricsCollector via a full reinit, so a removed camera's
+        entries would otherwise accumulate forever)."""
         cam1_config = {"camera_id": 1, "stream_url": "rtsp://a/1", "camera_name": "lobby"}
         cam2_config = {"camera_id": 2, "stream_url": "rtsp://b/2", "camera_name": "exit"}
         engine = _make_engine([cam1_config, cam2_config])
         engine._running = True
         engine._metrics_enabled = True
         engine._metrics_dashboard = mock.Mock()
+        engine.metrics = mock.Mock()
 
         new_configs = [cam1_config]
 
@@ -177,6 +184,56 @@ class SameCameraSetReloadTests(unittest.TestCase):
         engine._metrics_dashboard.update_camera_ids.assert_called_once_with(
             [1], camera_names={1: "lobby"}
         )
+        engine.metrics.forget_camera.assert_called_once_with(2)
+
+    def test_all_cameras_removed_still_updates_the_dashboard(self):
+        """StopCamera'ing every last camera (allow_empty=True) must reach
+        the same in-place-update path as removing one of several — an
+        empty new_configs list is a valid, and different, code path from
+        the "no cameras found" early return this method also has."""
+        cam1_config = {"camera_id": 1, "stream_url": "rtsp://a/1", "camera_name": "lobby"}
+        engine = _make_engine([cam1_config])
+        engine._running = True
+        engine._metrics_enabled = True
+        engine._metrics_dashboard = mock.Mock()
+        engine.metrics = mock.Mock()
+
+        with self._patch_common([]):
+            with mock.patch.object(engine, "stop") as mock_stop:
+                result = engine.reload_camera_configs(allow_empty=True)
+
+        self.assertTrue(result)
+        self.assertFalse(engine.needs_reinit)
+        mock_stop.assert_not_called()
+        self.assertEqual(engine.camera_configs, [])
+        engine.metrics.forget_camera.assert_called_once_with(1)
+        engine._metrics_dashboard.update_camera_ids.assert_called_once_with(
+            [], camera_names={}
+        )
+
+    def test_invalid_new_configs_rolls_back_camera_configs(self):
+        """A reload that resolves to camera configs missing a camera_id
+        must not leave that bad data live on self.camera_configs: PR #115
+        review caught that _camera_ids() (which validates) was being called
+        AFTER self.camera_configs was already reassigned, so a ValueError
+        here left the engine serving invalid state instead of the
+        documented 'keeps serving its last-known-good camera set' fallback
+        (config/camera_loader.py) — and crashed run()'s next
+        _report_metrics() tick instead of just failing this one reload."""
+        good_config = {"camera_id": 1, "stream_url": "rtsp://a/1"}
+        engine = _make_engine([good_config])
+        engine._running = True
+
+        bad_configs = [{"stream_url": "rtsp://b/2"}]  # no camera_id
+
+        with self._patch_common(bad_configs):
+            with mock.patch.object(engine, "stop") as mock_stop:
+                result = engine.reload_camera_configs()
+
+        self.assertFalse(result)
+        mock_stop.assert_not_called()
+        # Rolled back to the last-known-good list, not left holding bad_configs.
+        self.assertEqual(engine.camera_configs, [good_config])
 
 
 if __name__ == "__main__":

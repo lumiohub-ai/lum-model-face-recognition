@@ -413,12 +413,32 @@ class SmartOfficeEngine:
                 logger.info(
                     f"Camera set changed: +{added or '{}'} -{removed or '{}'}"
                 )
+                # Validate new_configs BEFORE committing it to self.camera_configs:
+                # _camera_ids() raises on a missing/duplicate camera_id, and reads
+                # self.camera_configs — so calling it after the assignment would
+                # leave bad data live on the engine the moment it raises, breaking
+                # the "engine keeps serving its last-known-good camera set" invariant
+                # (config/camera_loader.py) and crashing run()'s next
+                # _report_metrics() tick instead of failing this reload cleanly.
+                previous_configs = self.camera_configs
                 self.camera_configs = new_configs
-                if self._metrics_enabled:
+                try:
                     new_cam_indices = self._camera_ids()
+                    new_cam_names = self._camera_names()
+                except ValueError:
+                    self.camera_configs = previous_configs
+                    raise
+                if self._metrics_enabled:
                     self._metrics_dashboard.update_camera_ids(
-                        new_cam_indices, camera_names=self._camera_names()
+                        new_cam_indices, camera_names=new_cam_names
                     )
+                    # Drop removed cameras' per-camera MetricsCollector state
+                    # — otherwise it accumulates forever now that add/remove
+                    # no longer gets a fresh MetricsCollector via a full
+                    # reinit. self.metrics only exists when metrics are
+                    # enabled, same as self._metrics_dashboard above.
+                    for camera_id in removed:
+                        self.metrics.forget_camera(camera_id)
 
             # Notify the camera workers in both branches: they hold their own
             # CameraEngine per camera and re-read config from the DB, and the
