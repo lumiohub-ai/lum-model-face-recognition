@@ -341,7 +341,7 @@ class SmartOfficeEngine:
         finally:
             self._cleanup()
 
-    # ── Config reload (unchanged from original) ───────────────────────────────
+    # ── Config reload ────────────────────────────────────────────────────────
 
     def reload_camera_configs(self, allow_empty: bool = False) -> bool:
         """Reload camera configurations from database.
@@ -397,12 +397,48 @@ class SmartOfficeEngine:
                     f"Camera configurations updated (same {len(new_configs)} cameras)"
                 )
             else:
+                # LSO-216: a camera add/remove used to force a full engine
+                # reinit (needs_reinit + stop()), stalling every OTHER
+                # camera's metrics/dashboard while main.py rebuilt this whole
+                # object. Nothing here actually needs that: decoding and
+                # inference already live in decode_main.py/camera_tasks.py
+                # processes, keyed off camera_id and reconciled independently
+                # via their own CAMERA_CONFIG_RELOAD handlers. All this
+                # object owns per-camera is the metrics dashboard/store's
+                # camera_id list (gauges themselves are camera-agnostic
+                # callbacks, see _register_pipeline_gauges) — updating that
+                # list in place is enough.
+                added = new_ids - old_ids
+                removed = old_ids - new_ids
                 logger.info(
-                    f"Camera set changed: {old_ids} → {new_ids}. Restarting engine..."
+                    f"Camera set changed: +{added or '{}'} -{removed or '{}'}"
                 )
-                self.needs_reinit = True
+                # Validate new_configs BEFORE committing it to self.camera_configs:
+                # _camera_ids() raises on a missing/duplicate camera_id, and reads
+                # self.camera_configs — so calling it after the assignment would
+                # leave bad data live on the engine the moment it raises, breaking
+                # the "engine keeps serving its last-known-good camera set" invariant
+                # (config/camera_loader.py) and crashing run()'s next
+                # _report_metrics() tick instead of failing this reload cleanly.
+                previous_configs = self.camera_configs
                 self.camera_configs = new_configs
-                self.stop()
+                try:
+                    new_cam_indices = self._camera_ids()
+                    new_cam_names = self._camera_names()
+                except ValueError:
+                    self.camera_configs = previous_configs
+                    raise
+                if self._metrics_enabled:
+                    self._metrics_dashboard.update_camera_ids(
+                        new_cam_indices, camera_names=new_cam_names
+                    )
+                    # Drop removed cameras' per-camera MetricsCollector state
+                    # — otherwise it accumulates forever now that add/remove
+                    # no longer gets a fresh MetricsCollector via a full
+                    # reinit. self.metrics only exists when metrics are
+                    # enabled, same as self._metrics_dashboard above.
+                    for camera_id in removed:
+                        self.metrics.forget_camera(camera_id)
 
             # Notify the camera workers in both branches: they hold their own
             # CameraEngine per camera and re-read config from the DB, and the

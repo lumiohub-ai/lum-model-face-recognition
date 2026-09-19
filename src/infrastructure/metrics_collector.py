@@ -155,6 +155,21 @@ class MetricsCollector:
         with self._lock:
             self._frame_drops[camera_id] = self._frame_drops.get(camera_id, 0) + 1
 
+    def forget_camera(self, camera_id: int) -> None:
+        """Drop a removed camera's per-camera state (LSO-216).
+
+        Since camera add/remove no longer tears down and rebuilds the whole
+        engine (and with it, a fresh MetricsCollector), a long-running
+        instance that has cameras added/removed repeatedly would otherwise
+        accumulate _frame_ts/_frame_drops entries for ids that no longer
+        exist — unbounded, if slow, growth. snapshot()/log_summary() are
+        keyed off the caller's explicit camera_ids list, so a stale entry
+        never surfaces in output; this just reclaims the memory.
+        """
+        with self._lock:
+            self._frame_ts.pop(camera_id, None)
+            self._frame_drops.pop(camera_id, None)
+
     def _camera_fps(self, camera_id: int) -> float:
         """This camera's fps, from a registered gauge if one exists.
 
