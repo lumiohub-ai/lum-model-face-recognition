@@ -75,6 +75,14 @@ pipeline:
 
 # Monitoring & alerting thresholds
 monitoring:
-  fps_alert_threshold: 15.0    # alert if any camera FPS drops below this
+  # LSO-220: this is compared against the POST-detection_interval-skip fps
+  # (MetricsCollector.record_frame is only called for frames that survive
+  # the skip in pipeline/frame_pump.py), not the camera's raw decode rate —
+  # at detection_interval=2 that's already roughly half the source's real
+  # fps before any real-world RTSP variability. The old flat 15.0 had no
+  # margin against that and fired on cameras that were actually healthy
+  # (observed live: normal post-skip rate for a working camera is ~3-10
+  # fps). If detection_interval changes, revisit this value too.
+  fps_alert_threshold: 2.0     # alert if any camera FPS drops below this
   gpu_mem_threshold: 90.0      # alert if GPU VRAM usage exceeds this %
   ram_threshold: 90.0          # alert if system RAM usage exceeds this %

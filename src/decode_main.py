@@ -40,7 +40,7 @@ from loguru import logger
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from config import load_cameras_from_db
+from config import load_cameras_from_db, setup_logging
 from config.settings import settings
 from infrastructure.video.stream_handler import StreamHandler
 from messaging.channels import INTERNAL_CHANNELS
@@ -484,6 +484,14 @@ def _signal_handler(worker: DecodeWorker):
 
 
 def main() -> None:
+    # LSO-220: this process never called setup_logging() — it ran on
+    # loguru's unconfigured default (stderr only, no file sink), so its
+    # logs never reached the app_*.log/error_*.log JSON files every other
+    # process writes. app_name distinguishes it from person-tracking's
+    # "smart_office" and Celery workers' "celery-<queue>" in the shared
+    # `service` field those sinks stamp on every record.
+    setup_logging(app_name="decode-worker")
+
     client_slug = settings.client_slug
     if not client_slug:
         logger.error("SO_CLIENT_SLUG environment variable is required")
