@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.8.0 (2026-09-11)
+
+## What's Changed
+* Feat/global track reid workers by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/111
+* fix(reid): distinct shm purposes for the two reid ROI hops by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/113
+* Promote dev → main: global-track/reid worker split (gtreid) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/112
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.3...v0.8.0
+
+## v0.7.3 (2026-09-09)
+
+## What's Changed
+* DB-authoritative attendance: drop per-worker status cache (LSO-193) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/109
+* DB-authoritative attendance: drop per-worker status cache (LSO-193) (… by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/110
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.2...v0.7.3
+
+## v0.7.2 (2026-09-09)
+
+## What's Changed
+* Branch-scope get_all_users + get_users_by_status (LSO-191) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/107
+* feat(recognition): branch-scope get_all_users + get_users_by_status (… by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/108
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.1...v0.7.2
+
+## v0.7.1 (2026-09-08)
+
+## What's Changed
+* build: revert pip wheel-vendoring on dev (forward-port of #103) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/104
+* feat(recognition): branch-scope the embedding register (SO_EDGE_BRANCH_CODE) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/105
+* Promote dev → main: branch-scoped register + Dockerfile revert (→ 0.7.1) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/106
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.7.0...v0.7.1
+
 ## v0.7.0 (2026-09-08)
 
 ## What's Changed
