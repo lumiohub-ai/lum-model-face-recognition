@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.2 (2026-09-20)
+
+## What's Changed
+* fix(camera): resolve edge stream URL by name slug again — edge has no id paths (LSO-188) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/120
+* Promote dev → main: restore slug-keyed edge URL (LSO-188 revert) → 0.8.2 by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/121
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.1...v0.8.2
+
 ## v0.8.1 (2026-09-20)
 
 ## What's Changed
