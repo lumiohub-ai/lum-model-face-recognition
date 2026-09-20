@@ -83,6 +83,12 @@ monitoring:
   # margin against that and fired on cameras that were actually healthy
   # (observed live: normal post-skip rate for a working camera is ~3-10
   # fps). If detection_interval changes, revisit this value too.
-  fps_alert_threshold: 2.0     # alert if any camera FPS drops below this
+  #
+  # check_alerts only fires on 0 < fps < threshold (a single-snapshot check,
+  # no debounce/hysteresis) — 2.0 would only catch a camera that's nearly
+  # stalled, missing a real ~50%+ degradation from a healthy baseline. 3.5
+  # sits below the observed healthy floor (~3-10fps) while still catching
+  # that kind of drop.
+  fps_alert_threshold: 3.5     # alert if any camera FPS drops below this
   gpu_mem_threshold: 90.0      # alert if GPU VRAM usage exceeds this %
   ram_threshold: 90.0          # alert if system RAM usage exceeds this %

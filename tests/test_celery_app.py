@@ -123,5 +123,48 @@ class DlqRoutingTests(unittest.TestCase):
         self.assertEqual(self._dlq_key_for("face.embed_batch"), "dlq:face")
 
 
+class RedactUrlCredentialsTests(unittest.TestCase):
+    """_redact_url_credentials strips broker-URL credentials before they ever
+    reach a log line (LSO-220) — the one piece of that fix with real security
+    relevance, so it gets a direct unit test rather than relying only on live
+    verification."""
+
+    def test_url_without_credentials_is_unchanged(self):
+        from workers.celery_app import _redact_url_credentials
+
+        url = "redis://redis:6379/0"
+        self.assertEqual(_redact_url_credentials(url), url)
+
+    def test_password_only_is_stripped(self):
+        from workers.celery_app import _redact_url_credentials
+
+        result = _redact_url_credentials("redis://:testpass@localhost:6379/0")
+        self.assertEqual(result, "redis://localhost:6379/0")
+        self.assertNotIn("testpass", result)
+
+    def test_user_and_password_are_stripped(self):
+        from workers.celery_app import _redact_url_credentials
+
+        result = _redact_url_credentials("redis://user:testpass@localhost:6379/0")
+        self.assertEqual(result, "redis://localhost:6379/0")
+        self.assertNotIn("user", result)
+        self.assertNotIn("testpass", result)
+
+    def test_no_port_is_handled(self):
+        from workers.celery_app import _redact_url_credentials
+
+        result = _redact_url_credentials("redis://:testpass@localhost/0")
+        self.assertEqual(result, "redis://localhost/0")
+
+    def test_unparseable_url_does_not_raise(self):
+        from workers.celery_app import _redact_url_credentials
+
+        # A URL with an invalid (non-numeric) port raises ValueError from
+        # urlsplit's .port property access, not from urlsplit() itself —
+        # exercised here to confirm the try/except actually catches it.
+        result = _redact_url_credentials("redis://user:pass@localhost:notaport/0")
+        self.assertEqual(result, "<unparseable>")
+
+
 if __name__ == "__main__":
     unittest.main()

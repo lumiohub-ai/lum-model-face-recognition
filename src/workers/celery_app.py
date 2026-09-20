@@ -39,13 +39,17 @@ def _redact_url_credentials(url: str) -> str:
     """
     try:
         parts = urlsplit(url)
+        if not parts.username and not parts.password:
+            return url
+        netloc = parts.hostname or ""
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
     except ValueError:
+        # .port raises ValueError on a non-numeric port (e.g. a malformed
+        # userinfo section that shifts the host:port split) — must be inside
+        # this try, not just around urlsplit() itself, since urlsplit() lazily
+        # defers port parsing to attribute access.
         return "<unparseable>"
-    if not parts.username and not parts.password:
-        return url
-    netloc = parts.hostname or ""
-    if parts.port:
-        netloc = f"{netloc}:{parts.port}"
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
