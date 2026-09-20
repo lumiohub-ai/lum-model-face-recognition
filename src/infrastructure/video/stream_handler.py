@@ -11,23 +11,26 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 
-
 # FFmpeg options for every RTSP capture (open + reconnect share this).
-# `threads;2` (LSO-225): libavcodec otherwise sizes its decoder pool to nproc
-# PER STREAM — a decode-worker holding 5 cameras on a 32-core host carried
+# Decoder threads (LSO-225): libavcodec otherwise sizes its decoder pool to
+# nproc PER STREAM — a decode-worker holding 5 cameras on a 32-core host carried
 # 137 threads and the AI tier oversubscribed the box (load 50). At 10 fps /
 # 1080p–1440p H.264 two decoder threads per stream keep up with headroom;
-# parallelism across cameras comes from one reader thread per camera, not
-# from intra-stream threads. OPENCV_FFMPEG_CAPTURE_OPTIONS is set by this code,
-# so the compose-level OMP/OpenCV caps don't reach the decoder — it has to be here.
+# parallelism across cameras comes from one reader thread per camera, not from
+# intra-stream threads. OPENCV_FFMPEG_CAPTURE_OPTIONS is set by this code, so
+# the compose-level OMP/OpenCV caps don't reach the decoder — it has to be here.
+# SO_FFMPEG_DECODER_THREADS raises it per deployment for heavier streams
+# (HEVC, >1440p, >10 fps) without a redeploy of code.
+_FFMPEG_DECODER_THREADS = max(1, int(os.environ.get("SO_FFMPEG_DECODER_THREADS", "2")))
 _FFMPEG_CAPTURE_OPTIONS = (
     'rtsp_transport;tcp|'        # TCP for reliability
     'buffer_size;1024000|'       # 1MB network buffer
     'max_delay;500000|'          # max 0.5s delay
     'fflags;nobuffer|'           # minimise buffering for real-time
     'flags;low_delay|'           # low-latency mode
-    'threads;2'                  # decoder threads per stream (see above)
+    f'threads;{_FFMPEG_DECODER_THREADS}'  # decoder threads per stream (see above)
 )
+
 
 class StreamHandler:
     """Handles video stream input from various sources with robust error handling and reconnection.
