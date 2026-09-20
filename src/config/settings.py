@@ -72,6 +72,13 @@ class Settings:
     # rtsp://host.docker.internal:8554; cross-host use the edge's Tailnet IP.
     edge_rtsp_base = os.getenv("SO_EDGE_RTSP_BASE", "").strip().rstrip("/")
 
+    # Which edge path the AI reads per camera (LSO-188): "slug" = <slug(name)>
+    # (every edge serves this today); "id" = <cameras.id>, an alias config-sync
+    # >= 0.4.10 publishes alongside the slug so a rename can't move the URL.
+    # Default stays "slug" — flip per site only after its edge runs 0.4.10
+    # (0.8.1 shipped the id form unconditionally and read zero frames).
+    edge_path_key = os.getenv("SO_EDGE_PATH_KEY", "slug").strip().lower() or "slug"
+
     # Branch scoping (LSO-133): restrict this AI to one branch's cameras.
     # The AI resolves EVERY camera against its LOCAL edge (see edge_rtsp_base),
     # so an unscoped AI in a multi-site org loads other branches' cameras and
