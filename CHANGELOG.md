@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.3 (2026-09-20)
+
+## What's Changed
+* feat(camera): SO_EDGE_PATH_KEY=slug|id — per-site switch for the edge path the AI reads (LSO-188) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/123
+* fix(logging): improve loggers on vision side (LSO-220) by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/122
+* Promote dev → main: SO_EDGE_PATH_KEY switch (LSO-188) → 0.8.3 by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/124
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.2...v0.8.3
+
 ## v0.8.2 (2026-09-20)
 
 ## What's Changed
