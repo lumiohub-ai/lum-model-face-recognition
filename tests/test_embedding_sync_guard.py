@@ -70,6 +70,7 @@ class SyncFailClosedTests(unittest.TestCase):
             res = svc.sync_missing_embeddings()
         self.assertFalse(res["success"])
         self.assertTrue(res.get("aborted"))
+        self.assertIn("empty_user_list", res.get("error", ""))  # caller logs 'error'
         store.delete_all_for_user.assert_not_called()
 
 

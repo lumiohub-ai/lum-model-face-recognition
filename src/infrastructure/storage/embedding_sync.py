@@ -310,6 +310,8 @@ class EmbeddingSyncService:
                     'success': False,
                     'aborted': True,
                     'reason': 'empty_user_list',
+                    # engine._sync_embeddings_on_startup logs result['error']
+                    'error': 'empty_user_list: backend returned 0 users',
                     'users_processed': 0,
                     'embeddings_added': 0,
                     'users_deleted': 0,
