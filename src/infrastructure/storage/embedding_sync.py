@@ -11,6 +11,7 @@ from .pgvector import PgVectorStore
 from .backend_reader import Repository
 from .url_utils import normalize_image_url
 from .gcs import ImageFetcher
+from config.settings import settings
 
 
 class EmbeddingSyncService:
@@ -192,10 +193,26 @@ class EmbeddingSyncService:
         users_deleted = 0
         images_deleted = 0
 
-        for user_id in pgvector_user_ids - backend_user_ids:
-            logger.info(f"Stale user detected: {user_id} - removing all embeddings")
-            images_deleted += self.store.delete_all_for_user(user_id)
-            users_deleted += 1
+        # LSO-219: face_embeddings is an ORG-WIDE table, but on a branch box the
+        # backend user list is branch-scoped (SO_EDGE_BRANCH_CODE). A user_id
+        # "missing" from that list is usually just ANOTHER BRANCH's user, not a
+        # deleted one — so whole-user deletion here would wipe other branches'
+        # galleries (it silently wiped Incheon's once). Only do it in an
+        # unscoped, whole-org sync where absence genuinely means "deleted".
+        # Per-image pruning below is safe: it only touches users in BOTH sets.
+        stale_users = pgvector_user_ids - backend_user_ids
+        if settings.edge_branch_code:
+            if stale_users:
+                logger.warning(
+                    f"Branch-scoped sync ({settings.edge_branch_code}): NOT deleting "
+                    f"{len(stale_users)} out-of-scope users — they belong to other "
+                    f"branches in this org-wide table (LSO-219)."
+                )
+        else:
+            for user_id in stale_users:
+                logger.info(f"Stale user detected: {user_id} - removing all embeddings")
+                images_deleted += self.store.delete_all_for_user(user_id)
+                users_deleted += 1
 
         for user_id in pgvector_user_ids & backend_user_ids:
             user = backend_users_by_id[user_id]
@@ -279,6 +296,27 @@ class EmbeddingSyncService:
         try:
             all_users = Repository(self.client_slug).get_all_users()
             logger.info(f"Total users from database: {len(all_users)}")
+
+            # LSO-219: fail-closed. get_all_users() returns [] on a backend/DB
+            # error too, and an empty list would make _remove_stale_embeddings
+            # treat EVERY enrolled user as deleted and wipe the whole gallery.
+            # "Couldn't read users" must never be read as "there are no users".
+            if not all_users:
+                logger.error(
+                    "Aborting sync: backend returned 0 users — refusing to run the "
+                    "stale-removal step (likely a fetch error, not an empty org). LSO-219"
+                )
+                return {
+                    'success': False,
+                    'aborted': True,
+                    'reason': 'empty_user_list',
+                    # engine._sync_embeddings_on_startup logs result['error']
+                    'error': 'empty_user_list: backend returned 0 users',
+                    'users_processed': 0,
+                    'embeddings_added': 0,
+                    'users_deleted': 0,
+                    'images_deleted': 0,
+                }
 
             # Build index: user_id → set of normalized image URLs already in pgvector
             existing_images: Dict[str, set] = {}
