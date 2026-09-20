@@ -5,23 +5,18 @@ from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
 
 from config.settings import settings
+from config.camera_slug import mediamtx_path as _mediamtx_path
 
 
 def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
     """Edge MediaMTX source URL for a camera — NEVER the camera directly (LSO-27).
 
-    The AI reads rtsp://<SO_EDGE_RTSP_BASE>/<id> (the high-res main path): one
-    pull per camera, no camera credentials in the AI, and immune to the
+    The AI reads rtsp://<SO_EDGE_RTSP_BASE>/<slug(name)> (the high-res main path):
+    one pull per camera, no camera credentials in the AI, and immune to the
     dashboard rewriting stream_url. Pulling from a camera directly is
     deliberately unsupported — the AI must not hold camera credentials nor open a
     second connection to the camera. A camera that can't be mapped to an edge
     path is skipped (returns None) rather than fetched directly.
-
-    LSO-188: keyed on the camera's database id, not `slug(name)`. A rename
-    used to recreate the edge path under the new slug and delete the old one,
-    so the AI's URL pointed at a path that no longer existed until the next
-    reload re-resolved it — a real, if brief, outage window (LSO-155). The id
-    never changes, so a rename no longer moves this URL at all.
     """
     base = settings.edge_rtsp_base
     if not base:
@@ -30,14 +25,14 @@ def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
             "MediaMTX and never pulls cameras directly — set SO_EDGE_RTSP_BASE "
             "(e.g. rtsp://host.docker.internal:8554)."
         )
-    cam_id = cam.get("id")
-    if cam_id is None:
+    path = _mediamtx_path(cam.get("name") or "")
+    if not path:
         logger.warning(
-            "[camera_loader] camera has no id to derive an edge path; "
-            "skipping (the AI never falls back to a direct camera pull)"
+            f"[camera_loader] camera {cam.get('id')} has no name to derive an edge "
+            f"path; skipping (the AI never falls back to a direct camera pull)"
         )
         return None
-    return f"{base}/{cam_id}"
+    return f"{base}/{path}"
 
 
 def _parse_roi(roi_points: Optional[List]) -> Optional[Tuple[int, int, int, int]]:
