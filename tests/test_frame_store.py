@@ -109,6 +109,44 @@ def _roi_reader(conn, results):
         conn.send("ack")
 
 
+def _raw_ring_producer(camera_id, conn):
+    """Write one frame, keep its handle, then cycle the raw ring past it —
+    exactly what the decode worker does over a few health ticks — and hand
+    the reader both the recycled handle and the live one."""
+    from workers import frame_store
+
+    slot = frame_store.RawFrameSlot(camera_id=camera_id)
+    stale_handle = slot.write(_random_frame(48, 64))
+    latest_frame = None
+    latest_handle = None
+    for _ in range(frame_store._RAW_RING_SIZE):
+        latest_frame = _random_frame(48, 64)
+        latest_handle = slot.write(latest_frame)
+    conn.send((stale_handle, latest_handle, latest_frame.tobytes(), latest_frame.shape, str(latest_frame.dtype)))
+    conn.recv()
+    slot.close()
+    conn.send("closed")
+    conn.recv()
+
+
+def _raw_ring_reader(conn, results):
+    from workers import frame_store
+    import numpy as np
+
+    stale_handle, latest_handle, raw, shape, dtype = conn.recv()
+    expected = np.frombuffer(raw, dtype=dtype).reshape(shape)
+    got_latest = frame_store.attach_and_read_raw(latest_handle)
+    got_stale = frame_store.attach_and_read_raw(stale_handle)
+    results.append(("latest", got_latest is not None and np.array_equal(expected, got_latest)))
+    results.append(("stale", got_stale))
+    conn.send("ack")
+    msg = conn.recv()
+    if msg == "closed":
+        time.sleep(0.3)
+        results.append(("after_close", frame_store.attach_and_read_raw(latest_handle)))
+        conn.send("ack")
+
+
 class CameraFrameSlotTests(unittest.TestCase):
     """Every case here runs the producer and reader as genuinely separate
     OS processes connected by a pipe - not two objects in one process - so
@@ -290,6 +328,28 @@ class RawFrameSlotRingDepthTests(unittest.TestCase):
             self.assertIsNone(frame_store.attach_and_read_raw(stale_handle))
         finally:
             slot.close()
+
+    def test_cross_process_reader_sees_latest_and_rejects_recycled(self):
+        """The production path: the decode worker writes camraw, the engine
+        reads it from another process via attach_and_read_raw (the
+        _attach_segment / _ATTACHED cache route, not the same-process
+        fast path the tests above hit). With the shallow ring recycling
+        segments more often, this is the read that must stay correct."""
+        manager = mp.Manager()
+        results = manager.list()
+        parent_conn, child_conn = mp.Pipe()
+        reader = mp.Process(target=_raw_ring_reader, args=(parent_conn, results))
+        producer = mp.Process(target=_raw_ring_producer, args=(404, child_conn))
+        reader.start()
+        producer.start()
+        producer.join(timeout=15)
+        reader.join(timeout=15)
+        self.assertEqual(producer.exitcode, 0)
+        self.assertEqual(reader.exitcode, 0)
+        got = dict(results)
+        self.assertTrue(got["latest"], "latest raw frame must round-trip cross-process")
+        self.assertIsNone(got["stale"], "recycled raw handle must read as gone, not as newer pixels")
+        self.assertIsNone(got["after_close"], "raw ring must be unreadable after the producer closes it")
 
     def test_detection_ring_depth_is_unchanged(self):
         from workers import frame_store
