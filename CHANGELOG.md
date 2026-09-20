@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.8.1 (2026-09-20)
+
+## What's Changed
+* fix(pipeline): avoid full engine restart on camera add/remove (LSO-216) by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/115
+* feat(camera_boot): name the Celery node camera-worker-slot-<n> (LSO-221) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/118
+* fix(embeddings): never cross-branch-delete; fail closed on empty fetch (LSO-219) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/116
+* Promote dev → main: LSO-219 embedding guard, LSO-216 camera hot-reload, LSO-221 node names by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/119
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.0...v0.8.1
+
 ## v0.8.0 (2026-09-11)
 
 ## What's Changed
