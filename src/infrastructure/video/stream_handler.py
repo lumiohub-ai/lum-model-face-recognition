@@ -12,24 +12,27 @@ from typing import Any, Dict, Optional, Tuple
 
 
 # FFmpeg options for every RTSP capture (open + reconnect share this).
-# Decoder threads (LSO-225): libavcodec otherwise sizes its decoder pool to
-# nproc PER STREAM — a decode-worker holding 5 cameras on a 32-core host carried
-# 137 threads and the AI tier oversubscribed the box (load 50). At 10 fps /
-# 1080p–1440p H.264 two decoder threads per stream keep up with headroom;
-# parallelism across cameras comes from one reader thread per camera, not from
-# intra-stream threads. OPENCV_FFMPEG_CAPTURE_OPTIONS is set by this code, so
-# the compose-level OMP/OpenCV caps don't reach the decoder — it has to be here.
-# SO_FFMPEG_DECODER_THREADS raises it per deployment for heavier streams
-# (HEVC, >1440p, >10 fps) without a redeploy of code.
-_FFMPEG_DECODER_THREADS = max(1, int(os.environ.get("SO_FFMPEG_DECODER_THREADS", "2")))
 _FFMPEG_CAPTURE_OPTIONS = (
     'rtsp_transport;tcp|'        # TCP for reliability
     'buffer_size;1024000|'       # 1MB network buffer
     'max_delay;500000|'          # max 0.5s delay
     'fflags;nobuffer|'           # minimise buffering for real-time
-    'flags;low_delay|'           # low-latency mode
-    f'threads;{_FFMPEG_DECODER_THREADS}'  # decoder threads per stream (see above)
+    'flags;low_delay'            # low-latency mode
 )
+
+# Decoder threads per stream (LSO-225). libavcodec otherwise sizes its decoder
+# pool to nproc PER STREAM — a decode-worker holding 5 cameras on a 32-core host
+# carried 137 threads and the AI tier oversubscribed the box (load 50). At 10 fps
+# / 1080p–1440p H.264 two threads per stream keep up with headroom (measured:
+# 2 threads read MORE frames per second than 16 — less scheduling overhead);
+# parallelism across cameras is one reader thread per camera, not intra-stream
+# threads. NOTE: `threads;N` inside OPENCV_FFMPEG_CAPTURE_OPTIONS is silently
+# ignored by OpenCV's FFmpeg backend (verified on 4.11) — it must go through
+# CAP_PROP_N_THREADS (or the OPENCV_FFMPEG_THREADS env). The compose-level
+# OMP/OpenCV caps don't reach the decoder either. SO_FFMPEG_DECODER_THREADS
+# raises it per deployment for heavier streams (HEVC, >1440p, >10 fps).
+_FFMPEG_DECODER_THREADS = max(1, int(os.environ.get("SO_FFMPEG_DECODER_THREADS", "2")))
+_CAPTURE_PARAMS = [cv2.CAP_PROP_N_THREADS, _FFMPEG_DECODER_THREADS]
 
 
 class StreamHandler:
@@ -58,7 +61,7 @@ class StreamHandler:
         if isinstance(src, str) and src.startswith('rtsp://'):
             # Set FFmpeg options BEFORE creating VideoCapture
             os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = _FFMPEG_CAPTURE_OPTIONS
-            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, _CAPTURE_PARAMS)
             # Set buffer size: 3 frames is optimal for real-time playback
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
         else:
@@ -217,7 +220,7 @@ class StreamHandler:
             # Configure RTSP options for better compatibility
             if isinstance(self.src, str) and self.src.startswith('rtsp://'):
                 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = _FFMPEG_CAPTURE_OPTIONS
-                self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
+                self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG, _CAPTURE_PARAMS)
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
             else:
                 self.cap = cv2.VideoCapture(self.src)
