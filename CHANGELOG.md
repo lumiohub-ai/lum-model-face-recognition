@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.4 (2026-09-20)
+
+## What's Changed
+* fix(decode): cap ffmpeg decoder threads per stream (LSO-225) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/125
+* Promote dev → main: cap ffmpeg decoder threads (LSO-225) → 0.8.4 by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/126
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.3...v0.8.4
+
 ## v0.8.3 (2026-09-20)
 
 ## What's Changed
