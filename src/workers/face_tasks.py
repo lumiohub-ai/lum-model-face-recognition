@@ -27,13 +27,16 @@ module to register the task, and a CUDA touch there poisons `fork()`.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from celery.signals import worker_process_init
 from loguru import logger
 
 from workers import model_holder
 from workers.celery_app import celery
+
+if TYPE_CHECKING:
+    from workers.frame_store import RoiBatchHandle
 
 
 @worker_process_init.connect
@@ -108,13 +111,7 @@ def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
     embedding", so a blank result degrades to "recognition didn't advance
     this cycle" rather than corrupting identity.
     """
-    from lum_vision.face_detection import frontality, pitch
-
-    from workers.frame_store import (
-        RoiBatchHandle,
-        RoiHandle,
-        attach_and_read_roi_batch,
-    )
+    from workers.frame_store import RoiBatchHandle, RoiHandle
 
     batch_handle = RoiBatchHandle(
         camera_id=handle["camera_id"],
@@ -123,6 +120,24 @@ def embed_batch_task(handle: Dict[str, Any]) -> List[Dict]:
         instance_id=handle["instance_id"],
         rois=tuple(RoiHandle(**r) for r in handle["rois"]),
     )
+
+    # LSO-220: one RoiBatchHandle is always one camera's ROIs (face_client.py's
+    # embed() takes a single camera_id) — bound so this call's log lines,
+    # including the warning/debug/exception ones below, are traceable
+    # alongside the same camera_id/frame_seq camera_tasks.py's track_task
+    # binds, without threading it through every log call by hand.
+    with logger.contextualize(
+        camera_id=batch_handle.camera_id,
+        frame_seq=batch_handle.seq,
+        producer_instance=batch_handle.instance_id,
+    ):
+        return _embed_batch(batch_handle)
+
+
+def _embed_batch(batch_handle: "RoiBatchHandle") -> List[Dict]:
+    from lum_vision.face_detection import frontality, pitch
+
+    from workers.frame_store import attach_and_read_roi_batch
 
     n_rois = len(batch_handle.rois)
     if n_rois == 0:

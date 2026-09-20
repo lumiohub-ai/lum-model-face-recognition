@@ -11,12 +11,18 @@ from config.camera_slug import mediamtx_path as _mediamtx_path
 def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
     """Edge MediaMTX source URL for a camera — NEVER the camera directly (LSO-27).
 
-    The AI reads rtsp://<SO_EDGE_RTSP_BASE>/<slug(name)> (the high-res main path):
-    one pull per camera, no camera credentials in the AI, and immune to the
-    dashboard rewriting stream_url. Pulling from a camera directly is
-    deliberately unsupported — the AI must not hold camera credentials nor open a
-    second connection to the camera. A camera that can't be mapped to an edge
-    path is skipped (returns None) rather than fetched directly.
+    The AI reads the edge's high-res main path for each camera: one pull per
+    camera, no camera credentials in the AI, and immune to the dashboard
+    rewriting stream_url. Pulling from a camera directly is deliberately
+    unsupported — the AI must not hold camera credentials nor open a second
+    connection to the camera. A camera that can't be mapped to an edge path is
+    skipped (returns None) rather than fetched directly.
+
+    Which path name (LSO-188, `SO_EDGE_PATH_KEY`):
+      slug (default)  rtsp://<base>/<slug(name)> — served by every edge today.
+      id              rtsp://<base>/<cameras.id> — the alias config-sync
+                      >= 0.4.10 publishes next to the slug; a rename can't
+                      move it. Enable per site once that edge runs 0.4.10.
     """
     base = settings.edge_rtsp_base
     if not base:
@@ -25,6 +31,19 @@ def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
             "MediaMTX and never pulls cameras directly — set SO_EDGE_RTSP_BASE "
             "(e.g. rtsp://host.docker.internal:8554)."
         )
+    if settings.edge_path_key == "id":   # validated once in settings.parse_edge_path_key
+        cam_id = cam.get("id")
+        if cam_id is None:
+            logger.warning(
+                "[camera_loader] camera has no id to derive an edge path; "
+                "skipping (the AI never falls back to a direct camera pull)"
+            )
+            return None
+        return f"{base}/{cam_id}"
+    if settings.edge_path_key != "slug":
+        # parse_edge_path_key guarantees slug|id; enforce it here too so a
+        # future direct writer can't silently fall back to slug behaviour.
+        raise RuntimeError(f"edge_path_key={settings.edge_path_key!r} is not slug|id")
     path = _mediamtx_path(cam.get("name") or "")
     if not path:
         logger.warning(

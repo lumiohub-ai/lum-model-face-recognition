@@ -249,7 +249,15 @@ def run_detect_batch(
             )
             detections_per_request = [_parse_yolo_result(r) for r in results]
         except Exception as e:
-            logger.exception(f"yolo.detect: batch inference failed: {e}")
+            # LSO-220: camera_ids so a failure can be tied back to which
+            # cameras' frames were degraded to [] detections by this batch —
+            # _BatchStats.record's own windowed summary stays camera-agnostic
+            # by design (see its docstring), but a hard failure like this one
+            # isn't windowed and is worth being able to trace.
+            camera_ids = sorted({req.kwargs["camera_id"] for req in live_requests})
+            logger.exception(
+                f"yolo.detect: batch inference failed for cameras={camera_ids}: {e}"
+            )
             detections_per_request = [[] for _ in live_frames]
     else:
         detections_per_request = []

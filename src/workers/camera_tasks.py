@@ -516,8 +516,9 @@ def _roi_slot_for(camera_id: int):
         return slot
 
 
-@celery.task(name="camera.track", ignore_result=True)
+@celery.task(bind=True, name="camera.track", ignore_result=True)
 def track_task(
+    self,
     camera_id: int,
     frame_handle: Dict[str, int],
     frame_num: int,
@@ -557,9 +558,23 @@ def track_task(
     zombies: a request redelivered after a worker crash (Redis
     `visibility_timeout`) still carries its original, likely-long-expired
     `deadline`.
+
+    LSO-220: bound via logger.contextualize() rather than passed around
+    explicitly — every log line this call tree produces (including inside
+    process_frame's face-embed/tracking/finalize_identities calls) picks up
+    camera_id/frame_seq/producer_instance automatically, so one frame's
+    path is greppable across this worker's log even though it fans out
+    through several method calls this task never touches directly.
     """
     if deadline is not None and time.time() > deadline:
         return None
-    ctx = _context_for(camera_id)
     handle = FrameHandle(**frame_handle)
-    return ctx.process_frame(handle, frame_num, detections)
+    with logger.contextualize(
+        camera_id=camera_id,
+        frame_seq=handle.seq,
+        frame_num=frame_num,
+        producer_instance=handle.instance_id,
+        task_id=self.request.id,
+    ):
+        ctx = _context_for(camera_id)
+        return ctx.process_frame(handle, frame_num, detections)
