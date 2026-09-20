@@ -28,7 +28,6 @@ avoids.)
 """
 
 import os
-from pathlib import Path
 import sys
 import threading
 import time
@@ -128,13 +127,10 @@ def main() -> None:
     logger.info(
         f"camera_boot[{mgr.worker_id}]: leased slot {slot}/{n}, consuming {queue}"
     )
-    # LSO-221: name this node by its slot so Flower/Kuma see a stable, meaningful
-    # key (`camera-worker-slot-<n>@<host>`) instead of `celery@<container-id>`, which
-    # changes on every recreate. Slot coverage — is there a live worker on each
-    # cam-slot — is exactly the liveness signal that would have caught LSO-218.
-    # The docker healthcheck reads /tmp/camera_slot to ping the renamed node and
-    # falls back to celery@host when the file is absent (older image).
-    Path("/tmp/camera_slot").write_text(str(slot))
+    # LSO-221: name this node by role+slot so Flower/Kuma see a stable, meaningful
+    # key (`camera-worker-slot-<n>@<host>`) instead of `celery@<container-id>`,
+    # which changes on every recreate. Slot coverage — is there a live worker on
+    # each slot — is exactly the liveness signal that would have caught LSO-218.
     # Same flags the old static command used; --pool=solo keeps one camera's
     # frames strictly ordered on this worker.
     celery.worker_main(
