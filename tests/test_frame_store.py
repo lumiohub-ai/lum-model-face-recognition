@@ -252,6 +252,59 @@ class RoiBatchSlotTests(unittest.TestCase):
             )
 
 
+class RawFrameSlotRingDepthTests(unittest.TestCase):
+    """LSO-224: the calibration (camraw) ring is shallow. It is written once
+    per ~2 s health tick and read within ≤5 s, so it must not hold 24 full
+    frames per camera like the per-frame detection ring does — that was
+    ~3 GB of /dev/shm on a 14-camera site for pixels nobody read."""
+
+    def test_raw_ring_allocates_only_raw_ring_size_segments(self):
+        from workers import frame_store
+
+        slot = frame_store.RawFrameSlot(camera_id=401)
+        try:
+            for _ in range(frame_store._RING_SIZE * 2):
+                slot.write(_random_frame(32, 32))
+            self.assertEqual(len(slot._shms), frame_store._RAW_RING_SIZE)
+            self.assertLess(frame_store._RAW_RING_SIZE, frame_store._RING_SIZE)
+        finally:
+            slot.close()
+
+    def test_raw_latest_handle_reads_back_and_recycled_one_is_gone(self):
+        from workers import frame_store
+
+        slot = frame_store.RawFrameSlot(camera_id=402)
+        try:
+            first = _random_frame(32, 32)
+            stale_handle = slot.write(first)
+            latest_frame = None
+            latest_handle = None
+            for _ in range(frame_store._RAW_RING_SIZE):
+                latest_frame = _random_frame(32, 32)
+                latest_handle = slot.write(latest_frame)
+            got = frame_store.attach_and_read_raw(latest_handle)
+            self.assertIsNotNone(got)
+            self.assertTrue(np.array_equal(got, latest_frame))
+            # first's segment has been recycled after _RAW_RING_SIZE writes —
+            # the seq header must reject it rather than return newer pixels.
+            self.assertIsNone(frame_store.attach_and_read_raw(stale_handle))
+        finally:
+            slot.close()
+
+    def test_detection_ring_depth_is_unchanged(self):
+        from workers import frame_store
+
+        slot = frame_store.CameraFrameSlot(camera_id=403)
+        try:
+            handle = slot.write(_random_frame(32, 32))
+            # Fewer writes than the detection ring's depth: still readable.
+            for _ in range(frame_store._RAW_RING_SIZE + 1):
+                slot.write(_random_frame(32, 32))
+            self.assertIsNotNone(frame_store.attach_and_read(handle))
+        finally:
+            slot.close()
+
+
 class SameProcessReadTests(unittest.TestCase):
     """Reads in the PRODUCER'S OWN process - not a degenerate test setup.
     Several producers can also be readers: pipeline/frame_pump.py owns a

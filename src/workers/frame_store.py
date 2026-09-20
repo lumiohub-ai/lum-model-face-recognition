@@ -78,6 +78,17 @@ _SLOT_NAME_PREFIX = "camframe"
 # path and never collides with camframe's name or generation counter.
 _RAW_SLOT_NAME_PREFIX = "camraw"
 
+# LSO-224: the raw ring gets its own, much shallower depth. _RING_SIZE=24 is
+# sized for the detection ring's per-frame hot path (a reader may attach to a
+# segment written many frames ago). The raw ring is written once per health
+# tick (~2 s, decode_main._publish_camera_state) and read within ≤5 s by the
+# calibration commands, so 3 segments = ~6 s of grace before a segment is
+# recycled — and the (instance_id, seq) header check still rejects a recycled
+# read. At 24 this ring held 24 full-resolution frames per camera around the
+# clock for an occasional calibration grab: ~0.22 GB/camera at 1440p, ~3 GB of
+# /dev/shm on a 14-camera site, all but one frame of it never read.
+_RAW_RING_SIZE = 3
+
 # Worker-side cache: segment name -> attached SharedMemory. One entry per
 # ring segment this process has ever read from. Never closed proactively —
 # a worker process's segments live as long as the process does.
@@ -141,9 +152,12 @@ class CameraFrameSlot:
     the ring cycles through them.
     """
 
-    def __init__(self, camera_id: int, name_prefix: str = _SLOT_NAME_PREFIX):
+    def __init__(
+        self, camera_id: int, name_prefix: str = _SLOT_NAME_PREFIX, ring_size: int = _RING_SIZE
+    ):
         self.camera_id = camera_id
         self._base_name = f"{name_prefix}_{camera_id}"
+        self._ring_size = ring_size
         self._shms: Dict[int, shared_memory.SharedMemory] = {}
         self._shape: Optional[Tuple[int, int, int]] = None
         self._seq = 0
@@ -222,7 +236,7 @@ class CameraFrameSlot:
             raise ValueError(f"expected an HxWxC frame, got shape {shape}")
         self._seq += 1
         seq = self._seq
-        segment = seq % _RING_SIZE
+        segment = seq % self._ring_size
         shm = self._ensure_segment(segment, shape)
         view = np.ndarray(shape, dtype=frame.dtype, buffer=shm.buf, offset=_HEADER_SIZE)
         view[:] = frame
@@ -268,7 +282,8 @@ class RawFrameSlot(CameraFrameSlot):
     collides with the detection-frame ring.
 
     Written by the decode worker on a slow, periodic cadence (not the
-    per-detection hot path), for the calibration commands
+    per-detection hot path) into a shallow ring (`_RAW_RING_SIZE`, LSO-224),
+    for the calibration commands
     (`capture_frame`/`test_calibration`) that need a whole frame rather
     than whatever ROI-cropped, frame-skipped picture the detection ring
     happens to hold. Reuses `FrameHandle` as its transport type — the
@@ -276,7 +291,7 @@ class RawFrameSlot(CameraFrameSlot):
     """
 
     def __init__(self, camera_id: int):
-        super().__init__(camera_id, name_prefix=_RAW_SLOT_NAME_PREFIX)
+        super().__init__(camera_id, name_prefix=_RAW_SLOT_NAME_PREFIX, ring_size=_RAW_RING_SIZE)
 
 
 def _attach_fresh(name: str) -> Optional[shared_memory.SharedMemory]:
