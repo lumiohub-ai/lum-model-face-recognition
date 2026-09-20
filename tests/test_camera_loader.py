@@ -82,6 +82,16 @@ class TestGuards(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_edge_path_key("name")
 
+    def test_resolver_rejects_a_bypassed_invalid_key(self):
+        # If something writes settings.edge_path_key directly, don't silently
+        # fall back to slug — the resolver enforces the invariant too.
+        p = _settings("name")
+        try:
+            with self.assertRaises(RuntimeError):
+                _resolve_stream_url({"id": 42, "name": "CEO Room"})
+        finally:
+            p.stop()
+
     def test_missing_base_raises(self):
         with patch("config.camera_loader.settings") as s:
             s.edge_rtsp_base = None

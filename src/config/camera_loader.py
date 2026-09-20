@@ -40,6 +40,10 @@ def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
             )
             return None
         return f"{base}/{cam_id}"
+    if settings.edge_path_key != "slug":
+        # parse_edge_path_key guarantees slug|id; enforce it here too so a
+        # future direct writer can't silently fall back to slug behaviour.
+        raise RuntimeError(f"edge_path_key={settings.edge_path_key!r} is not slug|id")
     path = _mediamtx_path(cam.get("name") or "")
     if not path:
         logger.warning(
