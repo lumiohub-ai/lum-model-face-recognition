@@ -234,39 +234,46 @@ def assign_global_id_task(handle: Optional[Dict[str, Any]] = None, **kwargs) -> 
     tracking locally rather than stalling. Returning None here means "no
     answer"; the client, not this task, owns that fallback.
     """
-    _start_background_once()
-    manager = ensure_manager_loaded()
+    # LSO-220: camera_id is always in kwargs (global_track_client._to_handle
+    # requires it to build handle in the first place), so it's available to
+    # bind here even on the handle-is-None path, consistent with
+    # camera_tasks.py's/face_tasks.py's per-camera-frame log correlation.
+    with logger.contextualize(camera_id=kwargs.get("camera_id")):
+        _start_background_once()
+        manager = ensure_manager_loaded()
 
-    person_crop = None
-    if handle is not None:
-        from workers.frame_store import (
-            RoiBatchHandle,
-            RoiHandle,
-            attach_and_read_roi_batch,
-        )
-
-        batch = RoiBatchHandle(
-            camera_id=handle["camera_id"],
-            seq=handle["seq"],
-            segment=handle["segment"],
-            instance_id=handle["instance_id"],
-            rois=tuple(RoiHandle(**r) for r in handle["rois"]),
-            purpose=handle.get("purpose", "reid"),
-        )
-        packed = attach_and_read_roi_batch(batch)
-        if packed:
-            person_crop = packed[0][1]
-        else:
-            # Segment recycled before we read it. Not an error: the register
-            # already treats a missing crop as "skip ReID, create a new global
-            # track" (global_track.py STEP 1), which is the correct degraded
-            # answer, not a reason to fail the task.
-            logger.debug(
-                f"globaltrack.assign_global_id: crop seq={batch.seq} gone — "
-                f"assigning without ReID"
+        person_crop = None
+        if handle is not None:
+            from workers.frame_store import (
+                RoiBatchHandle,
+                RoiHandle,
+                attach_and_read_roi_batch,
             )
 
-    return manager.assign_global_id(person_crop=person_crop, **kwargs)
+            batch = RoiBatchHandle(
+                camera_id=handle["camera_id"],
+                seq=handle["seq"],
+                segment=handle["segment"],
+                instance_id=handle["instance_id"],
+                rois=tuple(RoiHandle(**r) for r in handle["rois"]),
+                purpose=handle.get("purpose", "reid"),
+            )
+            with logger.contextualize(frame_seq=batch.seq, producer_instance=batch.instance_id):
+                packed = attach_and_read_roi_batch(batch)
+                if packed:
+                    person_crop = packed[0][1]
+                else:
+                    # Segment recycled before we read it. Not an error: the
+                    # register already treats a missing crop as "skip ReID,
+                    # create a new global track" (global_track.py STEP 1),
+                    # which is the correct degraded answer, not a reason to
+                    # fail the task.
+                    logger.debug(
+                        f"globaltrack.assign_global_id: crop seq={batch.seq} gone — "
+                        f"assigning without ReID"
+                    )
+
+        return manager.assign_global_id(person_crop=person_crop, **kwargs)
 
 
 @celery.task(

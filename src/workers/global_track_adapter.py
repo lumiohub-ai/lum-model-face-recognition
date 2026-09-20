@@ -182,36 +182,45 @@ class RemoteGlobalTrackManager:
         every exit path (success, RPC failure, unexpected exception) must
         clear it, or that track's global id freezes forever on whatever
         _assigned already holds.
+
+        LSO-220: logger.contextualize() (used by camera_tasks.track_task to
+        bind camera_id/frame_seq for the rest of that call tree) is
+        contextvars-based and therefore thread-local — it does NOT carry
+        into this pool's worker thread. Rebound here from `key`, which
+        already carries camera_id, rather than trying to propagate the
+        outer context across the executor boundary.
         """
         camera_id, local_track_id = key
-        try:
-            result = self._client.call(
-                "assign_global_id",
-                camera_id=camera_id,
-                local_track_id=local_track_id,
-                person_crop=person_crop,
-                face_embedding=face_embedding,
-                detection_confidence=detection_confidence,
-                frame_num=frame_num,
-                identity=identity,
-                identity_locked=identity_locked,
-            )
-            # result.ok=False means the client already fell back to a
-            # negative local-only id (GlobalTrackClient.call's own contract).
-            # Recording it anyway keeps this path's degraded behaviour
-            # identical to the previous synchronous one: camera_engine.py's
-            # `current_global_id >= 0` guard already treats negative the
-            # same as "not yet identified" wherever it matters.
-            with self._assign_lock:
-                self._assigned[key] = result.value
-        except Exception:
-            logger.exception(
-                f"global_track_adapter: background assign_global_id failed "
-                f"for camera={camera_id} track={local_track_id}"
-            )
-        finally:
-            with self._assign_lock:
-                self._in_flight.discard(key)
+        with logger.contextualize(camera_id=camera_id):
+            try:
+                result = self._client.call(
+                    "assign_global_id",
+                    camera_id=camera_id,
+                    local_track_id=local_track_id,
+                    person_crop=person_crop,
+                    face_embedding=face_embedding,
+                    detection_confidence=detection_confidence,
+                    frame_num=frame_num,
+                    identity=identity,
+                    identity_locked=identity_locked,
+                )
+                # result.ok=False means the client already fell back to a
+                # negative local-only id (GlobalTrackClient.call's own
+                # contract). Recording it anyway keeps this path's degraded
+                # behaviour identical to the previous synchronous one:
+                # camera_engine.py's `current_global_id >= 0` guard already
+                # treats negative the same as "not yet identified" wherever
+                # it matters.
+                with self._assign_lock:
+                    self._assigned[key] = result.value
+            except Exception:
+                logger.exception(
+                    f"global_track_adapter: background assign_global_id failed "
+                    f"for camera={camera_id} track={local_track_id}"
+                )
+            finally:
+                with self._assign_lock:
+                    self._in_flight.discard(key)
 
     def forget_track(self, camera_id: int, local_track_id: int) -> None:
         """Drop cached state for a track that no longer exists, so a reused

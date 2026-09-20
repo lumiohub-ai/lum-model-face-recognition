@@ -16,6 +16,7 @@ to avoid circular imports. Import from there in task modules.
 
 import os
 import zlib
+from urllib.parse import urlsplit, urlunsplit
 
 from celery import Celery
 from celery.signals import worker_process_init
@@ -24,6 +25,32 @@ from loguru import logger
 
 from config.settings import settings
 from config.startup import setup_logging
+
+
+def _redact_url_credentials(url: str) -> str:
+    """Strip userinfo (user:password@) from a URL before logging it.
+
+    settings.celery_broker_url defaults to an unauthenticated
+    redis://host:port/0, but SO_CELERY_BROKER_URL can point at an
+    authenticated redis://:password@host:port/0 — mirrors db_config.py's
+    own "log host/user, never password" rule, applied here since the
+    broker URL (unlike the DB settings) only exists as one assembled
+    string, not separate fields to reassemble without the password.
+    """
+    try:
+        parts = urlsplit(url)
+        if not parts.username and not parts.password:
+            return url
+        netloc = parts.hostname or ""
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
+    except ValueError:
+        # .port raises ValueError on a non-numeric port (e.g. a malformed
+        # userinfo section that shifts the host:port split) — must be inside
+        # this try, not just around urlsplit() itself, since urlsplit() lazily
+        # defers port parsing to attribute access.
+        return "<unparseable>"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def camera_slot(camera_id: int, n_slots: int) -> int:
@@ -227,10 +254,16 @@ def _configure_worker_logging(**kwargs):
     queue_hint = os.environ.get("SO_WORKER_PRELOAD", "worker")
     setup_logging(app_name=f"celery-{queue_hint}")
 
-
-# Log configuration (use logger, not print)
-logger.info(f"[Celery] Configured with broker: {settings.celery_broker_url}")
-logger.info(f"[Celery] Task timeouts: soft={celery.conf.task_soft_time_limit}s, hard={celery.conf.task_time_limit}s")
+    # LSO-220: previously logged at import time, before this handler ran —
+    # unconfigured loguru default only, and with the broker URL's
+    # credentials (if any) logged in full. Moved here so it lands in the
+    # same JSON file sinks as everything else, and redacted so a
+    # credentialed SO_CELERY_BROKER_URL never reaches a log file at all.
+    logger.info(
+        f"[Celery] Configured with broker: "
+        f"{_redact_url_credentials(settings.celery_broker_url)}"
+    )
+    logger.info(f"[Celery] Task timeouts: soft={celery.conf.task_soft_time_limit}s, hard={celery.conf.task_time_limit}s")
 
 # Re-export from task_base for backward compatibility
 # NOTE: Import these from workers.task_base in new code to avoid circular imports

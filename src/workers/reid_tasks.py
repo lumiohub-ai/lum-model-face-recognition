@@ -92,31 +92,40 @@ def extract_batch_task(handle: Dict[str, Any]) -> List[Optional[List[float]]]:
         purpose=handle.get("purpose", "reid"),
     )
 
-    n_rois = len(batch_handle.rois)
-    if n_rois == 0:
-        return []
+    # LSO-220: one RoiBatchHandle is one camera's crops (same as
+    # face_tasks.embed_batch_task) — bound so this call's logs are
+    # traceable alongside the same camera_id/frame_seq the rest of the
+    # pipeline binds.
+    with logger.contextualize(
+        camera_id=batch_handle.camera_id,
+        frame_seq=batch_handle.seq,
+        producer_instance=batch_handle.instance_id,
+    ):
+        n_rois = len(batch_handle.rois)
+        if n_rois == 0:
+            return []
 
-    packed = attach_and_read_roi_batch(batch_handle)
-    if packed is None:
-        logger.warning(
-            f"reid.extract_batch: ROI batch seq={batch_handle.seq} is gone — "
-            f"returning {n_rois} blank results"
+        packed = attach_and_read_roi_batch(batch_handle)
+        if packed is None:
+            logger.warning(
+                f"reid.extract_batch: ROI batch seq={batch_handle.seq} is gone — "
+                f"returning {n_rois} blank results"
+            )
+            return [None] * n_rois
+
+        extractor = model_holder.ensure_reid_extractor_loaded()
+
+        results: List[Optional[List[float]]] = []
+        for _track_id, crop in packed:
+            try:
+                embedding = extractor.extract(crop)
+            except Exception as e:
+                logger.warning(f"reid.extract_batch: extraction failed for one crop: {e}")
+                embedding = None
+            results.append(embedding.tolist() if embedding is not None else None)
+
+        logger.debug(
+            f"reid.extract_batch: seq={batch_handle.seq} crops={n_rois} "
+            f"extracted={sum(1 for r in results if r is not None)}"
         )
-        return [None] * n_rois
-
-    extractor = model_holder.ensure_reid_extractor_loaded()
-
-    results: List[Optional[List[float]]] = []
-    for _track_id, crop in packed:
-        try:
-            embedding = extractor.extract(crop)
-        except Exception as e:
-            logger.warning(f"reid.extract_batch: extraction failed for one crop: {e}")
-            embedding = None
-        results.append(embedding.tolist() if embedding is not None else None)
-
-    logger.debug(
-        f"reid.extract_batch: seq={batch_handle.seq} crops={n_rois} "
-        f"extracted={sum(1 for r in results if r is not None)}"
-    )
-    return results
+        return results
