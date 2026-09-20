@@ -127,10 +127,14 @@ def main() -> None:
     logger.info(
         f"camera_boot[{mgr.worker_id}]: leased slot {slot}/{n}, consuming {queue}"
     )
+    # LSO-221: name this node by role+slot so Flower/Kuma see a stable, meaningful
+    # key (`camera-worker-slot-<n>@<host>`) instead of `celery@<container-id>`,
+    # which changes on every recreate. Slot coverage — is there a live worker on
+    # each slot — is exactly the liveness signal that would have caught LSO-218.
     # Same flags the old static command used; --pool=solo keeps one camera's
     # frames strictly ordered on this worker.
     celery.worker_main(
-        argv=["worker", "-Q", queue, "--pool=solo", "-l", "warning"]
+        argv=["worker", "-Q", queue, "-n", f"camera-worker-slot-{slot}@%h", "--pool=solo", "-l", "warning"]
     )
 
 
