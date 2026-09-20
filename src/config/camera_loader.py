@@ -31,8 +31,7 @@ def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
             "MediaMTX and never pulls cameras directly — set SO_EDGE_RTSP_BASE "
             "(e.g. rtsp://host.docker.internal:8554)."
         )
-    key = settings.edge_path_key
-    if key == "id":
+    if settings.edge_path_key == "id":   # validated once in settings.parse_edge_path_key
         cam_id = cam.get("id")
         if cam_id is None:
             logger.warning(
@@ -41,10 +40,6 @@ def _resolve_stream_url(cam: Dict[str, Any]) -> Optional[str]:
             )
             return None
         return f"{base}/{cam_id}"
-    if key != "slug":
-        raise RuntimeError(
-            f"SO_EDGE_PATH_KEY={key!r} is not one of 'slug' | 'id'"
-        )
     path = _mediamtx_path(cam.get("name") or "")
     if not path:
         logger.warning(

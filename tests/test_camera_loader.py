@@ -17,6 +17,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
 
 from config.camera_loader import _resolve_stream_url  # noqa: E402
+from config.settings import parse_edge_path_key  # noqa: E402
 
 BASE = "rtsp://host.docker.internal:8554"
 
@@ -69,13 +70,17 @@ class TestIdMode(unittest.TestCase):
 
 
 class TestGuards(unittest.TestCase):
-    def test_unknown_key_raises(self):
-        p = _settings("name")
-        try:
-            with self.assertRaises(RuntimeError):
-                _resolve_stream_url({"id": 42, "name": "CEO Room"})
-        finally:
-            p.stop()
+    def test_env_parsing_folds_case_and_whitespace(self):
+        self.assertEqual(parse_edge_path_key(" ID "), "id")
+        self.assertEqual(parse_edge_path_key("Slug"), "slug")
+
+    def test_env_unset_or_blank_defaults_to_slug(self):
+        self.assertEqual(parse_edge_path_key(None), "slug")
+        self.assertEqual(parse_edge_path_key("   "), "slug")
+
+    def test_unknown_key_fails_at_settings_load(self):
+        with self.assertRaises(ValueError):
+            parse_edge_path_key("name")
 
     def test_missing_base_raises(self):
         with patch("config.camera_loader.settings") as s:

@@ -24,6 +24,19 @@ except ImportError:
     pass
 
 
+_EDGE_PATH_KEYS = ("slug", "id")
+
+
+def parse_edge_path_key(raw) -> str:
+    """SO_EDGE_PATH_KEY → "slug" | "id" (LSO-188). Empty/unset → "slug".
+    Anything else raises HERE, at settings load, so a typo fails the container
+    at startup instead of on the first camera resolved."""
+    key = (raw or "").strip().lower() or "slug"
+    if key not in _EDGE_PATH_KEYS:
+        raise ValueError(f"SO_EDGE_PATH_KEY={raw!r} is not one of {_EDGE_PATH_KEYS}")
+    return key
+
+
 class Settings:
     # PostgreSQL
     postgres_host = os.getenv("SO_POSTGRES_HOST", "localhost")
@@ -77,7 +90,7 @@ class Settings:
     # >= 0.4.10 publishes alongside the slug so a rename can't move the URL.
     # Default stays "slug" — flip per site only after its edge runs 0.4.10
     # (0.8.1 shipped the id form unconditionally and read zero frames).
-    edge_path_key = os.getenv("SO_EDGE_PATH_KEY", "slug").strip().lower() or "slug"
+    edge_path_key = parse_edge_path_key(os.getenv("SO_EDGE_PATH_KEY"))
 
     # Branch scoping (LSO-133): restrict this AI to one branch's cameras.
     # The AI resolves EVERY camera against its LOCAL edge (see edge_rtsp_base),
