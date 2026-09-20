@@ -81,13 +81,16 @@ _RAW_SLOT_NAME_PREFIX = "camraw"
 # LSO-224: the raw ring gets its own, much shallower depth. _RING_SIZE=24 is
 # sized for the detection ring's per-frame hot path (a reader may attach to a
 # segment written many frames ago). The raw ring is written once per health
-# tick (~2 s, decode_main._publish_camera_state) and read within ≤5 s by the
-# calibration commands, so 3 segments = ~6 s of grace before a segment is
-# recycled — and the (instance_id, seq) header check still rejects a recycled
-# read. At 24 this ring held 24 full-resolution frames per camera around the
-# clock for an occasional calibration grab: ~0.22 GB/camera at 1440p, ~3 GB of
-# /dev/shm on a 14-camera site, all but one frame of it never read.
-_RAW_RING_SIZE = 3
+# tick (~2 s, decode_main._publish_camera_state) and read by the calibration
+# commands, which reject a handle older than 5 s (read_raw_frame max_age_sec)
+# and then copy in well under a second. Depth 4 recycles a segment 8 s after it
+# was written — strictly longer than that 5 s age limit plus the copy — so a
+# valid handle can never be overwritten mid-read; and a recycled read is still
+# rejected by the (instance_id, seq) header (returns "no frame", never wrong
+# pixels). At 24 this ring held 24 full-resolution frames per camera around
+# the clock for an occasional calibration grab: ~0.23 GB/camera at 1440p,
+# ~3 GB of /dev/shm on a 14-camera site, all but one frame of it never read.
+_RAW_RING_SIZE = 4
 
 # Worker-side cache: segment name -> attached SharedMemory. One entry per
 # ring segment this process has ever read from. Never closed proactively —
