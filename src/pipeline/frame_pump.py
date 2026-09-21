@@ -5,8 +5,8 @@ detection frame, then write it to shared memory and enqueue it on the
 `yolo` queue as a `yolo.detect` request. YOLO batches it with co-arriving
 requests from other cameras, forwards each frame's detections on to
 `camera.track` (see workers/yolo_tasks.py), which is where tracking,
-identity and logging all happen — statically pinned to one camera-worker per
-camera_id via compose.yml, not this process.
+identity and logging all happen — pinned to one camera-worker per camera_id
+by a per-camera Redis lease (src/camera_boot.py), not by this process.
 """
 
 import dataclasses

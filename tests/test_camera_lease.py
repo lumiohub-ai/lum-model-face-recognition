@@ -216,6 +216,66 @@ class IsClaimedTests(unittest.TestCase):
         self.assertTrue(manager.is_claimed(1))
 
 
+class RenewStatusTests(unittest.TestCase):
+    """Tri-state `renew_status` (LSO-218) — only camera-worker uses it, but it
+    lives on the shared manager, so its semantics get direct coverage here."""
+
+    def test_true_while_still_owned(self):
+        redis = FakeRedis()
+        manager = _manager("worker-a", redis=redis)
+        manager.claim(1)
+        self.assertIs(manager.renew_status(1), True)
+
+    def test_false_once_another_worker_took_it(self):
+        redis = FakeRedis()
+        a = _manager("worker-a", ttl=10, redis=redis)
+        a.claim(1)
+        redis.now += 11  # a's lease lapses
+        _manager("worker-b", redis=redis).claim(1)
+        self.assertIs(a.renew_status(1), False)
+
+    def test_false_for_a_camera_this_worker_never_held(self):
+        self.assertIs(_manager().renew_status(999), False)
+
+    def test_none_on_a_redis_failure_not_proof_of_loss(self):
+        # None (not False) is what lets camera-worker ride out a blip instead
+        # of tearing down every tracker it holds.
+        self.assertIsNone(_manager(redis=FakeRedis(fail=True)).renew_status(1))
+
+
+class KeyPrefixTests(unittest.TestCase):
+    """`key_prefix` keeps decode's leases and camera-worker's tracking leases
+    for the same camera id independent."""
+
+    def test_different_prefixes_do_not_collide(self):
+        redis = FakeRedis()
+        decode = CameraLeaseManager(
+            ttl_seconds=10,
+            worker_id="decoder",
+            redis_client=redis,
+            key_prefix="decode:lease:cam:",
+        )
+        track = CameraLeaseManager(
+            ttl_seconds=10,
+            worker_id="tracker",
+            redis_client=redis,
+            key_prefix="track:cam:lease:",
+        )
+        self.assertTrue(decode.claim(1))
+        self.assertTrue(track.claim(1))  # same id, independent ownership
+        self.assertEqual(redis.get("decode:lease:cam:1"), "decoder")
+        self.assertEqual(redis.get("track:cam:lease:1"), "tracker")
+
+        decode.release(1)
+        self.assertIsNone(redis.get("decode:lease:cam:1"))
+        self.assertEqual(redis.get("track:cam:lease:1"), "tracker")  # untouched
+
+    def test_default_prefix_is_decode(self):
+        redis = FakeRedis()
+        _manager("worker-a", redis=redis).claim(7)
+        self.assertEqual(redis.get("decode:lease:cam:7"), "worker-a")
+
+
 class WorkerIdTests(unittest.TestCase):
     def test_a_generated_worker_id_is_non_empty(self):
         manager = CameraLeaseManager(ttl_seconds=10, redis_client=FakeRedis())

@@ -270,8 +270,8 @@ def run_detect_batch(
             n_skipped_expired += 1
             continue
         # Producer always sets next_queue (frame_pump), but fall back to the
-        # same slot routing rather than a literal cam.<id> so a payload without
-        # it still lands on a queue a worker actually consumes (LSO-186).
+        # same camera routing rather than a hand-built string so a payload
+        # without it still lands on the camera's real cam.<id> queue (LSO-218).
         next_queue = req.kwargs.get("next_queue") or camera_queue_name(camera_id)
         dispatch(
             kwargs={
