@@ -293,6 +293,18 @@ class RawFrameSlotRingDepthTests(unittest.TestCase):
     frames per camera like the per-frame detection ring does — that was
     ~3 GB of /dev/shm on a 14-camera site for pixels nobody read."""
 
+    def test_raw_ring_size_tracks_the_health_interval(self):
+        """The recycle window (ring × interval) must exceed the 5 s handle
+        age limit plus margin — for whatever SO_DECODE_HEALTH_INTERVAL_S is."""
+        from workers import frame_store as fs
+
+        self.assertEqual(fs.raw_ring_size(2.0), 4)      # default tick
+        self.assertEqual(fs.raw_ring_size(1.0), 8)      # faster telemetry → deeper ring
+        self.assertEqual(fs.raw_ring_size(5.0), 2)      # never below 2
+        for interval in (0.5, 1.0, 2.0, 3.0, 5.0):
+            self.assertGreater(fs.raw_ring_size(interval) * interval, fs.RAW_FRAME_MAX_AGE_S)
+        self.assertEqual(fs._RAW_RING_SIZE, fs.raw_ring_size(2.0))
+
     def test_raw_ring_allocates_only_raw_ring_size_segments(self):
         from workers import frame_store
 

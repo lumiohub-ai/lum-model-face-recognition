@@ -36,6 +36,7 @@ regardless of what seq value the new process happens to reuse.
 
 from __future__ import annotations
 
+import math
 import os
 import struct
 import threading
@@ -78,19 +79,36 @@ _SLOT_NAME_PREFIX = "camframe"
 # path and never collides with camframe's name or generation counter.
 _RAW_SLOT_NAME_PREFIX = "camraw"
 
-# LSO-224: the raw ring gets its own, much shallower depth. _RING_SIZE=24 is
-# sized for the detection ring's per-frame hot path (a reader may attach to a
-# segment written many frames ago). The raw ring is written once per health
-# tick (~2 s, decode_main._publish_camera_state) and read by the calibration
-# commands, which reject a handle older than 5 s (read_raw_frame max_age_sec)
-# and then copy in well under a second. Depth 4 recycles a segment 8 s after it
-# was written — strictly longer than that 5 s age limit plus the copy — so a
-# valid handle can never be overwritten mid-read; and a recycled read is still
-# rejected by the (instance_id, seq) header (returns "no frame", never wrong
-# pixels). At 24 this ring held 24 full-resolution frames per camera around
-# the clock for an occasional calibration grab: ~0.23 GB/camera at 1440p,
-# ~3 GB of /dev/shm on a 14-camera site, all but one frame of it never read.
-_RAW_RING_SIZE = 4
+# LSO-224: the raw ring gets its own, much shallower depth, DERIVED from the
+# two numbers it must stay consistent with instead of hardcoded next to them:
+#   * the decode worker writes one raw frame per health tick
+#     (decode_main._HEALTH_INTERVAL_S, env-tunable, default 2 s);
+#   * the calibration reader rejects a handle older than RAW_FRAME_MAX_AGE_S
+#     (engine.capture_frame → read_raw_frame(max_age_sec=…)) and then copies
+#     in well under a second.
+# A segment is recycled ring_size × interval seconds after it was written; that
+# window must exceed the age limit plus the copy, or a still-valid handle could
+# be overwritten mid-read. raw_ring_size() enforces it (margin below), so
+# tuning SO_DECODE_HEALTH_INTERVAL_S down to 1 s yields 8 segments, not a
+# silent 4 s window. A recycled read is additionally rejected by the
+# (instance_id, seq) header — "no frame", never wrong pixels — so a violation
+# would cost availability, not correctness. _RING_SIZE=24 stays for the
+# detection ring's per-frame hot path. At 24 the raw ring held 24 full-res
+# frames per camera around the clock for an occasional calibration grab:
+# ~0.23 GB/camera at 1440p, ~3 GB of /dev/shm on a 14-camera site.
+RAW_FRAME_MAX_AGE_S = 5.0
+_RAW_RING_MARGIN_S = 3.0
+_RAW_RING_MIN = 2
+
+
+def raw_ring_size(health_interval_s: float) -> int:
+    """Segments needed so a raw handle ≤ RAW_FRAME_MAX_AGE_S old can't be
+    recycled under its reader: ceil((max_age + margin) / interval), min 2."""
+    interval = max(float(health_interval_s), 1e-3)
+    return max(_RAW_RING_MIN, math.ceil((RAW_FRAME_MAX_AGE_S + _RAW_RING_MARGIN_S) / interval))
+
+
+_RAW_RING_SIZE = raw_ring_size(2.0)  # == 4 at the default 2 s health tick
 
 # Worker-side cache: segment name -> attached SharedMemory. One entry per
 # ring segment this process has ever read from. Never closed proactively —
@@ -293,8 +311,12 @@ class RawFrameSlot(CameraFrameSlot):
     fields are identical, only the ring the handle points at differs.
     """
 
-    def __init__(self, camera_id: int):
-        super().__init__(camera_id, name_prefix=_RAW_SLOT_NAME_PREFIX, ring_size=_RAW_RING_SIZE)
+    def __init__(self, camera_id: int, ring_size: Optional[int] = None):
+        super().__init__(
+            camera_id,
+            name_prefix=_RAW_SLOT_NAME_PREFIX,
+            ring_size=_RAW_RING_SIZE if ring_size is None else ring_size,
+        )
 
 
 def _attach_fresh(name: str) -> Optional[shared_memory.SharedMemory]:
