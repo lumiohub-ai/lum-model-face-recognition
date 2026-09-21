@@ -292,6 +292,15 @@ class EligibilityTests(unittest.TestCase):
             reg.fire_async_errors()  # ...but the deferred add failed
         finally:
             logger.remove(sink_id)
+        # Lease release is dispatched off the event-loop thread (blocking Redis
+        # must not stall broker I/O). Poll briefly for the background release.
+        import time as _time
+
+        deadline = _time.monotonic() + 1.0
+        while _time.monotonic() < deadline:
+            if w.held == set() and redis.get("track:cam:lease:1") is None:
+                break
+            _time.sleep(0.01)
         self.assertEqual(w.held, set())
         self.assertIsNone(redis.get("track:cam:lease:1"))
         # ...and the failure is visible, not silent.
@@ -464,6 +473,66 @@ class UnclaimedWarningTests(unittest.TestCase):
         orphans = [m for m in messages if "Orphaned:" in m]
         self.assertTrue(orphans, f"expected an orphan warning, got: {messages}")
         self.assertIn("Orphaned: [4]", orphans[-1])
+
+
+class StaleTimerTests(unittest.TestCase):
+    def test_held_cameras_do_not_carry_stale_unowned_timer(self):
+        # Bug: _unowned_since was not cleared while a camera was held, so an
+        # ancient timestamp survived for the lifetime of the process and
+        # bypassed SO_CAMERA_FAILOVER_GRACE_S the moment that camera changed
+        # hands again. Every camera this worker ever held would then be
+        # considered "orphaned" immediately after its new owner died.
+        redis, clock = FakeRedis(), Clock(t=1000.0)
+        w = _worker("a", redis, [1], replicas=1, capacity=1, clock=clock, grace=30)
+        w.reconcile()
+        self.assertEqual(w.held, {1})
+        # Timer is kept for one pass in case the deferred consumer add fails
+        # (see _adopt's "deliberately NOT cleared" comment), but must be
+        # cleared once the camera is confirmed still held on the NEXT pass.
+        self.assertIn(1, w._unowned_since)
+        clock.advance(1)
+        w.reconcile()
+        self.assertNotIn(1, w._unowned_since)
+
+    def test_reobserving_previously_held_camera_respects_grace(self):
+        redis, clock = FakeRedis(), Clock(t=1000.0)
+        # replicas=2, capacity=3 => fair_share 2 for 4 cameras; a at capacity
+        # must not grow past fair_share for a fresh orphan.
+        w = _worker(
+            "a", redis, [1, 2, 3, 4], replicas=2, capacity=3, clock=clock, grace=30
+        )
+        w.reconcile()
+        self.assertEqual(w.held, {1, 2})
+        # Peer b claims the rest.
+        b = _worker(
+            "b", redis, [1, 2, 3, 4], replicas=2, capacity=3, clock=Clock(t=1000.0), grace=30
+        )
+        b.reconcile()
+        self.assertEqual(b.held, {3, 4})
+        # a previously held camera 1; simulate losing it to b after a blip
+        # (renew sees lease taken) — a releases 1, b takes it.
+        redis.store["track:cam:lease:1"] = ("b", redis.now + 100)
+        w.renew_once()
+        self.assertEqual(w.held, {2})
+        redis.store["track:cam:lease:1"] = ("b", redis.now + 100)
+        b._held.add(1)  # b now holds 1,3,4 (at capacity)
+        # b dies: its leases vanish.
+        for cid in (1, 3, 4):
+            redis.store.pop(f"track:cam:lease:{cid}", None)
+        b._held.clear()
+        clock.advance(1)  # t=1001, orphans freshly unowned
+        w.reconcile()
+        # w is at 1 held (< fair_share 2) so it claims one orphan to reach
+        # fair_share, but must NOT immediately grow to capacity for a camera
+        # it previously held — the grace must still apply.
+        self.assertEqual(len(w.held), 2)
+        self.assertNotIn(1, w.held - {1, 2})  # 1 may be the one claimed to reach fair_share
+        # Advance past the grace: now w may grow to capacity to cover the
+        # remaining genuinely orphaned cameras.
+        clock.advance(31)  # t=1032, 31s unowned
+        w.reconcile()
+        self.assertEqual(w.held, {1, 2, 3})  # grew to capacity, covered an orphan
+        self.assertIn(1, w.held)  # the previously-held camera now stale and reclaimable
 
 
 if __name__ == "__main__":

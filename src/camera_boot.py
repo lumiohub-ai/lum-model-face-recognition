@@ -355,6 +355,7 @@ class CameraWorker:
         unowned = set()
         for camera_id in eligible_ids:
             if camera_id in self.held:
+                self._unowned_since.pop(camera_id, None)
                 continue
             if self._lease.is_claimed(camera_id):
                 self._unowned_since.pop(camera_id, None)
@@ -453,7 +454,33 @@ class CameraWorker:
             f"camera-worker[{self.worker_id}]: consumer for camera {camera_id} "
             f"failed to start ({type(exc).__name__}: {exc}) — releasing it"
         )
-        self._release(camera_id)
+        # This runs on the Celery event-loop thread (pool=solo drives broker
+        # I/O there). The Redis `release` call at the end of `_release` is
+        # blocking socket I/O — running it here would stall dispatch for every
+        # camera this worker holds. Do the non-blocking bookkeeping inline and
+        # dispatch the lease release off the loop thread.
+        with self._lock:
+            self._held.discard(camera_id)
+        try:
+            self._registry.remove(
+                camera_queue_name(camera_id),
+                on_error=lambda exc: logger.warning(
+                    f"camera-worker[{self.worker_id}]: cancel consumer for "
+                    f"camera {camera_id} failed ({exc}) — the queue may keep "
+                    f"delivering to this worker briefly"
+                ),
+            )
+        except Exception as e:
+            logger.debug(
+                f"camera-worker[{self.worker_id}]: cancel consumer for "
+                f"camera {camera_id} failed: {e}"
+            )
+        threading.Thread(
+            target=self._lease.release,
+            args=(camera_id,),
+            daemon=True,
+            name=f"camera-release-{camera_id}",
+        ).start()
 
     def _release(self, camera_id: int) -> None:
         """Stop consuming a camera and give its lease up immediately.
