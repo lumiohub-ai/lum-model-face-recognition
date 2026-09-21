@@ -50,9 +50,57 @@ from loguru import logger
 # How many generations each producer key keeps alive at once. A generation's
 # lifetime is _RING_SIZE write-cycles, not one — comfortably longer than
 # Celery broker round-trip latency (measured single-segment lifetime: ~20ms,
-# far below that latency, which is why every batch lost the race). Bump this
-# if warning logs still show a nonzero stale-segment rate under normal load.
-_RING_SIZE = 24
+# far below that latency, which is why every batch lost the race).
+#
+# LSO-224: DERIVED, like the raw ring below, instead of a bare constant. A
+# segment must outlive both reads of its generation — yolo.detect's and
+# camera.track's attach_and_read — and Celery bounds that whole round trip
+# itself: yolo.detect is enqueued with `expires=frame_pump._TASK_EXPIRES_S`
+# (1.0s), and camera.track carries the SAME deadline forward as
+# `expires=remaining` (yolo_tasks.py), so a request older than that is
+# dropped rather than processed late. `tracked_ring_size()` sizes the ring to
+# that expiry plus a margin, at the fastest write rate it must tolerate.
+#
+# Cameras have no configured fps — no DB field, nothing enforced in code —
+# so _TRACKED_FPS_CEILING is a documented assumption, not a measured limit:
+# every camera on dev and prod runs at ~10 fps today, so 15 gives it ~50%
+# headroom. A camera actually run faster than this (or with
+# SO_DETECTION_INTERVAL=1) needs this bumped and re-derived, or the ring
+# quietly gets less margin than the formula assumes — safe (a violation is
+# rejected by the (instance_id, seq) header, never wrong pixels) but shows up
+# as a rising `skipped_gone` count in the yolo-worker stats log.
+_TRACKED_RING_MIN = 3
+_TRACKED_RING_MARGIN_S = 0.5
+_TRACKED_FPS_CEILING = 15.0
+
+
+def tracked_ring_size(
+    detection_interval: int,
+    task_expires_s: float,
+    fps_ceiling: float = _TRACKED_FPS_CEILING,
+    margin_s: float = _TRACKED_RING_MARGIN_S,
+) -> int:
+    """Segments needed so a camframe handle can't be recycled before the
+    slower of yolo.detect / camera.track reads it, given Celery's own
+    `task_expires_s` deadline and the fastest write rate to tolerate
+    (`fps_ceiling / detection_interval`)."""
+    write_interval = max(int(detection_interval), 1) / max(float(fps_ceiling), 1e-3)
+    needed = max(float(task_expires_s), 0.0) + max(float(margin_s), 0.0)
+    return max(_TRACKED_RING_MIN, math.ceil(needed / write_interval))
+
+
+# Default: detection_interval=2 (frame_pump.py's own default), task expiry
+# 1.0s (frame_pump._TASK_EXPIRES_S) — == 12. frame_pump.py passes the actual
+# configured detection_interval explicitly when it knows a different one.
+_RING_SIZE = tracked_ring_size(detection_interval=2, task_expires_s=1.0)
+
+# RoiBatchSlot's own ring (face/reid crop batches) is read via a direct,
+# synchronous RPC call-and-wait (FaceEmbedClient.embed and friends), not
+# Celery's fire-and-forget expires= mechanism the derivation above relies on
+# — a different timing model this lever hasn't measured. Left at the
+# original constant, deliberately not tied to _RING_SIZE, pending its own
+# LSO-224 pass.
+_ROI_RING_SIZE = 24
 
 # Random per-process id, stamped into every segment's header alongside seq —
 # see module docstring for why seq alone can't distinguish generations across
@@ -92,10 +140,12 @@ _RAW_SLOT_NAME_PREFIX = "camraw"
 # tuning SO_DECODE_HEALTH_INTERVAL_S down to 1 s yields 8 segments, not a
 # silent 4 s window. A recycled read is additionally rejected by the
 # (instance_id, seq) header — "no frame", never wrong pixels — so a violation
-# would cost availability, not correctness. _RING_SIZE=24 stays for the
-# detection ring's per-frame hot path. At 24 the raw ring held 24 full-res
-# frames per camera around the clock for an occasional calibration grab:
-# ~0.23 GB/camera at 1440p, ~3 GB of /dev/shm on a 14-camera site.
+# would cost availability, not correctness. The detection ring (`_RING_SIZE`,
+# also derived — see tracked_ring_size() above) is its own hot path with its
+# own timing budget, sized separately. At the old flat 24, the raw ring held
+# 24 full-res frames per camera around the clock for an occasional
+# calibration grab: ~0.23 GB/camera at 1440p, ~3 GB of /dev/shm on a
+# 14-camera site.
 RAW_FRAME_MAX_AGE_S = 5.0
 _RAW_RING_MARGIN_S = 3.0
 _RAW_RING_MIN = 2
@@ -549,7 +599,7 @@ class RoiBatchSlot:
 
     One instance per (camera, purpose), mirroring CameraFrameSlot: a
     single-writer ring, one batch in flight per segment (each `write()` call
-    replaces whatever the segment's previous generation held `_RING_SIZE`
+    replaces whatever the segment's previous generation held `_ROI_RING_SIZE`
     writes ago). The `purpose="face"` instance is owned by
     `_CameraContext.process_frame` (workers/camera_tasks.py), which writes
     here on every recognition-due detection frame and hands the resulting
@@ -637,7 +687,7 @@ class RoiBatchSlot:
 
         self._seq += 1
         seq = self._seq
-        segment = seq % _RING_SIZE
+        segment = seq % _ROI_RING_SIZE
         total_bytes = sum(int(np.prod(r.shape)) for r in person_rois)
         shm = self._ensure_segment(segment, _HEADER_SIZE + total_bytes)
 
