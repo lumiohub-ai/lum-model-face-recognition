@@ -43,6 +43,7 @@ from config import load_cameras_from_db, build_vision_config
 
 # Local
 from pipeline.decode_metrics import read_raw_frame, read_stream_health
+from workers.frame_store import RAW_FRAME_MAX_AGE_S
 from pipeline.infer_metrics import read_infer_latency
 
 
@@ -520,7 +521,7 @@ class SmartOfficeEngine:
         from messaging.publisher import MDAPublisher
 
         publisher = MDAPublisher(self.client_slug)
-        max_frame_age_sec = 5.0
+        max_frame_age_sec = RAW_FRAME_MAX_AGE_S  # ring depth is derived from this, see frame_store
 
         try:
             frame = read_raw_frame(camera_id, max_age_sec=max_frame_age_sec)

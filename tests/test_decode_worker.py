@@ -115,8 +115,9 @@ class FakeProducer:
 class FakeRawFrameSlot:
     instances = []
 
-    def __init__(self, camera_id):
+    def __init__(self, camera_id, ring_size=None):
         self.camera_id = camera_id
+        self.ring_size = ring_size
         self.closed = False
         FakeRawFrameSlot.instances.append(self)
 
