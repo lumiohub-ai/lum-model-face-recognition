@@ -316,7 +316,7 @@ class UnclaimedWarningTests(unittest.TestCase):
         finally:
             logger.remove(sink_id)
         self.assertTrue(
-            any("have no owner" in m for m in messages),
+            any("no owner" in m for m in messages),
             f"expected an uncovered-cameras warning, got: {messages}",
         )
 
@@ -340,9 +340,28 @@ class UnclaimedWarningTests(unittest.TestCase):
             logger.remove(sink_id)
         self.assertEqual(w.held, set())
         self.assertTrue(
-            any("have no owner" in m for m in messages),
+            any("no owner" in m for m in messages),
             f"expected an uncovered-cameras warning, got: {messages}",
         )
+
+    def test_warning_lists_only_orphans_not_fair_share_skips(self):
+        # A camera unowned merely because this worker is at capacity is not
+        # orphaned yet — it must not appear in the incident-facing list until
+        # it has actually been unowned past the grace.
+        redis, clock = FakeRedis(), Clock()
+        w = _worker("a", redis, [1, 2, 3, 4], replicas=1, capacity=3, clock=clock)
+        messages = []
+        sink_id = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+        try:
+            w.reconcile()  # holds 1-3; 4 is unowned but fresh
+            self.assertFalse([m for m in messages if "Orphaned:" in m])
+            clock.advance(31)
+            w.reconcile()  # 4 is now past the grace
+        finally:
+            logger.remove(sink_id)
+        orphans = [m for m in messages if "Orphaned:" in m]
+        self.assertTrue(orphans, f"expected an orphan warning, got: {messages}")
+        self.assertIn("Orphaned: [4]", orphans[-1])
 
 
 if __name__ == "__main__":

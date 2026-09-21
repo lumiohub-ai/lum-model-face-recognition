@@ -316,16 +316,19 @@ class CameraWorker:
                     if self._adopt(camera_id):
                         self._unowned_since.pop(camera_id, None)
 
-        # 4. Visibility: cameras nobody owns anywhere, once the grace has
-        #    passed (before that, the boot race is still settling).
-        remaining = [cid for cid in unowned if cid not in self.held]
-        if remaining and stale and now - self._last_unclaimed_warn >= self._warn_interval_s:
+        # 4. Visibility: cameras nobody owns AND that have been unowned past
+        #    the grace — genuinely orphaned, not merely unclaimed because this
+        #    worker is at its fair share, nor still settling in the boot race.
+        #    Listing `unowned` here would overstate the gap during an incident,
+        #    which is exactly when this line is read.
+        orphaned = sorted(cid for cid in stale if cid not in self.held)
+        if orphaned and now - self._last_unclaimed_warn >= self._warn_interval_s:
             self._last_unclaimed_warn = now
             logger.warning(
-                f"camera-worker[{self.worker_id}]: {len(remaining)} camera(s) "
-                f"have no owner after {self._failover_grace_s:.0f}s — the "
-                f"fleet is short a replica (replicas={self._replicas}, "
-                f"capacity={self._capacity}). Uncovered: {sorted(remaining)}"
+                f"camera-worker[{self.worker_id}]: {len(orphaned)} camera(s) "
+                f"have had no owner for over {self._failover_grace_s:.0f}s — "
+                f"the fleet is short a replica (replicas={self._replicas}, "
+                f"capacity={self._capacity}). Orphaned: {orphaned}"
             )
 
     def _adopt(self, camera_id: int) -> bool:
