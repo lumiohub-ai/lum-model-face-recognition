@@ -109,6 +109,41 @@ def _roi_reader(conn, results):
         conn.send("ack")
 
 
+def _raw_ring_producer(camera_id, conn):
+    """Write one frame, keep its handle, then cycle the raw ring past it —
+    exactly what the decode worker does over a few health ticks — and hand
+    the reader both the recycled handle and the live one."""
+    from workers import frame_store
+
+    slot = frame_store.RawFrameSlot(camera_id=camera_id)
+    stale_handle = slot.write(_random_frame(48, 64))
+    latest_frame = None
+    latest_handle = None
+    for _ in range(frame_store._RAW_RING_SIZE):
+        latest_frame = _random_frame(48, 64)
+        latest_handle = slot.write(latest_frame)
+    conn.send((stale_handle, latest_handle, latest_frame.tobytes(), latest_frame.shape, str(latest_frame.dtype)))
+    conn.recv()
+    slot.close()
+    conn.send("closed")
+    conn.recv()
+
+
+def _raw_ring_reader(conn, results):
+    from workers import frame_store
+    import numpy as np
+
+    stale_handle, latest_handle, raw, shape, dtype = conn.recv()
+    expected = np.frombuffer(raw, dtype=dtype).reshape(shape)
+    got_latest = frame_store.attach_and_read_raw(latest_handle)
+    got_stale = frame_store.attach_and_read_raw(stale_handle)
+    results.append(("latest", got_latest is not None and np.array_equal(expected, got_latest)))
+    results.append(("stale", got_stale))
+    conn.send("ack")
+    if conn.recv() == "closed":
+        conn.send("ack")
+
+
 class CameraFrameSlotTests(unittest.TestCase):
     """Every case here runs the producer and reader as genuinely separate
     OS processes connected by a pipe - not two objects in one process - so
@@ -250,6 +285,95 @@ class RoiBatchSlotTests(unittest.TestCase):
                 f"(largest) batch, the reader's cached mapping was not "
                 f"re-validated against the new size (the actual production bug)",
             )
+
+
+class RawFrameSlotRingDepthTests(unittest.TestCase):
+    """LSO-224: the calibration (camraw) ring is shallow. It is written once
+    per ~2 s health tick and read within ≤5 s, so it must not hold 24 full
+    frames per camera like the per-frame detection ring does — that was
+    ~3 GB of /dev/shm on a 14-camera site for pixels nobody read."""
+
+    def test_raw_ring_size_tracks_the_health_interval(self):
+        """The recycle window (ring × interval) must exceed the 5 s handle
+        age limit plus margin — for whatever SO_DECODE_HEALTH_INTERVAL_S is."""
+        from workers import frame_store as fs
+
+        self.assertEqual(fs.raw_ring_size(2.0), 4)      # default tick
+        self.assertEqual(fs.raw_ring_size(1.0), 8)      # faster telemetry → deeper ring
+        self.assertEqual(fs.raw_ring_size(5.0), 2)      # never below 2
+        for interval in (0.5, 1.0, 2.0, 3.0, 5.0):
+            self.assertGreater(fs.raw_ring_size(interval) * interval, fs.RAW_FRAME_MAX_AGE_S)
+        self.assertEqual(fs._RAW_RING_SIZE, fs.raw_ring_size(2.0))
+
+    def test_raw_ring_allocates_only_raw_ring_size_segments(self):
+        from workers import frame_store
+
+        slot = frame_store.RawFrameSlot(camera_id=401)
+        try:
+            for _ in range(frame_store._RING_SIZE * 2):
+                slot.write(_random_frame(32, 32))
+            self.assertEqual(len(slot._shms), frame_store._RAW_RING_SIZE)
+            self.assertLess(frame_store._RAW_RING_SIZE, frame_store._RING_SIZE)
+        finally:
+            slot.close()
+
+    def test_raw_latest_handle_reads_back_and_recycled_one_is_gone(self):
+        from workers import frame_store
+
+        slot = frame_store.RawFrameSlot(camera_id=402)
+        try:
+            first = _random_frame(32, 32)
+            stale_handle = slot.write(first)
+            latest_frame = None
+            latest_handle = None
+            for _ in range(frame_store._RAW_RING_SIZE):
+                latest_frame = _random_frame(32, 32)
+                latest_handle = slot.write(latest_frame)
+            got = frame_store.attach_and_read_raw(latest_handle)
+            self.assertIsNotNone(got)
+            self.assertTrue(np.array_equal(got, latest_frame))
+            # first's segment has been recycled after _RAW_RING_SIZE writes —
+            # the seq header must reject it rather than return newer pixels.
+            self.assertIsNone(frame_store.attach_and_read_raw(stale_handle))
+        finally:
+            slot.close()
+
+    def test_cross_process_reader_sees_latest_and_rejects_recycled(self):
+        """The production path: the decode worker writes camraw, the engine
+        reads it from another process via attach_and_read_raw (the
+        _attach_segment / _ATTACHED cache route, not the same-process
+        fast path the tests above hit). With the shallow ring recycling
+        segments more often, this is the read that must stay correct."""
+        manager = mp.Manager()
+        results = manager.list()
+        parent_conn, child_conn = mp.Pipe()
+        reader = mp.Process(target=_raw_ring_reader, args=(parent_conn, results))
+        producer = mp.Process(target=_raw_ring_producer, args=(404, child_conn))
+        reader.start()
+        producer.start()
+        producer.join(timeout=15)
+        reader.join(timeout=15)
+        self.assertEqual(producer.exitcode, 0)
+        self.assertEqual(reader.exitcode, 0)
+        got = dict(results)
+        self.assertTrue(got["latest"], "latest raw frame must round-trip cross-process")
+        self.assertIsNone(got["stale"], "recycled raw handle must read as gone, not as newer pixels")
+        # No after-close assertion: a reader that already mapped a segment
+        # keeps its mapping past the producer's unlink by design (see
+        # _ATTACHED); the existing close test only checks the unlink lands.
+
+    def test_detection_ring_depth_is_unchanged(self):
+        from workers import frame_store
+
+        slot = frame_store.CameraFrameSlot(camera_id=403)
+        try:
+            handle = slot.write(_random_frame(32, 32))
+            # Fewer writes than the detection ring's depth: still readable.
+            for _ in range(frame_store._RAW_RING_SIZE + 1):
+                slot.write(_random_frame(32, 32))
+            self.assertIsNotNone(frame_store.attach_and_read(handle))
+        finally:
+            slot.close()
 
 
 class SameProcessReadTests(unittest.TestCase):

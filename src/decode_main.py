@@ -48,7 +48,7 @@ from messaging.subscriber import start_listener
 from pipeline.camera_lease import CameraLeaseManager
 from pipeline.decode_metrics import StreamHealthReporter
 from pipeline.frame_pump import CeleryCameraProducer
-from workers.frame_store import RawFrameSlot
+from workers.frame_store import RawFrameSlot, raw_ring_size
 
 _CAPACITY = int(os.environ.get("SO_DECODE_WORKER_CAPACITY", "6"))
 # Must comfortably exceed not just SO_DECODE_CLAIM_INTERVAL_S, but the
@@ -319,7 +319,9 @@ class DecodeWorker:
             metrics_collector=None,
         )
         producer.start()
-        raw_slot = RawFrameSlot(camera_id)
+        # Ring depth follows the health tick so a ≤5 s-old handle is never
+        # recycled under the calibration reader (frame_store.raw_ring_size).
+        raw_slot = RawFrameSlot(camera_id, ring_size=raw_ring_size(_HEALTH_INTERVAL_S))
         with self._lock:
             self._owned[camera_id] = _OwnedCamera(config, stream, producer, raw_slot)
         logger.info(
