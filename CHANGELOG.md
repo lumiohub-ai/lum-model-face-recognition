@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.6 (2026-09-21)
+
+## What's Changed
+* ci(workflows): let Claude Code Review post inline review comments by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/130
+* frame_store: derive the detection-ring depth from Celery's expiry (LSO-224) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/129
+* Promote dev → main: LSO-224 tracked-ring depth + CI inline-review fix by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/131
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.5...v0.8.6
+
 ## v0.8.5 (2026-09-21)
 
 ## What's Changed
