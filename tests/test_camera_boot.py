@@ -100,20 +100,31 @@ class FakeRedis:
 
 
 class FakeRegistry:
-    """Records add/remove of consumers, and can fail adds on demand."""
+    """Records add/remove of consumers, and can fail adds on demand — either
+    synchronously (`fail_on`) or via the deferred `on_error` callback
+    (`fail_async_on`) that models `call_soon`'s async add."""
 
     def __init__(self):
         self.added = []
         self.removed = []
         self.fail_on = set()
+        self.fail_async_on = set()
+        self._pending_errors = []
 
-    def add(self, queue):
+    def add(self, queue, on_error=None):
         if queue in self.fail_on:
             raise RuntimeError("add failed")
         self.added.append(queue)
+        if queue in self.fail_async_on and on_error is not None:
+            self._pending_errors.append(on_error)
 
-    def remove(self, queue):
+    def remove(self, queue, on_error=None):
         self.removed.append(queue)
+
+    def fire_async_errors(self):
+        for on_error in self._pending_errors:
+            on_error(RuntimeError("async boom"))
+        self._pending_errors.clear()
 
 
 class Clock:
@@ -262,6 +273,20 @@ class EligibilityTests(unittest.TestCase):
         reg.fail_on = {"cam.1"}
         w = _worker("a", redis, [1], replicas=1, capacity=1, registry=reg)
         w.reconcile()
+        self.assertEqual(w.held, set())
+        self.assertIsNone(redis.get("track:cam:lease:1"))
+
+    def test_async_add_failure_hands_the_lease_back(self):
+        # The consumer add is deferred onto the worker loop; if it throws
+        # there, the camera must not stay "held" with nothing consuming it.
+        redis = FakeRedis()
+        reg = FakeRegistry()
+        reg.fail_async_on = {"cam.1"}
+        w = _worker("a", redis, [1], replicas=1, capacity=1, registry=reg)
+        w.reconcile()
+        self.assertEqual(w.held, {1})  # scheduled successfully...
+
+        reg.fire_async_errors()  # ...but the deferred add failed
         self.assertEqual(w.held, set())
         self.assertIsNone(redis.get("track:cam:lease:1"))
 

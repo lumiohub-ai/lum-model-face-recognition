@@ -287,9 +287,10 @@ services:
       SO_CAMERA_WORKER_CAPACITY: ${SO_CAMERA_WORKER_CAPACITY:-6}
     command: python3 -m src.camera_boot
     healthcheck:
-      # Node name is chosen at runtime (camera-worker@<host>), so ping without
-      # -d and match this container's reply by hostname.
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping --timeout=5 2>/dev/null | grep -q \"@$$HOSTNAME: OK\""]
+      # Node name is fixed (camera-worker@%h), so target this container
+      # directly like the other services — a broadcast ping would wait out the
+      # full timeout every cycle and chatter to every peer replica.
+      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d camera-worker@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
       interval: 30s
       timeout: 15s
       retries: 3

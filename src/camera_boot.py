@@ -61,12 +61,14 @@ from workers.celery_app import camera_queue_name, celery
 # Fleet size the fair share is computed against. Must match the camera-worker
 # `replicas` in the deploy. Not discoverable at runtime: a replica booting
 # alone into an otherwise-empty Redis cannot tell "I am the only worker" from
-# "the others are still starting".
-_REPLICAS = int(os.getenv("SO_CAMERA_WORKER_REPLICAS", "3"))
+# "the others are still starting". Default matches the documented dev default
+# (compose/.env.example); Incheon sets 3 via the environment.
+_REPLICAS = int(os.getenv("SO_CAMERA_WORKER_REPLICAS", "2"))
 # Hard cap on cameras one worker will ever hold. Sized so a surviving worker
 # stays inside its memory limit while covering a dead peer's share:
 # capacity >= ceil(C / (R - 1)) is what makes single-worker failover possible.
-_CAPACITY = int(os.getenv("SO_CAMERA_WORKER_CAPACITY", "7"))
+# Default matches the documented dev default; Incheon sets 7.
+_CAPACITY = int(os.getenv("SO_CAMERA_WORKER_CAPACITY", "6"))
 # TTL long enough to ride out a GC pause / slow renew; renewed at TTL/3.
 _TTL = int(os.getenv("SO_CAMERA_LEASE_TTL_S", "30"))
 _CLAIM_INTERVAL_S = float(os.getenv("SO_CAMERA_CLAIM_INTERVAL_S", "5"))
@@ -102,16 +104,38 @@ class CeleryConsumerRegistry:
     what the remote-control command does internally — and is safe to call
     from the reconcile thread. The Consumer is handed to us by `worker_ready`,
     which also means the worker is far enough along that its loop is running.
+
+    `call_soon` is async, so `add` returns before `add_task_queue` actually
+    runs; a failure inside it (broker down, bind error) would otherwise never
+    reach the caller. `on_error` is invoked on the loop thread if it throws,
+    which is how CameraWorker learns a "claimed" camera is not being consumed
+    and hands its lease back instead of holding a silent gap.
     """
 
     def __init__(self, consumer):
         self._consumer = consumer
 
-    def add(self, queue: str) -> None:
-        self._consumer.call_soon(self._consumer.add_task_queue, queue)
+    def add(self, queue: str, on_error=None) -> None:
+        def _add():
+            try:
+                self._consumer.add_task_queue(queue)
+            except Exception as e:  # noqa: BLE001 — surfaced via on_error
+                logger.warning(
+                    f"camera-worker: add_task_queue({queue}) failed: {e}"
+                )
+                if on_error is not None:
+                    on_error(e)
 
-    def remove(self, queue: str) -> None:
-        self._consumer.call_soon(self._consumer.cancel_task_queue, queue)
+        self._consumer.call_soon(_add)
+
+    def remove(self, queue: str, on_error=None) -> None:
+        def _remove():
+            try:
+                self._consumer.cancel_task_queue(queue)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"camera-worker: cancel_task_queue({queue}) failed: {e}")
+
+        self._consumer.call_soon(_remove)
 
 
 def _load_eligible() -> List[dict]:
@@ -172,6 +196,12 @@ class CameraWorker:
     def held(self) -> set:
         with self._lock:
             return set(self._held)
+
+    @property
+    def _held_count(self) -> int:
+        # Length only — avoids copying the whole set once per claim attempt.
+        with self._lock:
+            return len(self._held)
 
     @property
     def worker_id(self) -> str:
@@ -264,9 +294,12 @@ class CameraWorker:
 
     def _reconcile_locked(self) -> None:
         eligible = self._load_eligible()
-        eligible_ids = [
+        # Sorted so the claim order below is genuinely lowest-id-first (the
+        # loader's query has no ORDER BY) — deterministic and stable across
+        # passes, which makes claim/release behaviour easier to reason about.
+        eligible_ids = sorted(
             c["camera_id"] for c in eligible if c.get("camera_id") is not None
-        ]
+        )
         eligible_set = set(eligible_ids)
 
         # 1. Give up anything no longer eligible (camera disabled/removed).
@@ -303,10 +336,10 @@ class CameraWorker:
         for camera_id in eligible_ids:
             if camera_id not in unowned:
                 continue
-            held = self.held
-            if len(held) >= self._capacity:
+            count = self._held_count
+            if count >= self._capacity:
                 break
-            if len(held) < fair_share or camera_id in stale:
+            if count < fair_share or camera_id in stale:
                 if self._lease.claim(camera_id):
                     # Only clear the unowned timer once the consumer is
                     # actually live. If adopt keeps failing the camera is
@@ -341,7 +374,14 @@ class CameraWorker:
         """
         queue = camera_queue_name(camera_id)
         try:
-            self._registry.add(queue)
+            # on_error covers the deferred call: `add` only schedules
+            # add_task_queue on the worker loop, so an error raised there runs
+            # after this returns. Without a callback the camera would be
+            # marked held while nothing consumes it — the exact silent gap
+            # this ticket removes.
+            self._registry.add(
+                queue, on_error=lambda exc: self._on_consumer_add_failed(camera_id, exc)
+            )
         except Exception as e:
             # Hand the lease back rather than hold a camera we cannot consume
             # — better another worker tries than this one silently drops it.
@@ -358,6 +398,16 @@ class CameraWorker:
             f"consuming {queue}"
         )
         return True
+
+    def _on_consumer_add_failed(self, camera_id: int, exc: Exception) -> None:
+        """The deferred consumer add failed: give the lease back so another
+        worker (or a later pass) can take the camera, rather than hold a lease
+        with nothing consuming it. Runs on the worker's event-loop thread."""
+        logger.warning(
+            f"camera-worker[{self.worker_id}]: consumer for camera {camera_id} "
+            f"failed to start ({type(exc).__name__}: {exc}) — releasing it"
+        )
+        self._release(camera_id)
 
     def _release(self, camera_id: int) -> None:
         """Stop consuming a camera and give its lease up immediately."""
