@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.5 (2026-09-21)
+
+## What's Changed
+* perf(frame_store): shallow ring for calibration frames — ~3 GB less /dev/shm on Incheon (LSO-224) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/127
+* Promote dev → main: shallow calibration ring + shutdown-reason log → 0.8.5 by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/128
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.4...v0.8.5
+
 ## v0.8.4 (2026-09-20)
 
 ## What's Changed
