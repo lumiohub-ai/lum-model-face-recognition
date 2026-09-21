@@ -58,11 +58,21 @@ Three independent shared-memory rings exist, one set per camera:
 | `camraw_<id>` | `decode-worker` | `person-tracking` | full pre-ROI frames, written every ~2s for calibration |
 | `camroi_<id>` | `camera-worker` | `face-worker` | person crops for face embedding |
 
-Each is a ring of 24 segments, not a single slot: a depth-1 slot lost the write-to-execute race on
+Each is a ring of segments, not a single slot: a depth-1 slot lost the write-to-execute race on
 essentially every frame. (Started at 8; raised to 24 after live testing at full frame rate — no
 sampling — showed the producer recycling segments faster than yolo-worker could read them,
-`skipped_gone` climbing ~2-3/s. 24 segments held zero drops sustained at full frame rate.) Each
-segment's header stamps `(instance_id, seq)` so a reader can tell it actually landed on the
+`skipped_gone` climbing ~2-3/s. 24 segments held zero drops sustained at full frame rate.)
+
+LSO-224 replaced that flat 24 with per-ring depths derived from each ring's own timing budget, so
+the numbers no longer move together:
+
+| Ring | Depth | Sized by |
+|---|---|---|
+| `camframe_<id>` | `tracked_ring_size()` — 12 at the defaults | the Celery expiry both hops share (`frame_pump._TASK_EXPIRES_S`, 1.0 s) plus a margin, at the fastest write rate tolerated |
+| `camraw_<id>` | `raw_ring_size()` — 4 at the defaults | `SO_DECODE_HEALTH_INTERVAL_S` (default 2 s) against `RAW_FRAME_MAX_AGE_S` (5 s) |
+| `camroi_<id>` | 24, still flat | not yet derived — its readers are blocking RPC calls (`face_client`/`reid_client`), a timing model LSO-224 hasn't measured |
+
+Each segment's header stamps `(instance_id, seq)` so a reader can tell it actually landed on the
 generation it was told to read — see §7.
 
 ## 4. The frame's journey

@@ -257,13 +257,18 @@ class RoiBatchSlotTests(unittest.TestCase):
         position then permanently failed the size check and returned None,
         even though the segment was sitting there, correctly written, the
         whole time. This only reproduces once the SAME ring position is
-        reused (writes _RING_SIZE apart) with a size increase — a same-size
+        reused (writes _ROI_RING_SIZE apart) with a size increase — a same-size
         or shrinking reuse, or writes that never wrap the ring, do not
         trigger it, which is why the existing resize test above (3 writes,
         no wraparound) passed even with the bug present."""
         from workers import frame_store
 
-        ring_size = frame_store._RING_SIZE
+        # _ROI_RING_SIZE, not _RING_SIZE: this exercises RoiBatchSlot, whose
+        # write() indexes `seq % _ROI_RING_SIZE`. Padding with the detection
+        # ring's constant (now derived, and shallower than the ROI ring) left
+        # the final write on a never-before-used segment, so the reallocation
+        # below never happened and this test silently stopped covering the bug.
+        ring_size = frame_store._ROI_RING_SIZE
         # First batch: establishes the reader's cache for ring position 0
         # with a SMALL mapping.
         first = ([_random_frame(10, 10)], [1])
