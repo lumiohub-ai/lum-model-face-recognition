@@ -286,9 +286,19 @@ class EligibilityTests(unittest.TestCase):
         w.reconcile()
         self.assertEqual(w.held, {1})  # scheduled successfully...
 
-        reg.fire_async_errors()  # ...but the deferred add failed
+        messages = []
+        sink_id = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+        try:
+            reg.fire_async_errors()  # ...but the deferred add failed
+        finally:
+            logger.remove(sink_id)
         self.assertEqual(w.held, set())
         self.assertIsNone(redis.get("track:cam:lease:1"))
+        # ...and the failure is visible, not silent.
+        self.assertTrue(
+            any("failed to start" in m for m in messages),
+            f"expected a consumer-add-failure warning, got: {messages}",
+        )
 
 
 class RenewTests(unittest.TestCase):

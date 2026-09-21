@@ -149,7 +149,11 @@ class CeleryConsumerRegistry:
             try:
                 self._consumer.cancel_task_queue(queue)
             except Exception as e:  # noqa: BLE001
-                logger.debug(f"camera-worker: cancel_task_queue({queue}) failed: {e}")
+                logger.warning(
+                    f"camera-worker: cancel_task_queue({queue}) failed: {e}"
+                )
+                if on_error is not None:
+                    on_error(e)
 
         self._consumer.call_soon(_remove)
 
@@ -272,6 +276,9 @@ class CameraWorker:
         with self._lock:
             ids = list(self._held)
         if not ids:
+            # Nothing held means nothing to lose; clear any stale count so an
+            # old blip can't combine with an unrelated later one to trip exit.
+            self._transient_renew_fails = 0
             return
         # Count transient failures per PASS, not per camera. A single Redis
         # hiccup makes every camera in this pass return None; counting each as
@@ -360,21 +367,25 @@ class CameraWorker:
 
         # 3. Claim, lowest id first, while under fair share — or past it to
         #    cover a camera nobody has held for the failover grace, up to cap.
+        #    `count` is tracked locally (claims grow it) instead of re-reading
+        #    the held set under lock on every iteration.
+        count = self._held_count
         for camera_id in eligible_ids:
             if camera_id not in unowned:
                 continue
-            count = self._held_count
             if count >= self._capacity:
                 break
             if count < fair_share or camera_id in stale:
                 if self._lease.claim(camera_id):
-                    # Only clear the unowned timer once the consumer is
-                    # actually live. If adopt keeps failing the camera is
-                    # still effectively unowned, so its timer must keep
-                    # running — otherwise it never crosses the failover grace
-                    # and the uncovered-cameras warning never fires for it.
                     if self._adopt(camera_id):
-                        self._unowned_since.pop(camera_id, None)
+                        count += 1
+                    # _unowned_since is deliberately NOT cleared here: the
+                    # consumer add is deferred, so an adopt that returns True
+                    # can still fail on the worker loop. If it does, _release
+                    # puts the camera back — and its orphan clock must keep
+                    # running from when it was FIRST unowned, or repeated add
+                    # failures would reset the grace every pass and the
+                    # uncovered-cameras warning would never fire for it.
 
         # 4. Visibility: cameras nobody owns AND that have been unowned past
         #    the grace — genuinely orphaned, not merely unclaimed because this
@@ -437,11 +448,26 @@ class CameraWorker:
         self._release(camera_id)
 
     def _release(self, camera_id: int) -> None:
-        """Stop consuming a camera and give its lease up immediately."""
+        """Stop consuming a camera and give its lease up immediately.
+
+        The consumer cancel is *scheduled* (call_soon) before the lease is
+        released, which is the best ordering available without blocking the
+        reconcile loop on the worker's event loop. A few frames can therefore
+        still be pulled by this consumer in the instant after another worker
+        claims the camera — the brief, self-correcting overlap these leases
+        already tolerate on TTL lapse, not a lasting split.
+        """
         with self._lock:
             self._held.discard(camera_id)
         try:
-            self._registry.remove(camera_queue_name(camera_id))
+            self._registry.remove(
+                camera_queue_name(camera_id),
+                on_error=lambda exc: logger.warning(
+                    f"camera-worker[{self.worker_id}]: cancel consumer for "
+                    f"camera {camera_id} failed ({exc}) — the queue may keep "
+                    f"delivering to this worker briefly"
+                ),
+            )
         except Exception as e:
             logger.debug(
                 f"camera-worker[{self.worker_id}]: cancel consumer for "
