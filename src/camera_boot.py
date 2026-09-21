@@ -117,7 +117,19 @@ def main() -> None:
 
     # Release the slot on graceful shutdown so a deliberate restart doesn't
     # cost the full TTL before another replica can take the slot over.
-    from celery.signals import worker_shutdown
+    from celery.signals import worker_shutdown, worker_shutting_down
+
+    @worker_shutting_down.connect
+    def _log_reason(sig=None, how=None, exitcode=None, **_kwargs):  # noqa: ANN001
+        # A camera-worker restarting silently (exit 0, nothing logged — seen on
+        # prod 2026-09-21, LSO-218) is unattributable after the fact. Celery
+        # hands us the trigger here: which signal (None = a remote/programmatic
+        # shutdown such as `celery control shutdown` or Flower's button), warm
+        # vs cold, and the exit code. One line, before anything else tears down.
+        logger.warning(
+            f"camera_boot[{mgr.worker_id}]: shutting down slot {slot} — "
+            f"sig={sig} how={how} exitcode={exitcode}"
+        )
 
     @worker_shutdown.connect
     def _release(**_kwargs):  # noqa: ANN001
