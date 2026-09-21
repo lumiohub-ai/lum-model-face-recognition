@@ -45,7 +45,11 @@ from typing import Optional
 
 from loguru import logger
 
-_KEY_PREFIX = "decode:lease:cam:"
+# Default Redis key namespace. The decode pool uses it as-is; the camera-worker
+# passes a distinct prefix (`track:cam:lease:`, see camera_boot.py) so a decode
+# lease and a tracking lease for the same camera id never collide in Redis —
+# they are independent ownership decisions even when the id coincides.
+DEFAULT_KEY_PREFIX = "decode:lease:cam:"
 
 # Compare-and-extend: only renew if this worker still owns the key. A plain
 # GET then EXPIRE has a race — another worker's claim could land between
@@ -69,10 +73,6 @@ else
     return 0
 end
 """
-
-
-def _key(camera_id: int) -> str:
-    return f"{_KEY_PREFIX}{camera_id}"
 
 
 def default_worker_id() -> str:
@@ -101,11 +101,13 @@ class CameraLeaseManager:
         ttl_seconds: int,
         worker_id: Optional[str] = None,
         redis_client=None,
+        key_prefix: str = DEFAULT_KEY_PREFIX,
     ):
         # EX takes whole seconds and rejects 0, so a sub-second TTL would
         # silently raise at claim time rather than at construction.
         self._ttl = max(1, int(ttl_seconds))
         self._worker_id = worker_id or default_worker_id()
+        self._key_prefix = key_prefix
         self._redis = redis_client
         # An injected client is the caller's to manage; only a client this
         # instance resolved itself may be dropped and re-resolved on failure.
@@ -130,6 +132,9 @@ class CameraLeaseManager:
 
         self._redis = RedisClient.get_instance().client
         return self._redis
+
+    def _key(self, camera_id: int) -> str:
+        return f"{self._key_prefix}{camera_id}"
 
     def _on_success(self) -> None:
         if self._degraded_logged:
@@ -160,7 +165,7 @@ class CameraLeaseManager:
         """
         try:
             claimed = self._client().set(
-                _key(camera_id), self._worker_id, nx=True, ex=self._ttl
+                self._key(camera_id), self._worker_id, nx=True, ex=self._ttl
             )
             self._on_success()
             return bool(claimed)
@@ -186,20 +191,43 @@ class CameraLeaseManager:
             self._on_failure(e, "renew", camera_id)
             return False
 
+    def renew_status(self, camera_id: int) -> Optional[bool]:
+        """Tri-state renew for callers that must tell a transient Redis blip
+        apart from genuine ownership loss.
+
+        Unlike `renew`, which collapses both into False, this returns:
+
+        - True  — still ours, TTL extended.
+        - False — DEFINITIVELY lost: another worker holds the key (our TTL
+          lapsed), so the caller must stop consuming that camera now.
+        - None  — the renew CALL failed (Redis unreachable), which is NOT
+          proof of loss. The camera-worker uses this to ride out a short blip
+          rather than tearing down — and re-initialising — every tracker it
+          holds. Decode keeps using `renew` (False) and drops on a blip, since
+          decoding has no state to lose.
+        """
+        try:
+            result = self._eval_renew(camera_id)
+            self._on_success()
+            return bool(result)
+        except Exception as e:
+            self._on_failure(e, "renew", camera_id)
+            return None
+
     def _eval_renew(self, camera_id: int) -> int:
         client = self._client()
         if self._renew_sha is None:
             self._renew_sha = client.script_load(_RENEW_SCRIPT)
         try:
             return client.evalsha(
-                self._renew_sha, 1, _key(camera_id), self._worker_id, self._ttl
+                self._renew_sha, 1, self._key(camera_id), self._worker_id, self._ttl
             )
         except Exception:
             # The server restarted and flushed its script cache (NOSCRIPT)
             # — reload once rather than caching a dead sha forever.
             self._renew_sha = client.script_load(_RENEW_SCRIPT)
             return client.evalsha(
-                self._renew_sha, 1, _key(camera_id), self._worker_id, self._ttl
+                self._renew_sha, 1, self._key(camera_id), self._worker_id, self._ttl
             )
 
     def release(self, camera_id: int) -> None:
@@ -227,12 +255,12 @@ class CameraLeaseManager:
             self._release_sha = client.script_load(_RELEASE_SCRIPT)
         try:
             return client.evalsha(
-                self._release_sha, 1, _key(camera_id), self._worker_id
+                self._release_sha, 1, self._key(camera_id), self._worker_id
             )
         except Exception:
             self._release_sha = client.script_load(_RELEASE_SCRIPT)
             return client.evalsha(
-                self._release_sha, 1, _key(camera_id), self._worker_id
+                self._release_sha, 1, self._key(camera_id), self._worker_id
             )
 
     def is_claimed(self, camera_id: int) -> bool:
@@ -245,6 +273,6 @@ class CameraLeaseManager:
         "nobody owns this camera" alert.
         """
         try:
-            return bool(self._client().exists(_key(camera_id)))
+            return bool(self._client().exists(self._key(camera_id)))
         except Exception:
             return True

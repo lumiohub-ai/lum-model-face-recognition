@@ -256,10 +256,10 @@ class RunDetectBatchTests(unittest.TestCase):
         self.assertGreater(remaining, 0)
         self.assertLessEqual(remaining, 5.0)
 
-    def test_next_queue_defaults_to_slot_queue_when_absent(self):
+    def test_next_queue_defaults_to_camera_queue_when_absent(self):
         # When a request carries no next_queue, the fallback must route through
-        # camera_queue_name (the slot queue, LSO-186), never a literal cam.<id>
-        # that no worker consumes.
+        # camera_queue_name (the camera's own cam.<id> queue, LSO-218) rather
+        # than a hand-built string that could drift from the real name.
         from workers.yolo_tasks import run_detect_batch
         from workers.celery_app import camera_queue_name
 

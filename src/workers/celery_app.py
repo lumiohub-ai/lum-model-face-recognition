@@ -15,7 +15,6 @@ to avoid circular imports. Import from there in task modules.
 """
 
 import os
-import zlib
 from urllib.parse import urlsplit, urlunsplit
 
 from celery import Celery
@@ -53,19 +52,28 @@ def _redact_url_credentials(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
-def camera_slot(camera_id: int, n_slots: int) -> int:
-    """Stable slot number for a camera id, 0 <= slot < n_slots (LSO-186).
+def camera_queue_name(camera_id: int) -> str:
+    """The queue `yolo.detect` forwards a camera's detections to, and which
+    exactly ONE camera-worker consumes (LSO-218).
 
-    crc32, not the builtin `hash()`: `hash()` on strings is randomized per
-    process (PYTHONHASHSEED), so the decode-worker and the yolo-worker — two
-    separate processes that BOTH compute this to agree on a queue — could hash
-    the same camera to different slots and split its frames across two
-    camera-workers, fragmenting tracker state. crc32 is a fixed checksum: same
-    input -> same number in every process, on every host, across restarts.
-    `str(camera_id)` so ids that differ only in type (5 vs "5") still collide
-    to one slot, and so the spread doesn't degenerate for small sequential ids.
+    One queue per camera (`cam.<id>`), NOT one slot per bucket of cameras
+    (`cam-slot-<n>`, LSO-186). Ownership is a short-lived Redis lease
+    (pipeline/camera_lease.py), claimed per camera by whichever worker has
+    spare capacity — so the load is balanced by construction instead of by
+    crc32 luck, a crashed worker's cameras are re-claimed individually by the
+    survivors (not as a whole slot that goes dark at once), and rebalancing
+    is a replica-count change rather than an image rebuild.
+
+    Still sticky where it matters: one camera maps to one queue, and at most
+    one worker holds that camera's lease, so per-camera tracker state stays on
+    one process for as long as that process lives.
+
+    Not declared in `task_queues` below: `apply_async(queue="cam.4")` needs no
+    prior declaration (`task_create_missing_queues` defaults True), and the
+    queue set is the live camera set — not a fixed N — so it can't be a static
+    declaration anyway.
     """
-    return zlib.crc32(str(camera_id).encode()) % n_slots
+    return f"cam.{camera_id}"
 
 # Create Celery app
 celery = Celery(
@@ -87,29 +95,6 @@ celery = Celery(
 default_exchange = Exchange('default', type='direct')
 dlq_exchange = Exchange('dlq', type='direct')
 
-
-def camera_queue_name(camera_id: int) -> str:
-    """The queue `yolo.detect` forwards a camera's detections to, and which a
-    camera-worker consumes.
-
-    Hash-to-slot (LSO-186): a camera routes to one of `camera_slot_count`
-    fixed slot queues (`cam-slot-0`, `cam-slot-1`, …) by a stable hash of its
-    id, NOT a per-camera `cam.<id>` queue. This decouples the queue set from
-    the live camera set: a camera added in the app hashes to an existing slot
-    that a worker is already consuming — no `-Q` edit, no restart. Sticky by
-    construction: same id -> same slot -> same worker, so per-camera tracker
-    state stays put (as long as N is unchanged and that slot's worker lives).
-
-    Not declared in `task_queues` below: `apply_async(queue="cam-slot-0")`
-    needs no prior declaration (task_create_missing_queues defaults to True).
-    """
-    return slot_queue_name(camera_slot(camera_id, settings.camera_slot_count))
-
-
-def slot_queue_name(slot: int) -> str:
-    """The queue a camera-worker consumes once it has leased `slot`
-    (pipeline/slot_lease.py). The consumer side of `camera_queue_name`."""
-    return f"cam-slot-{slot}"
 
 # Celery configuration
 celery.conf.update(
@@ -142,10 +127,10 @@ celery.conf.update(
     #
     # 'camera.*' is deliberately absent: camera.track has no static queue at
     # all (see its @celery.task decorator) — it's dispatched exclusively via
-    # yolo.detect's send_task(queue=camera_queue_name(camera_id)), which hashes
-    # the camera to one of N slot queues (cam-slot-<n>, LSO-186). A route entry
-    # here could only name one fixed queue, which is exactly what slot routing
-    # needs to NOT be.
+    # yolo.detect's send_task(queue=camera_queue_name(camera_id)), which
+    # resolves to that camera's own cam.<id> queue (LSO-218). A route entry
+    # here could only name one fixed queue, which is exactly what per-camera
+    # routing needs to NOT be.
     task_routes={
         'workers.embedding_tasks.*': {'queue': 'embeddings'},
         'workers.detection_tasks.*': {'queue': 'detections'},
@@ -166,9 +151,10 @@ celery.conf.update(
     # Three kinds of queue in this app:
     #   - shared, stateless: embeddings/detections/yolo/face. Any worker
     #     consuming that queue may process any task on it.
-    #   - slot-routed, one per camera-worker: cam-slot-<n> (see
-    #     camera_queue_name above). Not declared here — task_create_missing_queues
-    #     handles them, and the count is fixed (N slots), not per-camera.
+    #   - camera-routed, one queue per camera: cam.<id> (see camera_queue_name
+    #     above). Not declared here — task_create_missing_queues handles them,
+    #     and the set is the live camera set, consumed by whichever
+    #     camera-worker holds that camera's Redis lease (pipeline/camera_lease).
     #
     # yolo and face MUST stay separate queues with their own worker
     # processes: camera-worker's process_frame blocks on face.embed_batch's
