@@ -312,6 +312,28 @@ class RenewTests(unittest.TestCase):
         self.assertEqual(w.held, set())
         self.assertIn("cam.1", reg.removed)
 
+    def test_transient_failures_count_per_pass_not_per_camera(self):
+        # One Redis blip fails every camera's renew in the same pass; that must
+        # count as ONE bad interval, not one per camera, or a worker at fair
+        # share would exit on the blip's first tick.
+        redis = FakeRedis()
+        w = _worker("a", redis, [1, 2, 3], replicas=1, capacity=3)
+        w.reconcile()
+        self.assertEqual(w.held, {1, 2, 3})
+
+        redis.fail = True
+        w.renew_once()  # three cameras fail transiently, one pass
+        self.assertEqual(w._transient_renew_fails, 1)
+        self.assertEqual(w.held, {1, 2, 3})  # nothing torn down
+
+    def test_a_clean_pass_resets_the_transient_counter(self):
+        redis = FakeRedis()
+        w = _worker("a", redis, [1], replicas=1, capacity=1)
+        w.reconcile()
+        w._transient_renew_fails = 1
+        w.renew_once()
+        self.assertEqual(w._transient_renew_fails, 0)
+
 
 class ReleaseAllTests(unittest.TestCase):
     def test_release_all_hands_every_lease_back(self):

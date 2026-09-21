@@ -255,11 +255,18 @@ class CameraWorker:
         """
         with self._lock:
             ids = list(self._held)
+        if not ids:
+            return
+        # Count transient failures per PASS, not per camera. A single Redis
+        # hiccup makes every camera in this pass return None; counting each as
+        # a failure would blow through the tolerance on a worker holding 2+
+        # cameras and exit on the blip's very first tick. The tolerance is
+        # meant to be "N consecutive renew *intervals* of failure", so a pass
+        # with any transient failure counts once.
+        transient_this_pass = False
         for camera_id in ids:
             status = self._lease.renew_status(camera_id)
-            if status is True:
-                self._transient_renew_fails = 0
-            elif status is False:
+            if status is False:
                 # Definitive loss: another worker now owns this camera. Stop
                 # consuming immediately so two trackers never run over the
                 # same camera's frames.
@@ -268,23 +275,27 @@ class CameraWorker:
                     f"camera {camera_id} — releasing it"
                 )
                 self._release(camera_id)
-            else:
+            elif status is None:
                 # None: the renew CALL failed (Redis blip), not proof of loss.
-                # Tolerate a couple, then exit to re-claim cleanly rather than
-                # run past the TTL.
-                self._transient_renew_fails += 1
-                if self._transient_renew_fails >= _RENEW_MAX_TRANSIENT_FAILS:
-                    logger.critical(
-                        f"camera-worker[{self.worker_id}]: "
-                        f"{self._transient_renew_fails} consecutive renew "
-                        f"failures (Redis unreachable) — exiting to reclaim"
-                    )
-                    os._exit(1)
-                logger.warning(
-                    f"camera-worker[{self.worker_id}]: renew failed "
-                    f"transiently ({self._transient_renew_fails}/"
-                    f"{_RENEW_MAX_TRANSIENT_FAILS}) — retrying"
-                )
+                transient_this_pass = True
+
+        if not transient_this_pass:
+            self._transient_renew_fails = 0
+            return
+
+        self._transient_renew_fails += 1
+        if self._transient_renew_fails >= _RENEW_MAX_TRANSIENT_FAILS:
+            logger.critical(
+                f"camera-worker[{self.worker_id}]: "
+                f"{self._transient_renew_fails} consecutive renew intervals "
+                f"failed (Redis unreachable) — exiting to reclaim"
+            )
+            os._exit(1)
+        logger.warning(
+            f"camera-worker[{self.worker_id}]: renew failed transiently "
+            f"({self._transient_renew_fails}/{_RENEW_MAX_TRANSIENT_FAILS} "
+            f"intervals) — retrying"
+        )
 
     # ── the claim/release reconcile pass ─────────────────────────────────
 
