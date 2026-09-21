@@ -35,6 +35,22 @@ without any single worker exceeding its memory budget. `REPLICAS` must match
 the compose `replicas` count (it is the fleet size used to compute the fair
 share, which a lone booting replica cannot infer from Redis).
 
+Rebalancing after failover — a deliberate limitation
+----------------------------------------------------
+A worker's held set only shrinks when a camera leaves the eligible set; there
+is no "give cameras back down to fair share" step. So after a failover the
+survivors may remain at capacity even once the missing replica returns, and
+that replica then finds every camera already owned and idles at zero until
+something else reshuffles the leases. This is bounded and safe — capacity is
+sized precisely to stay inside the memory budget, so unlike the unbounded
+10-camera slot that caused LSO-218 this cannot OOM — but it is a lasting skew,
+not a self-correcting one. To rebalance a fleet stuck this way, restart the
+whole camera-worker service: every replica releases on shutdown and they
+re-divide evenly on boot. A voluntary yield-to-fair-share step is a possible
+follow-up, deliberately not done now because releasing a camera re-initialises
+its tracker state; paying that on every peer restart to smooth a load skew
+that is already within budget is the wrong trade for tracking.
+
 Consumers are dynamic because the camera set is: a camera enabled in the app
 is claimed on the next reconcile pass and starts being consumed; one that is
 disabled has its consumer cancelled and lease released. The worker boots
