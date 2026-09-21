@@ -308,8 +308,13 @@ class CameraWorker:
                 break
             if len(held) < fair_share or camera_id in stale:
                 if self._lease.claim(camera_id):
-                    self._adopt(camera_id)
-                    self._unowned_since.pop(camera_id, None)
+                    # Only clear the unowned timer once the consumer is
+                    # actually live. If adopt keeps failing the camera is
+                    # still effectively unowned, so its timer must keep
+                    # running — otherwise it never crosses the failover grace
+                    # and the uncovered-cameras warning never fires for it.
+                    if self._adopt(camera_id):
+                        self._unowned_since.pop(camera_id, None)
 
         # 4. Visibility: cameras nobody owns anywhere, once the grace has
         #    passed (before that, the boot race is still settling).
@@ -323,8 +328,14 @@ class CameraWorker:
                 f"capacity={self._capacity}). Uncovered: {sorted(remaining)}"
             )
 
-    def _adopt(self, camera_id: int) -> None:
-        """Start consuming a camera we just won the lease for."""
+    def _adopt(self, camera_id: int) -> bool:
+        """Start consuming a camera we just won the lease for.
+
+        Returns True only once the camera is in `_held` (consumer added). On
+        failure the lease is handed straight back and False is returned, so
+        the caller keeps this camera's unowned timer running and another
+        worker — or a later pass here — can try again.
+        """
         queue = camera_queue_name(camera_id)
         try:
             self._registry.add(queue)
@@ -336,13 +347,14 @@ class CameraWorker:
                 f"camera {camera_id} ({queue}): {e} — releasing it"
             )
             self._lease.release(camera_id)
-            return
+            return False
         with self._lock:
             self._held.add(camera_id)
         logger.info(
             f"camera-worker[{self.worker_id}]: claimed camera {camera_id}, "
             f"consuming {queue}"
         )
+        return True
 
     def _release(self, camera_id: int) -> None:
         """Stop consuming a camera and give its lease up immediately."""
@@ -360,6 +372,20 @@ class CameraWorker:
 
 def main() -> None:
     from celery.signals import worker_ready, worker_shutdown, worker_shutting_down
+
+    # A missing site slug is a permanent misconfiguration, not a transient DB
+    # blip: `_load_eligible` is only ever run inside the reconcile loop, whose
+    # broad except would otherwise log a warning every few seconds while the
+    # container stays "healthy" and tracks nothing — the exact silent
+    # under-coverage LSO-218 removes. Fail at boot instead (as decode_main does
+    # for the same check, and as the slot-based camera_boot it replaced did).
+    if not settings.client_slug:
+        logger.critical(
+            "camera-worker: SO_CLIENT_SLUG is unset — cannot resolve this "
+            "site's cameras. Exiting so the misconfiguration is visible "
+            "rather than idling as a healthy container tracking nothing."
+        )
+        sys.exit(1)
 
     lease = CameraLeaseManager(ttl_seconds=_TTL, key_prefix=_KEY_PREFIX)
     # The registry needs the node name, which Celery only reveals once the

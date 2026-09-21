@@ -183,13 +183,11 @@ class CameraLeaseManager:
         same shared-memory slot for longer than the brief, self-correcting
         race this design tolerates (see the module docstring).
         """
-        try:
-            result = self._eval_renew(camera_id)
-            self._on_success()
-            return bool(result)
-        except Exception as e:
-            self._on_failure(e, "renew", camera_id)
-            return False
+        # One implementation of the renew path (renew_status); the tri-state's
+        # None (transient Redis failure) collapses to False here as well, which
+        # is decode's deliberate posture — it has no state to lose, so it drops
+        # the camera rather than ride out a blip.
+        return self.renew_status(camera_id) is True
 
     def renew_status(self, camera_id: int) -> Optional[bool]:
         """Tri-state renew for callers that must tell a transient Redis blip

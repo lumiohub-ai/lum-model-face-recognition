@@ -320,6 +320,30 @@ class UnclaimedWarningTests(unittest.TestCase):
             f"expected an uncovered-cameras warning, got: {messages}",
         )
 
+    def test_repeated_adopt_failure_still_trips_the_uncovered_warning(self):
+        # _adopt failing must NOT reset the unowned timer: a camera whose
+        # consumer can never be added is exactly a coverage gap the warning
+        # exists to surface, so it has to be reachable.
+        redis, clock = FakeRedis(), Clock()
+        reg = FakeRegistry()
+        reg.fail_on = {"cam.1"}
+        w = _worker(
+            "a", redis, [1], replicas=1, capacity=1, registry=reg, clock=clock
+        )
+        messages = []
+        sink_id = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+        try:
+            for _ in range(5):  # 50s > the 30s failover grace
+                clock.advance(10)
+                w.reconcile()
+        finally:
+            logger.remove(sink_id)
+        self.assertEqual(w.held, set())
+        self.assertTrue(
+            any("have no owner" in m for m in messages),
+            f"expected an uncovered-cameras warning, got: {messages}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
