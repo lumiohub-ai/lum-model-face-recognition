@@ -83,9 +83,15 @@ class CeleryCameraProducer:
         # row) — allocating the shared-memory slot exactly when the thread
         # that owns its writes starts keeps the slot's lifetime tied to the
         # thread's, matching CameraFrameSlot's single-writer assumption.
-        from workers.frame_store import CameraFrameSlot
+        from workers.frame_store import CameraFrameSlot, tracked_ring_size
 
-        self._frame_slot = CameraFrameSlot(self.camera_id)
+        # LSO-224: this producer's own detection_interval and _TASK_EXPIRES_S
+        # are the two numbers the ring depth must stay consistent with — pass
+        # them explicitly rather than relying on frame_store's own default.
+        self._frame_slot = CameraFrameSlot(
+            self.camera_id,
+            ring_size=tracked_ring_size(self.detection_interval, _TASK_EXPIRES_S),
+        )
         self._running = True
         name = f"cam-producer-{self.camera_id}"
         self._thread = threading.Thread(target=self.run, daemon=True, name=name)
