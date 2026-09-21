@@ -245,10 +245,18 @@ class CameraWorker:
 
     def release_all(self) -> None:
         """Stop and hand back every camera — prompt failover on restart,
-        rather than making the survivors wait out each lease's TTL."""
+        rather than making the survivors wait out each lease's TTL.
+
+        Takes `_reconcile_lock` so it cannot race a reconcile pass that is
+        mid-flight: `stop()` only prevents FUTURE passes, so a pass already
+        running could claim a new camera after we snapshot `held`, leaking that
+        lease until its TTL (nothing renews or releases it before exit).
+        Holding the lock waits that pass out, so its claims are included.
+        """
         self.stop()
-        for camera_id in self.held:
-            self._release(camera_id)
+        with self._reconcile_lock:
+            for camera_id in self.held:
+                self._release(camera_id)
 
     def _reconcile_loop(self) -> None:
         while self._running:

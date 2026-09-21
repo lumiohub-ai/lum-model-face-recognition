@@ -359,6 +359,51 @@ class ReleaseAllTests(unittest.TestCase):
             self.assertIsNone(redis.get(f"track:cam:lease:{camera_id}"))
             self.assertIn(f"cam.{camera_id}", reg.removed)
 
+    def test_release_all_waits_out_an_in_flight_reconcile(self):
+        # A pass already running must not claim a camera after release_all
+        # snapshots, or that lease leaks until TTL. release_all takes the
+        # reconcile lock, so the late claim is included in its release.
+        import threading
+
+        redis = FakeRedis()
+        w = _worker("a", redis, [1], replicas=1, capacity=1)
+        started = threading.Event()
+        release_done = threading.Event()
+        entered_claim = threading.Event()
+
+        orig_load = w._load_eligible
+
+        def blocking_load():
+            started.set()
+            entered_claim.wait(2.0)  # hold the pass inside reconcile
+            return orig_load()
+
+        w._load_eligible = blocking_load
+
+        def run_reconcile():
+            w.reconcile()
+
+        t = threading.Thread(target=run_reconcile)
+        t.start()
+        started.wait(2.0)
+
+        def run_release():
+            w.release_all()
+            release_done.set()
+
+        rt = threading.Thread(target=run_release)
+        rt.start()
+
+        # release_all must be blocked on the reconcile lock, not done yet.
+        self.assertFalse(release_done.wait(0.3))
+        entered_claim.set()  # let the pass claim camera 1
+        t.join(2.0)
+        rt.join(2.0)
+
+        self.assertTrue(release_done.is_set())
+        self.assertEqual(w.held, set())
+        self.assertIsNone(redis.get("track:cam:lease:1"))
+
 
 class UnclaimedWarningTests(unittest.TestCase):
     def test_warns_when_cameras_stay_unowned_after_the_grace(self):
