@@ -257,13 +257,18 @@ class RoiBatchSlotTests(unittest.TestCase):
         position then permanently failed the size check and returned None,
         even though the segment was sitting there, correctly written, the
         whole time. This only reproduces once the SAME ring position is
-        reused (writes _RING_SIZE apart) with a size increase — a same-size
+        reused (writes _ROI_RING_SIZE apart) with a size increase — a same-size
         or shrinking reuse, or writes that never wrap the ring, do not
         trigger it, which is why the existing resize test above (3 writes,
         no wraparound) passed even with the bug present."""
         from workers import frame_store
 
-        ring_size = frame_store._RING_SIZE
+        # _ROI_RING_SIZE, not _RING_SIZE: this exercises RoiBatchSlot, whose
+        # write() indexes `seq % _ROI_RING_SIZE`. Padding with the detection
+        # ring's constant (now derived, and shallower than the ROI ring) left
+        # the final write on a never-before-used segment, so the reallocation
+        # below never happened and this test silently stopped covering the bug.
+        ring_size = frame_store._ROI_RING_SIZE
         # First batch: establishes the reader's cache for ring position 0
         # with a SMALL mapping.
         first = ([_random_frame(10, 10)], [1])
@@ -362,7 +367,7 @@ class RawFrameSlotRingDepthTests(unittest.TestCase):
         # keeps its mapping past the producer's unlink by design (see
         # _ATTACHED); the existing close test only checks the unlink lands.
 
-    def test_detection_ring_depth_is_unchanged(self):
+    def test_detection_ring_is_still_deeper_than_the_raw_ring(self):
         from workers import frame_store
 
         slot = frame_store.CameraFrameSlot(camera_id=403)
@@ -374,6 +379,66 @@ class RawFrameSlotRingDepthTests(unittest.TestCase):
             self.assertIsNotNone(frame_store.attach_and_read(handle))
         finally:
             slot.close()
+
+
+class TrackedRingDepthTests(unittest.TestCase):
+    """LSO-224 lever 2: the per-frame detection ring (`_RING_SIZE`, the one
+    yolo.detect/camera.track read via CameraFrameSlot) is also derived now,
+    not a flat 24. A segment only needs to outlive the Celery expiry both
+    hops share (frame_pump._TASK_EXPIRES_S, carried forward end to end) at
+    the fastest write rate it must tolerate — not survive forever."""
+
+    def test_tracked_ring_size_tracks_expiry_and_write_rate(self):
+        from workers import frame_store as fs
+
+        # Slower writes (bigger detection_interval) need fewer segments to
+        # cover the same time budget.
+        small = fs.tracked_ring_size(detection_interval=2, task_expires_s=1.0)
+        big = fs.tracked_ring_size(detection_interval=4, task_expires_s=1.0)
+        self.assertLess(big, small)
+        # A longer task expiry needs a deeper ring to survive it.
+        self.assertGreater(
+            fs.tracked_ring_size(detection_interval=2, task_expires_s=3.0), small
+        )
+        self.assertEqual(
+            fs.tracked_ring_size(detection_interval=1, task_expires_s=0.0, margin_s=0.0),
+            fs._TRACKED_RING_MIN,
+        )
+        # Ring lifetime (segments × write interval) must clear the expiry it defends against.
+        for interval, expires in ((1, 0.5), (2, 1.0), (4, 2.0)):
+            write_interval = interval / fs._TRACKED_FPS_CEILING
+            ring = fs.tracked_ring_size(detection_interval=interval, task_expires_s=expires)
+            self.assertGreater(ring * write_interval, expires)
+        self.assertEqual(fs._RING_SIZE, fs.tracked_ring_size(detection_interval=2, task_expires_s=1.0))
+
+    def test_invalid_fps_ceiling_raises_rather_than_silently_flooring(self):
+        # A misconfigured (<=0) ceiling must fail loudly, not silently
+        # collapse to _TRACKED_RING_MIN and hide the mistake.
+        from workers import frame_store as fs
+
+        with self.assertRaises(ValueError):
+            fs.tracked_ring_size(detection_interval=2, task_expires_s=1.0, fps_ceiling=0)
+        with self.assertRaises(ValueError):
+            fs.tracked_ring_size(detection_interval=2, task_expires_s=1.0, fps_ceiling=-5)
+
+    def test_fps_ceiling_covers_every_camera_measured_live(self):
+        # LSO-224 review: the PR originally claimed "every camera runs
+        # ~10 fps" — checked live against Tashkent during review and found
+        # cam 27 at ~12.5 fps. This pins the ceiling to keep real headroom
+        # over the fastest camera actually observed, not just dev's.
+        from workers import frame_store as fs
+
+        fastest_camera_fps_observed = 12.5  # Tashkent cam 27, checked live in review
+        self.assertGreater(fs._TRACKED_FPS_CEILING, fastest_camera_fps_observed * 1.5)
+
+    def test_roi_ring_is_independent_of_the_detection_ring(self):
+        # RoiBatchSlot's ring (face/reid crop batches) is read via a
+        # synchronous RPC, not Celery's expires= mechanism — it must not
+        # silently move when the detection ring's derivation changes.
+        from workers import frame_store as fs
+
+        self.assertEqual(fs._ROI_RING_SIZE, 24)
+        self.assertNotEqual(fs._ROI_RING_SIZE, fs._RING_SIZE)
 
 
 class SameProcessReadTests(unittest.TestCase):
