@@ -21,8 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
@@ -47,11 +47,27 @@ jobs:
             - Security concerns
             - Test coverage
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            Leave every line-level finding as an inline review comment on the
+            line it applies to, using the
+            `mcp__github_inline_comment__create_inline_comment` tool. Pass
+            `confirmed: true` — without it the comment is only buffered and the
+            post-step reports "No buffered inline comments". Pass `startLine`
+            together with `line` when a finding spans several lines, and keep
+            each comment anchored to lines that are part of this PR's diff.
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            Then post exactly one summary comment with
+            `gh pr comment --body ...` for the overall verdict and anything that
+            is not tied to a specific line.
+
+            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+          #
+          # NOTE: in agent mode `--allowedTools` REPLACES the action's defaults
+          # outright (it is not merged), so every tool the review needs must be
+          # listed here. The inline-comment server is only started when
+          # `mcp__github_inline_comment__*` appears in this list.
+          claude_args: |
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
 
