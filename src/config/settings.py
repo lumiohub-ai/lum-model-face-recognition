@@ -51,6 +51,20 @@ class Settings:
     redis_db = int(os.getenv("SO_REDIS_DB", 0))
     redis_url = os.getenv("SO_REDIS_URL", f"redis://{redis_host}:{redis_port}")
 
+    # Central Redis for the embedding/camera-config/status reload pub/sub only
+    # (LSO-189). A branch AI's Celery broker + camera/slot leases must stay on
+    # its LOCAL Redis (sharing a broker across branches collides queue names
+    # and lease keys) — but the backend publishes enrollment-reload signals to
+    # the CENTRAL Redis, so a local-Redis branch AI never hears them and its
+    # in-memory face register goes stale until restart. Empty/unset falls back
+    # to redis_host, so single-site/central deployments (Incheon) are unaffected.
+    central_redis_host = os.getenv("SO_CENTRAL_REDIS_HOST", "").strip() or redis_host
+
+    # Periodic DB-reload backstop (LSO-189) for the embedding register, in case
+    # the central Redis pub/sub connection above is briefly unreachable. 0
+    # (default) disables it — the pub/sub signal is the primary path.
+    embedding_reload_interval_s = int(os.getenv("SO_EMBEDDING_RELOAD_INTERVAL_S", 0))
+
     # Celery
     celery_broker_url = os.getenv("SO_CELERY_BROKER_URL", f"redis://{redis_host}:{redis_port}/0")
     celery_result_backend = os.getenv("SO_CELERY_RESULT_BACKEND", f"redis://{redis_host}:{redis_port}/1")

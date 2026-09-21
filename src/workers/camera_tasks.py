@@ -462,29 +462,53 @@ def _ensure_listeners_started() -> None:
         if _LISTENERS_STARTED:
             return
 
+        from config.settings import settings
         from messaging.calibration_subscriber import CalibrationSubscriber
         from messaging.channels import INTERNAL_CHANNELS
+        from messaging.redis_client import CentralRedisClient
         from messaging.subscriber import start_listener
 
+        # LSO-189: these three channels are published by the backend to the
+        # CENTRAL Redis, not a branch AI's local one — subscribe there.
         start_listener(
             INTERNAL_CHANNELS["EMBEDDING_RELOAD"],
             lambda _data: _for_each_context("on_embedding_reload"),
             name="reload-embeddings",
+            client_factory=CentralRedisClient.get_instance,
         )
         start_listener(
             INTERNAL_CHANNELS["CAMERA_CONFIG_RELOAD"],
             lambda _data: _for_each_context("on_camera_config_reload"),
             name="reload-camera-config",
+            client_factory=CentralRedisClient.get_instance,
         )
         start_listener(
             INTERNAL_CHANNELS["STATUS_RELOAD"],
             lambda _data: _for_each_context("on_status_reload"),
             name="reload-status",
+            client_factory=CentralRedisClient.get_instance,
         )
         if _HOMOGRAPHY_REGISTRY is not None:
             CalibrationSubscriber(_HOMOGRAPHY_REGISTRY).start()
 
+        if settings.embedding_reload_interval_s > 0:
+            _start_embedding_reload_backstop(settings.embedding_reload_interval_s)
+
         _LISTENERS_STARTED = True
+
+
+def _start_embedding_reload_backstop(interval_s: float) -> None:
+    """LSO-189: periodic DB re-read as a backstop for the central-Redis
+    pub/sub reload signal, in case that connection is briefly unreachable.
+    `on_embedding_reload` already re-reads from the DB and atomically swaps
+    in the result, so calling it on a timer needs no new reload logic."""
+
+    def run() -> None:
+        while True:
+            time.sleep(interval_s)
+            _for_each_context("on_embedding_reload")
+
+    threading.Thread(target=run, daemon=True, name="embedding-reload-backstop").start()
 
 
 def _context_for(camera_id: int) -> _CameraContext:

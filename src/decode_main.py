@@ -44,6 +44,7 @@ from config import load_cameras_from_db, setup_logging
 from config.settings import settings
 from infrastructure.video.stream_handler import StreamHandler
 from messaging.channels import INTERNAL_CHANNELS
+from messaging.redis_client import CentralRedisClient
 from messaging.subscriber import start_listener
 from pipeline.camera_lease import CameraLeaseManager
 from pipeline.decode_metrics import StreamHealthReporter
@@ -133,11 +134,16 @@ class DecodeWorker:
 
     def start(self) -> None:
         self._running = True
+        # LSO-189: published by the backend to the CENTRAL Redis, not this
+        # branch AI's local one — this is a fast-path only (the periodic
+        # reconcile loop below is the source of truth), but route it
+        # consistently with the other reload listeners.
         start_listener(
             INTERNAL_CHANNELS["CAMERA_CONFIG_RELOAD"],
             lambda _data: self._reconcile(),
             is_running=lambda: self._running,
             name="decode-config-reload",
+            client_factory=CentralRedisClient.get_instance,
         )
         self._periodic_thread = threading.Thread(
             target=self._periodic_loop, daemon=True, name="decode-periodic"
