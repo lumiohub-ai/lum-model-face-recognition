@@ -411,6 +411,26 @@ class TrackedRingDepthTests(unittest.TestCase):
             self.assertGreater(ring * write_interval, expires)
         self.assertEqual(fs._RING_SIZE, fs.tracked_ring_size(detection_interval=2, task_expires_s=1.0))
 
+    def test_invalid_fps_ceiling_raises_rather_than_silently_flooring(self):
+        # A misconfigured (<=0) ceiling must fail loudly, not silently
+        # collapse to _TRACKED_RING_MIN and hide the mistake.
+        from workers import frame_store as fs
+
+        with self.assertRaises(ValueError):
+            fs.tracked_ring_size(detection_interval=2, task_expires_s=1.0, fps_ceiling=0)
+        with self.assertRaises(ValueError):
+            fs.tracked_ring_size(detection_interval=2, task_expires_s=1.0, fps_ceiling=-5)
+
+    def test_fps_ceiling_covers_every_camera_measured_live(self):
+        # LSO-224 review: the PR originally claimed "every camera runs
+        # ~10 fps" — checked live against Tashkent during review and found
+        # cam 27 at ~12.5 fps. This pins the ceiling to keep real headroom
+        # over the fastest camera actually observed, not just dev's.
+        from workers import frame_store as fs
+
+        fastest_camera_fps_observed = 12.5  # Tashkent cam 27, checked live in review
+        self.assertGreater(fs._TRACKED_FPS_CEILING, fastest_camera_fps_observed * 1.5)
+
     def test_roi_ring_is_independent_of_the_detection_ring(self):
         # RoiBatchSlot's ring (face/reid crop batches) is read via a
         # synchronous RPC, not Celery's expires= mechanism — it must not

@@ -62,16 +62,19 @@ from loguru import logger
 # that expiry plus a margin, at the fastest write rate it must tolerate.
 #
 # Cameras have no configured fps — no DB field, nothing enforced in code —
-# so _TRACKED_FPS_CEILING is a documented assumption, not a measured limit:
-# every camera on dev and prod runs at ~10 fps today, so 15 gives it ~50%
-# headroom. A camera actually run faster than this (or with
+# so _TRACKED_FPS_CEILING is a documented assumption, not a measured limit.
+# NOT ~10 fps everywhere: checked live across sites while reviewing this —
+# Incheon/dev run ~10 fps, but Tashkent's cam 27 runs ~12.5 fps. 15 would
+# have left that camera only ~20% headroom, not the ~50% this originally
+# assumed. 20 gives every camera measured so far (up to 12.5) at least ~60%
+# headroom. A camera actually run at or above this (or with
 # SO_DETECTION_INTERVAL=1) needs this bumped and re-derived, or the ring
 # quietly gets less margin than the formula assumes — safe (a violation is
 # rejected by the (instance_id, seq) header, never wrong pixels) but shows up
 # as a rising `skipped_gone` count in the yolo-worker stats log.
 _TRACKED_RING_MIN = 3
 _TRACKED_RING_MARGIN_S = 0.5
-_TRACKED_FPS_CEILING = 15.0
+_TRACKED_FPS_CEILING = 20.0
 
 
 def tracked_ring_size(
@@ -84,13 +87,15 @@ def tracked_ring_size(
     slower of yolo.detect / camera.track reads it, given Celery's own
     `task_expires_s` deadline and the fastest write rate to tolerate
     (`fps_ceiling / detection_interval`)."""
-    write_interval = max(int(detection_interval), 1) / max(float(fps_ceiling), 1e-3)
+    if fps_ceiling <= 0:
+        raise ValueError(f"fps_ceiling must be > 0, got {fps_ceiling!r}")
+    write_interval = max(int(detection_interval), 1) / float(fps_ceiling)
     needed = max(float(task_expires_s), 0.0) + max(float(margin_s), 0.0)
     return max(_TRACKED_RING_MIN, math.ceil(needed / write_interval))
 
 
 # Default: detection_interval=2 (frame_pump.py's own default), task expiry
-# 1.0s (frame_pump._TASK_EXPIRES_S) — == 12. frame_pump.py passes the actual
+# 1.0s (frame_pump._TASK_EXPIRES_S) — == 15. frame_pump.py passes the actual
 # configured detection_interval explicitly when it knows a different one.
 _RING_SIZE = tracked_ring_size(detection_interval=2, task_expires_s=1.0)
 
