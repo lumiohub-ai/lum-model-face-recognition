@@ -700,6 +700,8 @@ class EmbeddingReloadBackstopTests(unittest.TestCase):
         from workers import camera_tasks
 
         calls = threading.Event()
+        keep_running = threading.Event()
+        keep_running.set()
         original_for_each = camera_tasks._for_each_context
         seen = []
 
@@ -708,14 +710,21 @@ class EmbeddingReloadBackstopTests(unittest.TestCase):
             calls.set()
 
         camera_tasks._for_each_context = fake_for_each_context
+        thread = None
         try:
-            camera_tasks._start_embedding_reload_backstop(0.01)
+            thread = camera_tasks._start_embedding_reload_backstop(
+                0.01, is_running=keep_running.is_set
+            )
             fired = calls.wait(timeout=2)
         finally:
+            keep_running.clear()
             camera_tasks._for_each_context = original_for_each
+            if thread is not None:
+                thread.join(timeout=2)
 
         self.assertTrue(fired, "backstop did not fire within the timeout")
         self.assertIn("on_embedding_reload", seen)
+        self.assertFalse(thread.is_alive(), "backstop thread did not stop when is_running went false")
 
 
 if __name__ == "__main__":

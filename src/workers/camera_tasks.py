@@ -497,18 +497,33 @@ def _ensure_listeners_started() -> None:
         _LISTENERS_STARTED = True
 
 
-def _start_embedding_reload_backstop(interval_s: float) -> None:
+def _start_embedding_reload_backstop(interval_s: float, *, is_running=None) -> threading.Thread:
     """LSO-189: periodic DB re-read as a backstop for the central-Redis
     pub/sub reload signal, in case that connection is briefly unreachable.
     `on_embedding_reload` already re-reads from the DB and atomically swaps
-    in the result, so calling it on a timer needs no new reload logic."""
+    in the result, so calling it on a timer needs no new reload logic.
+
+    Args:
+        interval_s: Seconds to sleep between reloads.
+        is_running: Zero-arg predicate polled to decide whether to keep
+            running, mirroring messaging.subscriber.start_listener. Defaults
+            to running forever, which is what production wants; tests pass
+            their own flag so the thread can be torn down deterministically.
+
+    Returns:
+        The started daemon thread.
+    """
+    still_running = is_running if is_running is not None else lambda: True
 
     def run() -> None:
-        while True:
+        while still_running():
             time.sleep(interval_s)
-            _for_each_context("on_embedding_reload")
+            if still_running():
+                _for_each_context("on_embedding_reload")
 
-    threading.Thread(target=run, daemon=True, name="embedding-reload-backstop").start()
+    thread = threading.Thread(target=run, daemon=True, name="embedding-reload-backstop")
+    thread.start()
+    return thread
 
 
 def _context_for(camera_id: int) -> _CameraContext:
