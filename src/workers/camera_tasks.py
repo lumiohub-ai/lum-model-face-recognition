@@ -25,8 +25,10 @@ another process except through one of those clients.
     file handle, which doesn't cross a process boundary meaningfully.
   - Sticky-routing enforcement: this task assumes whatever routes it here
     keeps sending the same camera_id to the same worker process, so the
-    per-process caches below stay valid. See compose.yml's camera-worker
-    service for why that means exactly one replica today.
+    per-process caches below stay valid. Per-camera Redis leases
+    (src/camera_boot.py) are what guarantee that today: one camera's cam.<id>
+    queue is consumed by exactly one worker, the lease holder, which only
+    changes hands if that worker dies.
 """
 
 from __future__ import annotations
@@ -530,10 +532,11 @@ def track_task(
     task-dispatch machinery.
 
     No static `queue=` on the decorator: `cam.<id>` is a different queue per
-    camera, statically assigned in compose.yml's camera-worker service
-    commands, not something one decorator value could express. Dispatched
+    camera, not something one decorator value could express. Dispatched
     exclusively via `yolo.detect`'s `send_task("camera.track", queue=...)` —
-    see workers/yolo_tasks.py.
+    see workers/yolo_tasks.py. Which worker consumes each cam.<id> is decided
+    at runtime by per-camera Redis leases (src/camera_boot.py), not by any
+    static compose `-Q` list.
 
     `frame_handle` arrives as a plain dict, not a FrameHandle instance:
     celery_app.py sets task_serializer='json' for every task in this app

@@ -142,8 +142,8 @@ class EnqueueTests(unittest.TestCase):
         """The frame goes to the shared `yolo` queue, not a per-camera one —
         batching needs a queue any yolo-worker consumes. `next_queue` is
         what carries the routing forward: yolo.detect reads it to know which
-        slot queue (cam-slot-<n>, LSO-186) to forward this camera's detections
-        to."""
+        per-camera queue (cam.<id>, LSO-218) to forward this camera's
+        detections to."""
         from workers.celery_app import camera_queue_name
 
         task = FakeTask()

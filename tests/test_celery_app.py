@@ -13,39 +13,24 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
 
 
 class CameraQueueNameTests(unittest.TestCase):
-    """camera_queue_name switched from a per-camera cam.<id> queue to
-    hash-to-slot (LSO-186): a camera routes to one of camera_slot_count fixed
-    cam-slot-<n> queues via crc32(str(camera_id)), not its own dedicated
-    queue. See camera_slot's docstring in celery_app.py for why crc32 and not
-    the builtin hash()."""
+    """camera_queue_name routes each camera to its own cam.<id> queue
+    (LSO-218). Which worker consumes that queue is a runtime Redis lease
+    (pipeline/camera_lease.py + camera_boot.py), not a crc32 hash, so the
+    contract left here is only that the name is per-camera and stable — the
+    full routing contract lives in test_camera_routing.py."""
 
-    def test_returns_the_slot_queue_form(self):
-        from workers.celery_app import camera_queue_name, camera_slot
-        from config.settings import settings
+    def test_returns_the_per_camera_queue_form(self):
+        from workers.celery_app import camera_queue_name
 
-        n = settings.camera_slot_count
         for camera_id in (22, 1, 0, 999):
-            expected = f"cam-slot-{camera_slot(camera_id, n)}"
-            self.assertEqual(camera_queue_name(camera_id), expected)
+            self.assertEqual(camera_queue_name(camera_id), f"cam.{camera_id}")
 
-    def test_same_camera_id_always_hashes_to_the_same_slot(self):
-        """Sticky by construction: same id -> same slot -> same worker, so
-        per-camera tracker state stays on one replica."""
+    def test_same_camera_id_always_maps_to_the_same_queue(self):
         from workers.celery_app import camera_queue_name
 
         first = camera_queue_name(42)
         for _ in range(5):
             self.assertEqual(camera_queue_name(42), first)
-
-    def test_slot_is_within_the_configured_slot_count(self):
-        from workers.celery_app import camera_slot
-        from config.settings import settings
-
-        n = settings.camera_slot_count
-        for camera_id in range(50):
-            slot = camera_slot(camera_id, n)
-            self.assertGreaterEqual(slot, 0)
-            self.assertLess(slot, n)
 
 
 class TrackTaskHasNoStaticQueueTests(unittest.TestCase):
