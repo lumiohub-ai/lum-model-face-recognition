@@ -278,13 +278,12 @@ services:
       # enabled (accept_content includes 'pickle', needed for the numpy
       # in face results). The image has no USER, so it runs as root.
       C_FORCE_ROOT: "1"
-      # Fleet size the fair share is computed against — `replicas` below reads
-      # the same var, so the two cannot drift. CAPACITY is the hard per-worker
-      # ceiling, sized so a survivor can cover a dead peer's share inside the
-      # memory limit: capacity >= ceil(cameras / (replicas - 1)).
-      # Incheon (in lum-stack) runs 3 replicas / capacity 7 for 14 cameras.
-      SO_CAMERA_WORKER_REPLICAS: ${SO_CAMERA_WORKER_REPLICAS:-2}
-      SO_CAMERA_WORKER_CAPACITY: ${SO_CAMERA_WORKER_CAPACITY:-6}
+      # Fleet size the fair share is computed against — must match
+      # `replicas` below. Base is 2/6 (Incheon override runs 3/7 for 14 cameras).
+      # Kept static in compose (not .env) so the image default and the deploy
+      # cannot drift — change both together when rebalancing.
+      SO_CAMERA_WORKER_REPLICAS: "2"
+      SO_CAMERA_WORKER_CAPACITY: "6"
     command: python3 -m src.camera_boot
     healthcheck:
       # Node name is fixed (camera-worker@%h), so target this container
@@ -296,9 +295,7 @@ services:
       retries: 3
       start_period: 30s
     deploy:
-      # Derived from the same var the container's fair-share math reads, so a
-      # single .env edit rebalances the fleet and its arithmetic together.
-      replicas: ${SO_CAMERA_WORKER_REPLICAS:-2}
+      replicas: 2
       resources:
         limits:
           cpus: '2.0'
