@@ -13,6 +13,7 @@ Run: PYTHONPATH=src python tests/test_camera_tasks.py
 
 import os
 import sys
+import threading
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
@@ -629,6 +630,101 @@ class PersonDetectorStubTests(unittest.TestCase):
         stub = _PersonDetectorStub(confidence_threshold=0.45, device="cpu")
         with self.assertRaises(AttributeError):
             stub.model([])  # a real PersonDetector's inference entry point
+
+
+class ListenersUseCentralRedisTests(unittest.TestCase):
+    """LSO-189: the three reload channels are published by the backend to the
+    CENTRAL Redis, not a branch AI's local one, so _ensure_listeners_started
+    must point their listeners at CentralRedisClient rather than the default
+    (local) RedisClient."""
+
+    def setUp(self):
+        from workers import camera_tasks
+
+        self._module = camera_tasks
+        self._saved_started = camera_tasks._LISTENERS_STARTED
+        self._saved_registry = camera_tasks._HOMOGRAPHY_REGISTRY
+        camera_tasks._LISTENERS_STARTED = False
+        camera_tasks._HOMOGRAPHY_REGISTRY = None
+
+    def tearDown(self):
+        self._module._LISTENERS_STARTED = self._saved_started
+        self._module._HOMOGRAPHY_REGISTRY = self._saved_registry
+
+    def test_all_three_reload_listeners_use_the_central_client_factory(self):
+        import messaging.redis_client as redis_client_module
+        import messaging.subscriber as subscriber_module
+
+        calls = []
+
+        def fake_start_listener(channel, handler, *, is_running=None, name=None,
+                                 client_factory=None):
+            calls.append((channel, name, client_factory))
+
+        original = subscriber_module.start_listener
+        subscriber_module.start_listener = fake_start_listener
+        try:
+            self._module._ensure_listeners_started()
+        finally:
+            subscriber_module.start_listener = original
+
+        self.assertEqual(len(calls), 3)
+        names = {name for _channel, name, _factory in calls}
+        self.assertEqual(names, {"reload-embeddings", "reload-camera-config", "reload-status"})
+        for _channel, _name, factory in calls:
+            self.assertIs(factory(), redis_client_module.CentralRedisClient.get_instance())
+
+    def test_embedding_reload_backstop_not_started_when_interval_is_zero(self):
+        import messaging.subscriber as subscriber_module
+
+        from config.settings import settings
+
+        self.assertEqual(settings.embedding_reload_interval_s, 0)
+        original = subscriber_module.start_listener
+        subscriber_module.start_listener = lambda *a, **kw: None
+        try:
+            active_before = {t.name for t in threading.enumerate()}
+            self._module._ensure_listeners_started()
+            active_after = {t.name for t in threading.enumerate()}
+        finally:
+            subscriber_module.start_listener = original
+        self.assertNotIn("embedding-reload-backstop", active_after - active_before)
+
+
+class EmbeddingReloadBackstopTests(unittest.TestCase):
+    """The periodic backstop must call on_embedding_reload on every live
+    context on a timer, so a branch AI self-heals if the central-Redis
+    pub/sub connection above is briefly unreachable."""
+
+    def test_backstop_invokes_on_embedding_reload_on_every_tick(self):
+        from workers import camera_tasks
+
+        calls = threading.Event()
+        keep_running = threading.Event()
+        keep_running.set()
+        original_for_each = camera_tasks._for_each_context
+        seen = []
+
+        def fake_for_each_context(method_name):
+            seen.append(method_name)
+            calls.set()
+
+        camera_tasks._for_each_context = fake_for_each_context
+        thread = None
+        try:
+            thread = camera_tasks._start_embedding_reload_backstop(
+                0.01, is_running=keep_running.is_set
+            )
+            fired = calls.wait(timeout=2)
+        finally:
+            keep_running.clear()
+            camera_tasks._for_each_context = original_for_each
+            if thread is not None:
+                thread.join(timeout=2)
+
+        self.assertTrue(fired, "backstop did not fire within the timeout")
+        self.assertIn("on_embedding_reload", seen)
+        self.assertFalse(thread.is_alive(), "backstop thread did not stop when is_running went false")
 
 
 if __name__ == "__main__":

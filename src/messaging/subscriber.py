@@ -19,7 +19,7 @@ from loguru import logger
 from messaging.redis_client import RedisClient
 
 
-def start_listener(channel, handler, *, is_running=None, name=None):
+def start_listener(channel, handler, *, is_running=None, name=None, client_factory=None):
     """Subscribe to `channel` on a daemon thread, calling `handler(data)`
     with each decoded JSON message.
 
@@ -31,18 +31,25 @@ def start_listener(channel, handler, *, is_running=None, name=None):
             listening. Defaults to running forever, which is what the
             Celery workers want; main.py passes its own shutdown flag.
         name: Thread name, for debugging.
+        client_factory: Zero-arg callable returning an object with a
+            `.client` attribute (e.g. `RedisClient.get_instance`). Defaults
+            to the local `RedisClient` singleton; LSO-189's reload listeners
+            pass `CentralRedisClient.get_instance` instead, since the signal
+            these channels carry is published to the central Redis, not a
+            branch AI's local one.
 
     Returns:
         The started daemon thread.
     """
     still_running = is_running if is_running is not None else lambda: True
+    get_client = client_factory if client_factory is not None else RedisClient.get_instance
 
     def listener():
         retry_delay = 1
         pubsub = None
         while still_running():
             try:
-                pubsub = RedisClient.get_instance().client.pubsub()
+                pubsub = get_client().client.pubsub()
                 pubsub.subscribe(channel)
                 logger.debug(f"Subscribed to {channel}")
                 retry_delay = 1  # reset on successful connect
