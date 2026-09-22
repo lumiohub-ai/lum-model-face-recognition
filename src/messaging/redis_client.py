@@ -66,3 +66,36 @@ class RedisClient:
             self.client.close()
         except Exception as e:
             logger.exception(f"Error closing Redis: {e}")
+
+
+class CentralRedisClient:
+    """Singleton Redis client for the central pub/sub reload channels (LSO-189).
+
+    Separate from RedisClient (which stays on the LOCAL Redis for the Celery
+    broker + camera/slot leases): a branch AI needs a second, read-only
+    connection to the CENTRAL Redis so it still hears the backend's
+    enrollment-reload broadcasts. Points at settings.redis_host when
+    SO_CENTRAL_REDIS_HOST is unset, so central/single-site deployments get one
+    client object either way.
+    """
+
+    _instance: 'CentralRedisClient | None' = None
+    _lock = threading.Lock()
+
+    def __init__(self):
+        self.client = redis.Redis(
+            host=settings.central_redis_host,
+            port=settings.redis_port,
+            db=settings.redis_db,
+            decode_responses=True
+        )
+        logger.info(f"Central Redis client initialized: {settings.central_redis_host}:{settings.redis_port}")
+
+    @classmethod
+    def get_instance(cls) -> 'CentralRedisClient':
+        """Return the shared singleton instance (thread-safe)."""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance

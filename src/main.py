@@ -26,7 +26,7 @@ from config import init_smart_office_app, log_startup_info, build_vision_config
 from pipeline.engine import SmartOfficeEngine
 from config.settings import settings
 from infrastructure.storage import PgVectorStore
-from messaging import RedisClient, StreamConsumer
+from messaging import CentralRedisClient, RedisClient, StreamConsumer
 from messaging.channels import INTERNAL_CHANNELS
 from messaging.subscriber import start_listener
 from lum_vision import ModelFactory
@@ -136,18 +136,27 @@ class MDAManager:
         logger.info("Shutdown complete")
 
     def _start_reload_listeners(self) -> None:
-        """Start background listeners for internal reload notifications."""
+        """Start background listeners for internal reload notifications.
+
+        LSO-189: these are published by the backend to the CENTRAL Redis, so
+        listen there rather than on RedisClient's local connection. Falls
+        back to local when SO_CENTRAL_REDIS_HOST is unset (this process is
+        the central/single-site deployment itself), so behavior is unchanged
+        there.
+        """
         start_listener(
             INTERNAL_CHANNELS['EMBEDDING_RELOAD'],
             self._handle_embedding_reload,
             is_running=lambda: self._running,
             name="reload-embeddings",
+            client_factory=CentralRedisClient.get_instance,
         )
         start_listener(
             INTERNAL_CHANNELS['STATUS_RELOAD'],
             self._handle_status_reload,
             is_running=lambda: self._running,
             name="reload-status",
+            client_factory=CentralRedisClient.get_instance,
         )
 
     def _handle_embedding_reload(self, data: dict) -> None:
