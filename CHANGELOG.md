@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.8 (2026-09-22)
+
+## What's Changed
+* fix(messaging): route reload pub/sub to central Redis (LSO-189) by @inokov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/133
+* Promote dev → main: LSO-189 central Redis reload by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/135
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.7...v0.8.8
+
 ## v0.8.7 (2026-09-22)
 
 ## What's Changed
