@@ -63,7 +63,7 @@ services:
       # and the ReID weights into this dir. Fast, but needs network — expect
       # it on first start rather than assuming the old model volume applies.
       - ./volumes/models:/app/volumes/models
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/huggingface:/app/.cache/huggingface
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
@@ -204,7 +204,7 @@ services:
       # Same model cache as person-tracking — the embedding sync task loads the
       # face model from here rather than downloading its own copy.
       - ./volumes/models:/app/volumes/models
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/huggingface:/app/.cache/huggingface
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
@@ -213,10 +213,6 @@ services:
     environment:
       # Also used as the `service` field in this worker's logs (celery_app.py).
       SO_WORKER_PRELOAD: embeddings-detections
-      # Celery refuses to start as root when pickle deserialization is
-      # enabled (accept_content includes 'pickle', needed for the numpy
-      # in face results). The image has no USER, so it runs as root.
-      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q embeddings,detections -l warning
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
@@ -267,17 +263,13 @@ services:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/huggingface:/app/.cache/huggingface
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      # Celery refuses to start as root when pickle deserialization is
-      # enabled (accept_content includes 'pickle', needed for the numpy
-      # in face results). The image has no USER, so it runs as root.
-      C_FORCE_ROOT: "1"
       # Fleet size the fair share is computed against — `replicas` below reads
       # the same var, so the two cannot drift. CAPACITY is the hard per-worker
       # ceiling, sized so a survivor can cover a dead peer's share inside the
@@ -323,7 +315,7 @@ services:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/huggingface:/app/.cache/huggingface
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
@@ -333,10 +325,6 @@ services:
       # Preload only this worker's own model. Without it every worker
       # loads both (worker_process_init is app-global) — see yolo_tasks.py.
       SO_WORKER_PRELOAD: yolo
-      # Celery refuses to start as root when pickle deserialization is
-      # enabled (accept_content includes 'pickle', needed for the numpy
-      # in face results). The image has no USER, so it runs as root.
-      C_FORCE_ROOT: "1"
     # --prefetch-multiplier=32 is load-bearing, not a performance tweak:
     # yolo.detect is a celery-batches Batches task, which only acks a
     # request after its flush completes — so the worker's buffer can never
@@ -381,7 +369,7 @@ services:
       - ./.env:/app/.env:ro
       - ./credentials:/app/credentials
       - ./volumes/models:/app/volumes/models
-      - ./volumes/models/huggingface:/root/.cache/huggingface
+      - ./volumes/models/huggingface:/app/.cache/huggingface
       - frame-shm:/dev/shm
     networks:
       - person-tracking-network
@@ -389,10 +377,6 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       SO_WORKER_PRELOAD: face
-      # Celery refuses to start as root when pickle deserialization is
-      # enabled (accept_content includes 'pickle', needed for the numpy
-      # in face results). The image has no USER, so it runs as root.
-      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q face -l warning --pool=solo
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
@@ -450,7 +434,6 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       SO_WORKER_PRELOAD: globaltrack
-      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q globaltrack -l warning --pool=solo
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
@@ -495,7 +478,6 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       SO_WORKER_PRELOAD: reid
-      C_FORCE_ROOT: "1"
     command: celery -A workers.celery_app worker -Q reid -l warning --pool=solo
     healthcheck:
       test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 > /dev/null 2>&1"]
