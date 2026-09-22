@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.7 (2026-09-22)
+
+## What's Changed
+* feat(camera-worker): balanced per-camera assignment, replacing slot hash (LSO-218) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/132
+* feat(camera-worker): balanced per-camera assignment, replacing slot h… by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/134
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.6...v0.8.7
+
 ## v0.8.6 (2026-09-21)
 
 ## What's Changed
