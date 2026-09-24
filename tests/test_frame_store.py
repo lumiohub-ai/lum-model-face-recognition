@@ -94,6 +94,12 @@ def _roi_reader(conn, results):
             conn.send("ack")
             break
         handle, raw = msg
+        if handle.rois and handle.rois[0].track_id < 0:
+            # A negative track id marks a batch this reader never reads,
+            # like a task that expired before a worker picked it up.
+            results.append(("skipped", handle.seq))
+            conn.send("ack")
+            continue
         got = frame_store.attach_and_read_roi_batch(handle)
         if got is None:
             results.append((handle.seq, None))
@@ -290,6 +296,27 @@ class RoiBatchSlotTests(unittest.TestCase):
                 f"(largest) batch, the reader's cached mapping was not "
                 f"re-validated against the new size (the actual production bug)",
             )
+
+
+    def test_reader_reattaches_when_it_missed_the_write_that_grew_a_segment(self):
+        """Tashkent's reid-worker flood of 'ROI batch seq=N is gone': the
+        producer grew a ring position on a batch the reader never read (task
+        expired), so the reader's cached mapping kept the old, unlinked
+        block. Every later batch that fit the old size passed the size check,
+        read the old block's older seq and was reported gone, forever."""
+        from workers import frame_store
+
+        ring_size = frame_store._ROI_RING_SIZE
+        small = lambda: ([_random_frame(10, 10)], [1])
+        batches = [small() for _ in range(ring_size)]          # cache every position small
+        batches.append(([_random_frame(300, 300)], [-1]))      # grows position 1, never read
+        batches += [small() for _ in range(ring_size)]         # position 1 comes round again
+
+        results = self._run(156, batches)
+        matches = [r for r in results if r[0] not in ("closed_check", "skipped")]
+        self.assertEqual(len(matches), 2 * ring_size)
+        gone = [seq for seq, ok in matches if not ok]
+        self.assertEqual(gone, [], f"batches reported gone after a missed growth: {gone}")
 
 
 class RawFrameSlotRingDepthTests(unittest.TestCase):
