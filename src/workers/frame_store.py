@@ -469,7 +469,9 @@ def attach_and_read_raw(handle: FrameHandle) -> Optional[np.ndarray]:
     return _attach_and_read_ring(handle, _raw_slot_name(handle.camera_id))
 
 
-def _mapping_is_stale(shm: shared_memory.SharedMemory, handle) -> bool:
+def _mapping_is_stale(
+    shm: shared_memory.SharedMemory, handle: "FrameHandle | RoiBatchHandle"
+) -> bool:
     """True when this process's cached mapping cannot be the live segment, so
     a re-attach is worth one try.
 

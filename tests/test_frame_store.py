@@ -318,6 +318,7 @@ class RoiBatchSlotTests(unittest.TestCase):
         gone = [seq for seq, ok in matches if not ok]
         self.assertEqual(gone, [], f"batches reported gone after a missed growth: {gone}")
 
+
 class RawFrameSlotRingDepthTests(unittest.TestCase):
     """LSO-224: the calibration (camraw) ring is shallow. It is written once
     per ~2 s health tick and read within ≤5 s, so it must not hold 24 full
