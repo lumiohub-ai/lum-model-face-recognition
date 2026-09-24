@@ -469,6 +469,22 @@ def attach_and_read_raw(handle: FrameHandle) -> Optional[np.ndarray]:
     return _attach_and_read_ring(handle, _raw_slot_name(handle.camera_id))
 
 
+def _mapping_is_stale(shm: shared_memory.SharedMemory, handle) -> bool:
+    """True when this process's cached mapping cannot be the live segment, so
+    a re-attach is worth one try.
+
+    Two cases. The producer restarted (instance mismatch, see
+    `_attach_and_read_ring`). Or the producer grew the segment (unlink +
+    create, see `RoiBatchSlot._ensure_segment`) on a write this process never
+    read, e.g. an expired task: the old mapping keeps an older seq than the
+    handle forever, and `_attach_segment`'s size check never fires for later
+    batches that fit the old size. A live segment always holds `handle.seq`
+    or newer, so an older seq means the mapping is stale, not recycled.
+    """
+    instance_id, seq = _unpack_seq_header(shm.buf)
+    return instance_id != handle.instance_id or seq < handle.seq
+
+
 def _attach_and_read_ring(handle: FrameHandle, base_name: str) -> Optional[np.ndarray]:
     name = _segment_name(base_name, handle.segment)
     shape = (handle.height, handle.width, handle.channels)
@@ -520,7 +536,7 @@ def _attach_and_read_ring(handle: FrameHandle, base_name: str) -> Optional[np.nd
             # ~40/s with essentially zero frames processed, and only a
             # manual consumer restart cleared it. Drop the mapping and
             # re-attach once, so the next read lands on the new segment.
-            if _unpack_seq_header(shm.buf)[0] != handle.instance_id:
+            if _mapping_is_stale(shm, handle):
                 del _ATTACHED[name]
                 shm = _attach_segment(name, nbytes)
                 if shm is None or shm.size < nbytes:
@@ -815,7 +831,7 @@ def attach_and_read_roi_batch(
             # face-worker keeps running would otherwise leave face-worker
             # permanently reading unlinked memory and returning no
             # embeddings at all.
-            if _unpack_seq_header(shm.buf)[0] != handle.instance_id:
+            if _mapping_is_stale(shm, handle):
                 del _ATTACHED[name]
                 shm = _attach_segment(name, needed)
                 if shm is None or shm.size < needed:
