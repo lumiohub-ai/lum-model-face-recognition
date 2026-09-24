@@ -131,6 +131,7 @@ RUN for i in 1 2 3 4 5; do \
             ca-certificates \
             libgl1-mesa-glx \
             libglib2.0-0 \
+            gosu \
         && touch /tmp/apt-ok && break; \
         echo "apt-get attempt $i failed, retrying..." && sleep 3; \
     done && \
@@ -150,5 +151,35 @@ RUN chmod +x /usr/local/bin/*.sh
 # package now (see the builder stage) — nothing repo-local to copy for it.
 COPY configs ./configs
 COPY src ./src
+
+# LSO-185: non-root at runtime. Fixed, documented UID/GID rather than an
+# unpredictable one, so host-side debugging (`ps`, host-mounted file
+# ownership) is legible across every environment. No USER directive here —
+# the container still starts as root so docker-entrypoint.sh can chown the
+# bind-mounted runtime dirs (which hide whatever ownership got baked into
+# the image at that path) before dropping to this user via gosu. See that
+# script for the actual privilege drop.
+#
+# DEV_GID (supplementary, default matches this org's shared `devs` host
+# group, GID 11000): compose.override.local.yml bind-mounts the real
+# so.model-face-recognition/src over /app/src for live-reload during local
+# dev, and that host directory is owned `<you>:devs` mode 770 — unreadable
+# to appuser without also being in a group with that GID. Harmless in every
+# other environment: prod never bind-mounts host source over the image, so
+# this supplementary group membership is simply unused there.
+ARG APP_UID=10001
+ARG APP_GID=10001
+ARG DEV_GID=11000
+RUN groupadd -g ${APP_GID} appgroup && \
+    groupadd -g ${DEV_GID} devs && \
+    useradd -u ${APP_UID} -g ${APP_GID} -G devs -M -s /usr/sbin/nologin -d /app appuser && \
+    mkdir -p /app/.cache/huggingface /app/logs /app/volumes/models /app/volumes/storage/person-tracking && \
+    chown -R appuser:appgroup /app
+
+# huggingface_hub reads HF_HOME directly; redirecting it under /app (rather
+# than leaving the default ~/.cache/huggingface, which would resolve under
+# root's home) means the cache mount lands somewhere docker-entrypoint.sh's
+# chown loop already covers, with no need to give appuser a real home dir.
+ENV HF_HOME=/app/.cache/huggingface
 
 ENTRYPOINT ["docker-entrypoint.sh"]
