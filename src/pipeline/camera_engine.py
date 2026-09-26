@@ -29,6 +29,9 @@ from lum_vision import (
     crop_person_roi,
 )
 
+# Padding around the person bbox for the unrecognized-case card image.
+_CARD_EXPAND = 0.1
+
 
 class CameraEngine:
     """Engine for processing a single camera stream.
@@ -440,7 +443,8 @@ class CameraEngine:
                 _max_crop_frames = 30
                 crop_history = self.track_manager.track_crop_history.setdefault(track_id, {})
                 crop_history[frame_num] = {
-                    "face": face_image, "bbox": bbox, "frame": frame.copy(),
+                    "face": face_image, "bbox": bbox,
+                    **self._person_crop(frame, bbox),
                     # For the unrecognized-case frontality/pitch gate (LSO-7).
                     "landmarks": face_data.get("face_landmarks"),
                     "det_score": face_data.get("det_score", 0.0),
@@ -683,14 +687,26 @@ class CameraEngine:
         )
 
     @staticmethod
+    def _person_crop(frame: np.ndarray, bbox) -> Dict:
+        """What crop_history keeps of a frame: the person ROI padded by
+        _CARD_EXPAND (the unrecognized card) and its offset in the frame, so the
+        exact bbox (proof image) is sliced back out of it. Storing frame.copy()
+        here held up to 30 full frames per tracked person (LSO-224)."""
+        if frame is None or bbox is None:
+            return {"person": None, "offset": (0, 0)}
+        roi, offset = crop_person_roi(frame, np.asarray(bbox, dtype=float), expand=_CARD_EXPAND)
+        return {"person": roi.copy() if roi is not None else None, "offset": offset}
+
+    @staticmethod
     def _read_crop_image(crop_data) -> Optional[np.ndarray]:
         """Extract an image from a crop_data entry (dict or raw array)."""
         if isinstance(crop_data, dict):
-            f = crop_data.get('frame')
+            p = crop_data.get('person')
             b = crop_data.get('bbox')
-            if f is not None and b is not None:
+            if p is not None and b is not None:
+                ox, oy = crop_data.get('offset', (0, 0))
                 x1, y1, x2, y2 = map(int, b)
-                return f[y1:y2, x1:x2]
+                return p[max(0, y1 - oy):y2 - oy, max(0, x1 - ox):x2 - ox]
             return crop_data.get('face')
         return crop_data
 
@@ -787,11 +803,9 @@ class CameraEngine:
         best_crop means no orientation was scored, so the gate drops it anyway.
         """
         if best_crop is not None:
-            frame, bbox = best_crop.get("frame"), best_crop.get("bbox")
-            if frame is not None and bbox is not None:
-                roi, _ = crop_person_roi(frame, np.asarray(bbox, dtype=float), expand=0.1)
-                if roi is not None and roi.size:
-                    return roi
+            roi = best_crop.get("person")
+            if roi is not None and roi.size:
+                return roi
         return None
 
     def _find_track_with_identity(
