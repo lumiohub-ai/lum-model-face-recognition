@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.9 (2026-09-26)
+
+## What's Changed
+* fix(frame_store): re-attach a ring mapping that holds an older seq (LSO-233) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/137
+* Promote dev → main: LSO-233 stale shared-memory mapping fix by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/138
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.8...v0.8.9
+
 ## v0.8.8 (2026-09-22)
 
 ## What's Changed
