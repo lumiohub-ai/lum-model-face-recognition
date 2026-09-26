@@ -7,7 +7,7 @@ import ipaddress
 import requests
 from datetime import datetime
 from typing import Optional, Set, List
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from io import BytesIO
 from PIL import Image
 import numpy as np
@@ -227,8 +227,7 @@ class ImageFetcher:
             # Convert https://storage.googleapis.com/{bucket}/... to gs:// so the
             # authenticated GCS client is used instead of unauthenticated HTTP.
             if url.startswith('https://storage.googleapis.com/') and self.gcs_client:
-                path = url[len('https://storage.googleapis.com/'):]
-                url = f'gs://{path}'
+                url = self._gs_url_from_https(url)
 
             if url.startswith('gs://'):
                 return self._fetch_from_gcs(url)
@@ -243,6 +242,17 @@ class ImageFetcher:
         except Exception as e:
             logger.exception(f"Failed to fetch image from {url}: {e}")
             return None
+
+    @staticmethod
+    def _gs_url_from_https(url: str) -> str:
+        """https://storage.googleapis.com/<bucket>/<object> -> gs://<bucket>/<object>.
+
+        Drops the query string: stored image URLs can be signed download links
+        (?X-Goog-Algorithm=...&X-Goog-Signature=...), and keeping it made the
+        blob name include it, so every fetch 404'd (LSO-251). The client
+        authenticates with the service account, so the signature isn't needed.
+        """
+        return f"gs://{unquote(urlparse(url).path.removeprefix('/'))}"
 
     @staticmethod
     def _decode_image_bytes(data: bytes) -> np.ndarray:
