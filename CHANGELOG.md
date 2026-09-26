@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.10 (2026-09-26)
+
+## What's Changed
+* perf(imports): keep lum_vision out of roles that run no model (LSO-224) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/139
+* perf(camera-engine): keep the person ROI in crop_history, not the frame (LSO-224) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/140
+* Promote dev → main: LSO-224 camera-worker crop history + lazy lum_vision import by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/141
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.9...v0.8.10
+
 ## v0.8.9 (2026-09-26)
 
 ## What's Changed
