@@ -7,8 +7,8 @@ it wiped Incheon's whole gallery once. These pin the two guards.
 
 EmbeddingSyncService.__init__ loads a FaceDetector (heavy), so we build the
 instance via __new__ and set only what the tested methods touch — same pattern
-as test_engine_reload.py. Import needs lum_vision (module-level import in
-embedding_sync), so skip when it's unavailable, like test_gpu_rpc.py.
+as test_engine_reload.py. Skipped when lum_vision is unavailable, like
+test_gpu_rpc.py.
 
 Run: PYTHONPATH=src python -m pytest tests/test_embedding_sync_guard.py
 """
