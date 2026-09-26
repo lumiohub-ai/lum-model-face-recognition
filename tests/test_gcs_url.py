@@ -43,5 +43,47 @@ class GsUrlFromHttpsTests(unittest.TestCase):
         )
 
 
+class MediumVariantTests(unittest.TestCase):
+    def test_original_maps_to_medium(self):
+        self.assertEqual(
+            ImageFetcher._medium_variant("a/b/Batkhuu_Byambajav_58_0_99e1.jpg"),
+            "a/b/Batkhuu_Byambajav_58_0_99e1_medium.jpg",
+        )
+
+    def test_resized_copies_have_no_further_fallback(self):
+        self.assertIsNone(ImageFetcher._medium_variant("a/x_medium.jpg"))
+        self.assertIsNone(ImageFetcher._medium_variant("a/x_thumb.jpg"))
+
+    def test_no_extension(self):
+        self.assertIsNone(ImageFetcher._medium_variant("a/noext"))
+
+
+class FetchFallbackTests(unittest.TestCase):
+    def test_missing_original_falls_back_to_medium(self):
+        from unittest import mock
+        import numpy as np
+        from infrastructure.storage import gcs
+
+        fetched = []
+
+        def blob(name):
+            b = mock.Mock()
+            def dl():
+                fetched.append(name)
+                if not name.endswith("_medium.jpg"):
+                    raise gcs.GCSNotFound("gone")
+                return b"img"
+            b.download_as_bytes.side_effect = dl
+            return b
+
+        f = ImageFetcher.__new__(ImageFetcher)
+        f.gcs_client = mock.Mock()
+        f.gcs_client.bucket.return_value.blob.side_effect = blob
+        with mock.patch.object(ImageFetcher, "_decode_image_bytes", return_value=np.zeros((2, 2, 3))):
+            img = f._fetch_from_gcs("gs://bkt/p/x.jpg")
+        self.assertIsNotNone(img)
+        self.assertEqual(fetched, ["p/x.jpg", "p/x_medium.jpg"])
+
+
 if __name__ == "__main__":
     unittest.main()

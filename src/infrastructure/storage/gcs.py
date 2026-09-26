@@ -16,9 +16,11 @@ from loguru import logger
 
 # Try to import GCS client, but make it optional
 try:
+    from google.api_core.exceptions import NotFound as GCSNotFound
     from google.cloud import storage
     GCS_AVAILABLE = True
 except ImportError:
+    GCSNotFound = FileNotFoundError  # never raised by a missing client; keeps the except clause valid
     GCS_AVAILABLE = False
     logger.warning("google-cloud-storage not installed, GCS download disabled")
 
@@ -255,6 +257,14 @@ class ImageFetcher:
         return f"gs://{unquote(urlparse(url).path.removeprefix('/'))}"
 
     @staticmethod
+    def _medium_variant(blob_path: str) -> Optional[str]:
+        """`<name>.jpg` -> `<name>_medium.jpg`; None if already a resized copy."""
+        stem, dot, ext = blob_path.rpartition(".")
+        if not dot or stem.endswith(("_medium", "_thumb")):
+            return None
+        return f"{stem}_medium.{ext}"
+
+    @staticmethod
     def _decode_image_bytes(data: bytes) -> np.ndarray:
         """Decode image bytes to a BGR numpy array (OpenCV format).
 
@@ -293,7 +303,16 @@ class ImageFetcher:
             blob = bucket.blob(blob_path)
 
             # Download to memory
-            image_bytes = blob.download_as_bytes()
+            try:
+                image_bytes = blob.download_as_bytes()
+            except GCSNotFound:
+                # Some uploads lost their original while the resized copies
+                # survived (LSO-251): fall back to the _medium copy.
+                medium = self._medium_variant(blob_path)
+                if medium is None:
+                    raise
+                image_bytes = bucket.blob(medium).download_as_bytes()
+                logger.warning(f"Original missing, used _medium copy: gs://{bucket_name}/{medium}")
             image_np = self._decode_image_bytes(image_bytes)
             logger.info(f"Fetched image from GCS: {gs_url} (shape: {image_np.shape})")
             return image_np
