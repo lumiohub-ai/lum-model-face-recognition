@@ -252,7 +252,7 @@ class ImageFetcher:
         blob name include it, so every fetch 404'd (LSO-251). The client
         authenticates with the service account, so the signature isn't needed.
         """
-        return f"gs://{unquote(urlparse(url).path.lstrip('/'))}"
+        return f"gs://{unquote(urlparse(url).path.removeprefix('/'))}"
 
     @staticmethod
     def _decode_image_bytes(data: bytes) -> np.ndarray:
