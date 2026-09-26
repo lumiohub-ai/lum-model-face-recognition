@@ -51,6 +51,19 @@ class CropHistoryRoiTests(unittest.TestCase):
         self.assertLess(entry["person"].nbytes, frame.nbytes / 10)
         self.assertIsNone(entry["person"].base)  # a copy, not a view pinning the frame
 
+    def test_bbox_partly_outside_frame_is_clipped(self):
+        # Tracker boxes can extend past the frame edge. The proof image is the
+        # in-frame part of the box (the old full-frame slice wrapped around on
+        # a negative coordinate instead).
+        frame = _frame()
+        entry = self._entry(frame, [-40.0, -25.0, 200.0, 300.0])
+        np.testing.assert_array_equal(CameraEngine._read_crop_image(entry), frame[0:300, 0:200])
+
+    def test_zero_area_bbox_gives_no_card(self):
+        entry = self._entry(_frame(), [500.0, 500.0, 500.0, 500.0])
+        engine = CameraEngine.__new__(CameraEngine)
+        self.assertIsNone(engine._unrecognized_card_image(entry, track_id=1))
+
     def test_missing_bbox_keeps_no_image(self):
         entry = self._entry(_frame(), None)
         self.assertIsNone(entry["person"])
