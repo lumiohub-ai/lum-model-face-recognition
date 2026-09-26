@@ -18,7 +18,7 @@ FR_MIN, PI_MIN = 0.6, 0.4
 
 
 def crop(fr, pi, det=0.9):
-    return {"frontality": fr, "pitch": pi, "det_score": det, "frame": None, "bbox": None}
+    return {"frontality": fr, "pitch": pi, "det_score": det, "person": None, "offset": (0, 0), "bbox": None}
 
 
 class TestPickBestSignals(unittest.TestCase):

@@ -5,12 +5,15 @@ application's settings object or its directory layout. This module is the one
 place that translation happens.
 """
 
-from pathlib import Path
-from typing import Any, Dict, Optional
+from __future__ import annotations
 
-from lum_vision import VisionConfig
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .settings import settings
+
+if TYPE_CHECKING:
+    from lum_vision import VisionConfig
 
 # Where model weights live. Mounted into the container by compose.yml — the
 # models package only ever writes beneath whatever path it is given.
@@ -29,6 +32,10 @@ def build_vision_config(config: Optional[Dict[str, Any]]) -> VisionConfig:
     Returns:
         Config ready to hand to lum_vision.ModelFactory
     """
+    # Deferred: `import lum_vision` loads torch/ultralytics/insightface, and
+    # `config` is imported by every role, including ones that run no model (LSO-224).
+    from lum_vision import VisionConfig
+
     return VisionConfig.from_dict(
         config,
         ollama_api_url=settings.ollama_api_url,
