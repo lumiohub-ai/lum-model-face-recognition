@@ -648,7 +648,8 @@ class SmartOfficeEngine:
                     # then use the authenticated GCS client to download
                     gcs_prefix = f"https://storage.googleapis.com/{fetcher.gcs_bucket}/"
                     if url.startswith(gcs_prefix):
-                        blob_path = url[len(gcs_prefix):].split('?')[0]
+                        # Same conversion as ImageFetcher.fetch_image: drops signed-URL query/fragment, URL-decodes (LSO-251).
+                        blob_path = fetcher._gs_url_from_https(url).removeprefix(f"gs://{fetcher.gcs_bucket}/")
                         bucket = fetcher.gcs_client.bucket(fetcher.gcs_bucket)
                         image_bytes = bucket.blob(blob_path).download_as_bytes()
                         import numpy as np
