@@ -34,6 +34,14 @@ class GsUrlFromHttpsTests(unittest.TestCase):
             "gs://hbai-general-data/2025/cv.face-recognition/humblebee/client_images/Ali Valiyev_1.jpg",
         )
 
+    def test_calibration_blob_path_from_signed_url(self):
+        # engine.py's calibration fetch strips "gs://<bucket>/" off the same helper.
+        url = BASE + "frame%201.jpg?X-Goog-Signature=abc#f"
+        self.assertEqual(
+            ImageFetcher._gs_url_from_https(url).removeprefix("gs://hbai-general-data/"),
+            "2025/cv.face-recognition/humblebee/client_images/frame 1.jpg",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
