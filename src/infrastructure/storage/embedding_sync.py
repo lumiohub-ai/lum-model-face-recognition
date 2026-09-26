@@ -6,7 +6,6 @@ from typing import Dict, List, Optional
 from loguru import logger
 from sqlalchemy import text
 
-from lum_vision import FaceDetector
 from .pgvector import PgVectorStore
 from .backend_reader import Repository
 from .url_utils import normalize_image_url
@@ -42,6 +41,10 @@ class EmbeddingSyncService:
         else:
             # Build from the same vision config the engine uses, so this detector
             # reads its model zoo from the same place instead of re-downloading.
+            # Deferred like build_vision_config: this module is imported with
+            # `infrastructure.storage` by roles that never build a detector (LSO-224).
+            from lum_vision import FaceDetector
+
             from config.vision import build_vision_config
 
             vision_config = build_vision_config(config)
