@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.11 (2026-09-26)
+
+## What's Changed
+* fix(gcs): drop the signed URL's query string from the blob name (LSO-251) by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/142
+* Promote dev → main: LSO-251 signed GCS URL fix by @dilshod-obidov in https://github.com/lumiohub-ai/lum-model-face-recognition/pull/143
+
+
+**Full Changelog**: https://github.com/lumiohub-ai/lum-model-face-recognition/compare/v0.8.10...v0.8.11
+
 ## v0.8.10 (2026-09-26)
 
 ## What's Changed
